@@ -15,7 +15,7 @@ is the short version for an agent.
 | (`icloud-notes-sync`) | icloud-notes | the sync engine under Notes, installed off PATH at `/usr/lib/icloud-notes/icloud-notes-sync`; reached through `icloud-notes`, run directly only for development |
 | `icloud-photos <command>` | icloud-photos | the Photos app: catalog, downloads, uploads, deletes |
 | `icloud-findmy <command>` | icloud-findmy | the Find My app: devices, locate, sound, Lost Mode, history |
-| `icloud-reminders <command>` | icloud-reminders | the Reminders app: `sync` (iCloud and the Markdown lists in `~/Documents/Reminders`, where reminders are read and changed); `background` is its notification timer |
+| `icloud-reminders <command>` | icloud-reminders | the Reminders app: `sync` (iCloud and the Markdown lists in `~/Documents/Reminders`, where reminders are read and changed); `background` is its notification timer; `leave` hands the folder to Omacloud for good |
 | `icloud-contacts <command>` | icloud-contacts | the Contacts app: search, show, add, edit, delete, vCard export |
 | `icloud-drive <command>` | icloud-drive | the sync of the folder `~/iCloud Drive`: status, a sync now, on and off (no window) |
 
@@ -131,6 +131,7 @@ once.
 | Sign-in banner | exit 3 (`sign_in_required`), then `icloud-session sign-in` |
 | New List / rename a list / Delete List | make a file `NAME.md` / rename the list's file / remove it (see [icloud-reminders](#icloud-reminders) for the guards) |
 | Groups, sections, sharing, alerts, priority, flags | not in the files: the app or an Apple device |
+| (no window action) | `icloud-reminders leave`: the folder goes to Omacloud and iCloud is left; the window then only shows where the files are, with Open Folder |
 
 ### Contacts (`contacts/src/bin/app`)
 
@@ -404,9 +405,9 @@ they exit with the engine's codes, below.
 
 | Exit | Codes |
 |---|---|
-| 1 | `io`, `error` (also a record or zone CloudKit refused), `http` (a 4xx); also `sync` with its data when the folder step reported a problem (`folder.restored` or `folder.warnings` not empty) |
-| 2 | `usage` |
-| 3 | `sign_in_required`, `session_rejected` |
+| 1 | `io`, `error` (also a record or zone CloudKit refused), `http` (a 4xx), `folder_unsettled` (`leave` found the folder not in step with iCloud: nothing was left), `omacloud`/`omacloud_<code>` (`leave`: Omacloud failed, with its own code); also `sync` with its data when the folder step reported a problem (`folder.restored` or `folder.warnings` not empty) |
+| 2 | `usage` (also `leave` without `--yes` where nobody can be asked) |
+| 3 | `sign_in_required`, `session_rejected`; `left_icloud` (`sync` once the reminders left iCloud on this computer); `leave`'s `omacloud_missing` (install Omacloud), `omacloud_not_set_up` (`omacloud init`), `omacloud_folder_off` (Omacloud does not sync `~/Documents` here: `omacloud folders add ~/Documents`) |
 | 4 | `not_found` |
 | 5 | `offline` (no network), `network` (a connection that failed), `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
@@ -717,6 +718,47 @@ $ icloud-reminders --quiet sync
 - `background` is what the systemd timer runs every minute: it syncs if the
   last sync is stale or a file changed, keeps the folder in step, and
   notifies about reminders that fell due.
+- While iCloud keeps the folder it holds an empty `.nosync` file, so
+  Omacloud leaves it on this computer instead of syncing it as well.
+
+#### Leaving iCloud
+
+`icloud-reminders leave` hands `~/Documents/Reminders` to Omacloud for
+good, on this computer: the files become the reminders, Omacloud carries
+them to your other computers, and nothing here talks to iCloud again.
+iCloud keeps its copy as it was; nothing there is deleted.
+
+```console
+$ icloud-reminders --quiet leave --yes
+{"folder":"/home/me/Documents/Reminders","left_at":1795000000,"already":false,"omacloud_synced":true,
+ "lost":{"completed_long_ago":12,"alerts":2,"priority":1,"flagged":0,"lists_with_colour":3,"shared_lists":0,"groups":0}}
+```
+
+1. Omacloud must be installed, set up and syncing `~/Documents`; each
+   missing step fails with its code and the command that fixes it in
+   `hint` (`omacloud_missing`, `omacloud_not_set_up`, `omacloud_folder_off`),
+   and nothing changes.
+2. It asks first (`--yes` where nobody can be asked), naming what stays
+   behind in iCloud because a file cannot hold it: reminders completed over
+   a week ago, alerts, priorities, flags, list colours, groups, sharing,
+   sections and repeats. `lost` counts them.
+3. It syncs with iCloud a last time, folder step included; a folder not in
+   step (a file put back, a warning, a new file still settling) fails with
+   `folder_unsettled` and leaves nothing.
+4. It records the leaving (`left-icloud.json` in the data directory),
+   removes the `.nosync` file and runs `omacloud sync` (a failure is a
+   warning: Omacloud's daemon takes the folder in anyway; `omacloud_synced`
+   says which). Run again, it only does this last step (`already: true`).
+
+Afterwards `sync` fails with `left_icloud` (exit 3), and `background`, still
+run by the timer every minute, sends no request: it writes a relative due
+date (`📅 tomorrow 9:00`, `+2h`) as the date it means, and notifies about a
+reminder when its due time comes if it saw it waiting before (one written
+already past due is not news). Its data is `{synced: false, sync_error:
+null, notified: [{list, title}], folder: null, left: true, pinned: [file]}`.
+The window shows where the files are, with Open Folder. Leave on each
+computer: one still on iCloud keeps its folder out of Omacloud until it
+leaves too, and then the two copies are joined, deleting nothing.
 
 ### icloud-contacts
 
@@ -888,6 +930,8 @@ Its error codes are in the table under [Error codes](#error-codes).
 |---|---|
 | `sync` | `{lists, reminders, changed, full, folder}`: `folder` is `{added, edited, deleted, written:[file], restored:[{list, file, kept}], warnings:[text], lists_created:[name], lists_renamed:[{from, to}], lists_deleted:[{list, file, reminders}], lists_kept:[{list, file, why}]}`, what the files in `~/Documents/Reminders` changed in iCloud, the files written, the files put back because they no longer listed `kept` reminders that were most of their list, each problem (a list whose run failed, a conflict copy removed unread or left, a file of a deleted list left, a new file not made into a list or still settling, a removed list file written back), the lists made from new files, renamed after their files, and deleted with their removed files (`reminders`: how many went with it), and the lists whose removed file was written back instead (`why`); or null with no home directory. Exit 1 with the data when `restored` or `warnings` is not empty |
 | `background` | `{synced, sync_error, notified:[{id, title}], folder}`; exit 0 also when the sync failed (`sync_error` says why). `folder` as for `sync` (null when changed files are waiting for a sync; a new file still settling is not named here); a folder run that failed is one entry in its `warnings` |
+| `background` (after `leave`) | `{synced: false, sync_error: null, notified:[{list, title}], folder: null, left: true, pinned:[file]}`: no request to iCloud; `pinned` names the files whose relative due dates were written as dates |
+| `leave` | `{folder, left_at, already, omacloud_synced, lost}`: `left_at` in seconds since the epoch; `already` when it had left before (then `lost` is null); `lost` is `{completed_long_ago, alerts, priority, flagged, lists_with_colour, shared_lists, groups}`, what stays behind in iCloud |
 | (syncs) | `sync` and `background` also carry `warning` naming the records (`Reminder/<UUID>: why`) a sync skipped because it couldn't read them; the rest synced, the skipped ones keep their cached copy; that alone still exits 0 |
 
 ### icloud-contacts

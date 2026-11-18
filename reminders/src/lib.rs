@@ -1,11 +1,13 @@
 //! iCloud Reminders for Omarchy. This library is the core ([`cloudkit`],
-//! [`model`], [`topotext`], [`due`], [`store`], [`service`], [`notify`], [`folder`])
+//! [`model`], [`topotext`], [`due`], [`store`], [`service`], [`notify`], [`folder`],
+//! [`files`]: the reminders once they left iCloud)
 //! and the command line ([`cli`]), with no GTK anywhere; the window is the
 //! `icloud-reminders-app` binary (`src/bin/app/`), behind the `ui` feature.
 
 pub mod cli;
 pub mod cloudkit;
 pub mod due;
+pub mod files;
 pub mod folder;
 pub mod model;
 pub mod notify;

@@ -153,13 +153,40 @@ With Syncthing, share the folder with the phone and one computer only:
 two computers that both sync it with iCloud would each answer the other's
 writes. Each computer gets its reminders from iCloud.
 
+### Leaving iCloud for Omacloud
+
+`icloud-reminders leave` makes the folder the reminders, for good, on
+this computer: [Omacloud](https://omacloud.computer) carries the files
+to your other computers and nothing here talks to iCloud again. iCloud
+keeps its copy as it was. It needs Omacloud installed, set up and syncing
+`~/Documents`, and says the command for whichever step is missing:
+
+```console
+$ curl -fsSL https://omacloud.computer/install.sh | sudo bash   # if needed
+$ omacloud init                                                # if needed
+$ omacloud folders add ~/Documents                             # if needed
+$ icloud-reminders leave
+```
+
+It syncs with iCloud a last time, so the files hold every reminder, and
+asks first, naming what a file cannot hold and so stays behind in iCloud:
+reminders completed over a week ago, alerts, priorities, flags, list
+colours, groups, sections, repeats and sharing. Afterwards edit the files;
+the timer still notifies when a reminder falls due (a `📅 tomorrow` is
+written as the date it means), and the window only shows where the files
+are. Run it on each computer you use. While iCloud keeps the folder it
+holds an empty `.nosync` file, which keeps Omacloud from syncing the same
+files too.
+
 ### What is kept on this computer
 
 `~/.local/share/icloud-reminders/`: `cache.json` (the lists and
 reminders as last synced, and CloudKit's sync token; only a cache, since
 iCloud holds the reminders), `notified.json` (what has notified), and
 `replica` (this computer's ID in the merge tokens Apple keeps per field),
-and `folder.json` (the folder's files as last written).
+and `folder.json` (the folder's files as last written); after leaving,
+`left-icloud.json` and `files-waiting.json` (the reminders waiting to
+fall due).
 Delete the directory to start over; the next sync fetches everything.
 
 ## Command line
@@ -172,6 +199,7 @@ files above, not by commands.
 ```console
 $ icloud-reminders sync [--full]              # sync now and apply the files' edits
 $ icloud-reminders background                 # what the timer runs
+$ icloud-reminders leave [--yes]              # leave iCloud: the folder goes to Omacloud
 ```
 
 Every command, the files' format, the output modes

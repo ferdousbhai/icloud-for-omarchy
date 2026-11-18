@@ -5,7 +5,15 @@
 //! The folder is a working copy: iCloud holds the reminders, and this is the
 //! only code that reads the files. It exists so that something that only
 //! carries files (Syncthing to a phone, an editor, an agent) can read and
-//! change reminders. A file looks like this:
+//! change reminders. While it does, each run puts an empty `.nosync` file in
+//! the folder (`icloud_app::leave::hold`), which keeps Omacloud from syncing
+//! the same files as well.
+//!
+//! Once the reminders left iCloud on this computer (`icloud-reminders
+//! leave`), none of this runs: the files are the reminders, Omacloud
+//! carries them, the marker is gone, and [`crate::files`] is all that reads
+//! them (for due-time notifications). A run that waited for the folder's
+//! lock while `leave` held it does nothing. A file looks like this:
 //!
 //! ```text
 //! # Work
@@ -212,7 +220,8 @@ fn crash(point: &str) {
 
 /// How long a completed reminder stays in its file.
 pub const KEEP_DONE_MS: i64 = 7 * 24 * 3600 * 1000;
-const DUE_MARK: &str = "📅";
+/// What comes before a line's due date.
+pub const DUE_MARK: &str = "📅";
 const UNTITLED: &str = "(untitled)";
 /// Titles at least this alike are one reminder, retitled.
 const ALIKE: f64 = 0.5;
@@ -939,6 +948,11 @@ fn copy_of(name: &str) -> Option<String> {
     // ASCII from `at` on, so `at` is a character boundary.
     let file = format!("{}.md", base[..at].strip_suffix(MARKER)?);
     Some(copy_of(&file).unwrap_or(file))
+}
+
+/// Whether `name` is a Syncthing conflict copy of a list's file.
+pub fn is_conflict_copy(name: &str) -> bool {
+    copy_of(name).is_some()
 }
 
 /// Syncthing's conflict copies of `file`: `Work.sync-conflict-<when>-<device>.md`.
@@ -1732,6 +1746,8 @@ pub fn sync(svc: &Service, dir: &Path, state: &mut State, now: &Zoned) -> Result
     }
     let existed = dir.is_dir();
     fs::create_dir_all(dir)?;
+    // iCloud keeps these files: Omacloud leaves the folder alone
+    icloud_app::leave::hold(dir)?;
 
     // A rename a killed run began: done when the file is at its new name
     // and not its old, else not done (never an old name's file come back).

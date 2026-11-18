@@ -1305,6 +1305,8 @@ fn file_names(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        // the marker that keeps Omacloud out while iCloud has the folder
+        .filter(|n| n != icloud_app::leave::MARKER)
         .collect();
     names.sort();
     names
@@ -2300,4 +2302,155 @@ fn a_deleted_list_s_conflict_copy_that_cannot_be_removed_is_left_and_not_read_by
     std::fs::remove_dir_all(dir.join(copy)).unwrap();
     env.json(&["background", "--sync"]);
     assert_eq!(file_names(&dir), ["Groceries.md", "Reminders.md"]);
+}
+
+/// A stand-in `omacloud` in the test's `bin`: `status` answers as set up
+/// and syncing `synced` (folders of the test's home), anything else is
+/// logged to `omacloud.log` and succeeds. Shell builtins only: the test's
+/// `PATH` is its `bin` alone.
+fn fake_omacloud(env: &Env, synced: &[&str]) -> PathBuf {
+    let home = env.dir.path().join("home");
+    let folders: Vec<Value> = synced
+        .iter()
+        .map(|n| json!({"name": n, "path": home.join(n)}))
+        .collect();
+    let status = json!({"ok": true, "data": {"set_up": true, "folder": home, "folders": {"synced": folders}}});
+    let bin = env.dir.path().join("bin/omacloud");
+    let log = env.dir.path().join("omacloud.log");
+    write_script(
+        &bin,
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = status ]; then printf '%s\\n' '{status}'; exit 0; fi\nprintf '%s\\n' \"$*\" >> '{}'\nprintf '%s\\n' '{{\"ok\":true,\"data\":null,\"summary\":\"synced\"}}'\n",
+            log.display()
+        ),
+    );
+    bin
+}
+
+impl Env {
+    fn run_with(&self, args: &[&str], vars: &[(&str, &str)]) -> Output {
+        let mut c = command_at(&self.base, self.dir.path(), args);
+        for (k, v) in vars {
+            c.env(k, v);
+        }
+        c.output().unwrap()
+    }
+
+    fn left_file(&self) -> PathBuf {
+        self.data().join("left-icloud.json")
+    }
+}
+
+#[test]
+fn leave_refuses_until_omacloud_can_take_the_folder() {
+    let env = start();
+    let dir = folder(&env);
+    assert!(dir.join(".nosync").is_file(), "iCloud's folder carries the marker");
+    // not installed
+    let (exit, e) = env.fails(&["leave", "--yes"]);
+    assert_eq!((exit, e["code"].as_str().unwrap()), (3, "omacloud_missing"));
+    assert!(
+        e["hint"].as_str().unwrap().contains("omacloud.computer/install.sh"),
+        "{e}"
+    );
+    // installed, but ~/Documents is not synced here
+    fake_omacloud(&env, &["Work"]);
+    let (exit, e) = env.fails(&["leave", "--yes"]);
+    assert_eq!((exit, e["code"].as_str().unwrap()), (3, "omacloud_folder_off"));
+    assert!(
+        e["hint"].as_str().unwrap().contains("omacloud folders add ~/Documents"),
+        "{e}"
+    );
+    // ready, but nobody to ask and no --yes
+    fake_omacloud(&env, &["Documents"]);
+    let (exit, e) = env.fails(&["leave"]);
+    assert_eq!((exit, e["code"].as_str().unwrap()), (2, "usage"));
+    // nothing changed
+    assert!(!env.left_file().exists());
+    assert!(dir.join(".nosync").is_file());
+    assert!(!env.dir.path().join("omacloud.log").exists());
+}
+
+#[test]
+fn leave_syncs_a_last_time_then_hands_the_folder_to_omacloud() {
+    let env = start();
+    let dir = folder(&env);
+    let path = dir.join("Groceries.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, format!("{text}- [ ] Tea\n")).unwrap();
+    fake_omacloud(&env, &["Documents"]);
+    let out = env.json(&["leave", "--yes"]);
+    assert_eq!(out["folder"], json!(dir));
+    assert_eq!(
+        (out["already"].clone(), out["omacloud_synced"].clone()),
+        (json!(false), json!(true))
+    );
+    assert!(out["lost"]["completed_long_ago"].is_number(), "{out}");
+    // the file's edit reached iCloud before leaving
+    assert!(all_titles(&env, "Groceries").contains(&"Tea".to_owned()));
+    assert!(env.left_file().is_file());
+    assert!(!dir.join(".nosync").exists(), "Omacloud takes the folder now");
+    assert_eq!(
+        std::fs::read_to_string(env.dir.path().join("omacloud.log")).unwrap(),
+        "sync --json\n"
+    );
+
+    // From now on nothing talks to iCloud.
+    let before = env.ops().len();
+    let (exit, e) = env.fails(&["sync"]);
+    assert_eq!((exit, e["code"].as_str().unwrap()), (3, "left_icloud"));
+    let out = env.json(&["background", "--sync"]);
+    assert_eq!(
+        (out["left"].clone(), out["synced"].clone()),
+        (json!(true), json!(false))
+    );
+    std::fs::write(&path, "# Groceries\n\n- [ ] Only here now\n").unwrap();
+    env.json(&["background"]);
+    assert_eq!(env.ops().len(), before, "no request after leaving: {:?}", env.ops());
+    assert!(!dir.join(".nosync").exists(), "the timer puts no marker back");
+    assert!(!all_titles(&env, "Groceries").contains(&"Only here now".to_owned()));
+    // Again: no question, the folder handed over once more.
+    let out = env.json(&["leave"]);
+    assert_eq!(out["already"], true);
+}
+
+#[test]
+fn after_leaving_the_files_notify_when_due() {
+    let env = start();
+    let dir = folder(&env);
+    fake_omacloud(&env, &["Documents"]);
+    env.json(&["leave", "--yes"]);
+    let notified_before = env.notifications().len();
+    let path = dir.join("Work.md");
+    let soon = jiff::Timestamp::from_millisecond(now_ms() + 2 * MINUTE)
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .strftime("%Y-%m-%d %H:%M")
+        .to_string();
+    std::fs::write(
+        &path,
+        format!("# Work\n\n- [ ] Send the quote 📅 {soon}\n- [ ] Plan 📅 tomorrow 9:00\n- [x] Done 📅 {soon}\n"),
+    )
+    .unwrap();
+    // seen waiting; the relative date is pinned
+    let out = env.json(&["background"]);
+    assert_eq!(out["notified"], json!([]));
+    assert_eq!(out["pinned"], json!(["Work.md"]));
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !text.contains("tomorrow") && text.contains("- [ ] Plan 📅 20"),
+        "{text}"
+    );
+    // three minutes on: once
+    let later = [("ICLOUD_REMINDERS_FOLDER_CLOCK_MS", "180000")];
+    let out = envelope(&env.run_with(&["background"], &later).stdout)["data"].clone();
+    assert_eq!(out["notified"], json!([{"list": "Work", "title": "Send the quote"}]));
+    let shown = env.notifications();
+    assert_eq!(shown.len(), notified_before + 1);
+    assert_eq!(shown.last().unwrap()[6], "Send the quote");
+    assert!(shown.last().unwrap()[7].starts_with("Work · "), "{shown:?}");
+    let out = envelope(&env.run_with(&["background"], &later).stdout)["data"].clone();
+    assert_eq!(out["notified"], json!([]));
+    // as the timer runs it: nothing to say, nothing printed
+    assert_eq!(stdout(&env.run_with(&["background", "--styled"], &later)), "");
 }

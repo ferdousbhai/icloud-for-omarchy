@@ -21,7 +21,12 @@ fn main() {
             std::process::exit(1);
         });
         let app = icloud_app_ui::application(APP_ID, "icloud-reminders", "Reminders", move |app| {
-            window::Window::new(app, local.clone()).present()
+            // Left iCloud: the files are the reminders, and the window would
+            // only sync with iCloud.
+            match icloud_app::leave::left("icloud-reminders").ok().flatten() {
+                Some(left) => window::left(app, &left).present(),
+                None => window::Window::new(app, local.clone()).present(),
+            }
         });
         app.set_accels_for_action("win.refresh", &["<Ctrl>r", "F5"]);
         app.set_accels_for_action("win.new", &["<Ctrl>n"]);

@@ -641,6 +641,43 @@ fn sidebar_row(id: &str, name: &str, open: usize) -> gtk::ListBoxRow {
 
 const CSS: &str = "row.overdue .subtitle { color: var(--error-color); opacity: 1; }";
 
+/// The window once the reminders left iCloud on this computer: where they
+/// are now, and a button that opens the folder.
+pub fn left(app: &adw::Application, left: &icloud_app::leave::Left) -> adw::ApplicationWindow {
+    let folder = left.folder.clone();
+    let open = gtk::Button::builder()
+        .label("Open Folder")
+        .halign(gtk::Align::Center)
+        .css_classes(["pill", "suggested-action"])
+        .build();
+    let page = adw::StatusPage::builder()
+        .icon_name("checkbox-checked-symbolic")
+        .title("Your Reminders Are Files Now")
+        .description(format!(
+            "Reminders left iCloud on this computer. Each list is a checklist in {}, which Omacloud keeps in sync on your computers, and due reminders still notify.",
+            folder.display()
+        ))
+        .child(&open)
+        .build();
+    let tv = adw::ToolbarView::new();
+    tv.add_top_bar(&adw::HeaderBar::new());
+    tv.set_content(Some(&page));
+    let window = adw::ApplicationWindow::builder()
+        .application(app)
+        .title("Reminders")
+        .icon_name(super::APP_ID)
+        .default_width(560)
+        .default_height(480)
+        .content(&tv)
+        .build();
+    let parent = window.clone();
+    open.connect_clicked(move |_| {
+        let launcher = gtk::FileLauncher::new(Some(&gio::File::for_path(&folder)));
+        launcher.launch(Some(&parent), gio::Cancellable::NONE, |_| {});
+    });
+    window
+}
+
 fn build(app: &adw::Application, banner: SignInBanner, local: TimeZone) -> Window {
     let css = gtk::CssProvider::new();
     css.load_from_string(CSS);
