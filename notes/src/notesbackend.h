@@ -33,6 +33,7 @@ class NotesBackend : public QObject
     Q_PROPERTY(QStringList folders READ folders NOTIFY foldersChanged)
     Q_PROPERTY(QVariantMap folderNoteCounts READ folderNoteCounts NOTIFY foldersChanged)
     Q_PROPERTY(bool cloned READ cloned NOTIFY foldersChanged)
+    Q_PROPERTY(bool leftICloud READ left CONSTANT)
     Q_PROPERTY(bool syncToolAvailable READ syncToolAvailable NOTIFY foldersChanged)
     Q_PROPERTY(QString vaultTitleMode READ vaultTitleMode NOTIFY foldersChanged)
     Q_PROPERTY(QString currentFolder READ currentFolder WRITE setCurrentFolder NOTIFY currentFolderChanged)
@@ -108,6 +109,11 @@ public:
     QVariantMap folderNoteCounts() const { return m_folderNoteCounts; }
     bool cloned() const { return vaultCloned(); }
     static bool vaultCloned();
+    // The vault left iCloud on this computer (`icloud-notes leave`, recorded
+    // in $XDG_DATA_HOME/icloud-notes/left-icloud.json): Omacloud syncs its
+    // files, and nothing here syncs it with iCloud or offers to clone.
+    bool left() const { return leftICloud(); }
+    static bool leftICloud();
     // The engine's state directory in the vault: .icloud-notes, or a layout 3
     // vault's .icloud-md until its next sync moves it.
     static QString stateDir();

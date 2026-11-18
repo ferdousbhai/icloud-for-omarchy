@@ -972,6 +972,7 @@ dependencies = [
  "base64",
  "clap",
  "flate2",
+ "icloud-app",
  "icloud-session",
  "icu_collator",
  "icu_properties",

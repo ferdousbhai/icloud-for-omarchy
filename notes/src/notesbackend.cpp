@@ -445,7 +445,8 @@ NotesBackend::NotesBackend(QObject *parent, Role role)
     if (m_role == Role::App)
         refreshSignIn();
     refresh();
-    setSyncMessage(!syncToolAvailable() ? kNotInstalledMessage
+    setSyncMessage(leftICloud()           ? QStringLiteral("Omacloud syncs this folder; iCloud is no longer used here.")
+                   : !syncToolAvailable() ? kNotInstalledMessage
                    : cloned()           ? QStringLiteral("Ready.")
                                         : QStringLiteral("Not linked to iCloud yet. Press Clone."));
 }
@@ -736,6 +737,27 @@ QString NotesBackend::stateDir()
 bool NotesBackend::vaultCloned()
 {
     return QFile::exists(stateDir() + QStringLiteral("/state.json"));
+}
+
+// icloud-notes-sync leave's record (icloud_app::leave), for this vault: the
+// one it names, as the engine compares them.
+bool NotesBackend::leftICloud()
+{
+    QString data = qEnvironmentVariable("XDG_DATA_HOME");
+    if (data.isEmpty() || QDir::isRelativePath(data))
+        data = QDir::homePath() + QStringLiteral("/.local/share");
+    QFile f(data + QStringLiteral("/icloud-notes/left-icloud.json"));
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+    const QString folder = QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("folder")).toString();
+    if (folder.isEmpty())
+        return false;
+    const auto canon = [](const QString &p) {
+        const QFileInfo fi(p);
+        const QString c = fi.canonicalFilePath();
+        return c.isEmpty() ? QDir::cleanPath(fi.absoluteFilePath()) : c;
+    };
+    return canon(folder) == canon(rootPath());
 }
 
 bool NotesBackend::isLoggedStderrLine(const QByteArray &line)
@@ -1975,7 +1997,7 @@ QString NotesBackend::exportPdf()
 
 void NotesBackend::runClone()
 {
-    if (m_syncRunning)
+    if (m_syncRunning || leftICloud())
         return;
     m_cloneWanted = true;
     m_cloneSignInAsked = false;
@@ -2073,7 +2095,8 @@ void NotesBackend::runDiff(const QString &ref)
 
 void NotesBackend::startSync(Mode mode, const QStringList &args, const QString &label)
 {
-    if (m_syncRunning)
+    // left iCloud: the engine would refuse every run (left_icloud)
+    if (m_syncRunning || leftICloud())
         return;
     m_mode = mode;
     m_syncLabel = label;

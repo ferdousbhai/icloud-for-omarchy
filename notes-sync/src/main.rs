@@ -35,8 +35,8 @@ use icloud_notes_sync::cmd::lock::lock_vault;
 use icloud_notes_sync::cmd::output::{error_json, usage_error};
 use icloud_notes_sync::cmd::plan::{PlanEntry, PlanEntryKind, PlanResolution, render_plan};
 use icloud_notes_sync::cmd::{
-    self, NoProgress, NoticeLevel, SyncNotice, SyncProgress, background, clone, diff, history, pull, push, restore,
-    status, sync, vault_info,
+    self, NoProgress, NoticeLevel, SyncNotice, SyncProgress, background, clone, diff, history, leave, pull, push,
+    restore, status, sync, vault_info,
 };
 use icloud_notes_sync::vault::local::{display_path, find_vault_root};
 use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
@@ -156,6 +156,26 @@ enum Command {
         /// A sync is due once the last one is this old (the window asks for 60 while it is in front)
         #[arg(long, value_name = "SECS", default_value_t = background::DEFAULT_EVERY_SECS)]
         every: u64,
+    },
+    /// Leave iCloud for Omacloud: a last sync, then Omacloud syncs the folder and nothing here talks to iCloud
+    #[command(
+        after_help = "Needs Omacloud installed, set up and syncing the vault's folder of home (omacloud_missing, \
+                      omacloud_not_set_up, omacloud_folder_off, exit 3, each with the command that fixes it; \
+                      nothing changes). Then a sync as sync does (never deleting most of the vault); if it fails, \
+                      nothing changes. Then the vault's state (.icloud-notes) moves to \
+                      $XDG_DATA_HOME/icloud-notes/left-icloud-state/, the .nosync marker leaves the vault, and \
+                      omacloud sync runs (a failure there is a warning). iCloud keeps its copy as it was. From \
+                      then on clone, pull, push, sync, status, restore, history and diff refuse with left_icloud \
+                      (exit 3) and background skips (step left). Asks on a terminal; otherwise needs --yes. Run \
+                      again, it finishes a leave cut short.\n\
+                      data is {\"folder\", \"left_at\" (seconds since the epoch), \"kept_state\", \
+                      \"omacloud_synced\", \"already\"}."
+    )]
+    Leave {
+        directory: Option<PathBuf>,
+        /// Leave without asking
+        #[arg(long)]
+        yes: bool,
     },
     /// Diff two snapshots, or one snapshot against the current remote copy
     #[command(
@@ -449,6 +469,7 @@ fn run_sync_command(
     yes: bool,
 ) -> (serde_json::Value, String, String, u8) {
     let started = icloud_notes_sync::vault::rt::now_ms();
+    hold(target);
     let options = push::PushOptions {
         dry_run: false,
         allow_deletes: yes,
@@ -515,6 +536,13 @@ fn run_sync_command(
     (data, summary, text, outcome.exit_code())
 }
 
+/// While iCloud keeps the vault, Omacloud leaves it alone (`icloud_app::leave`).
+fn hold(vault: &Path) {
+    if let Err(e) = icloud_app::leave::hold(vault) {
+        icloud_app::cli::warning(&format!("could not mark {} as iCloud's: {e}", vault.display()));
+    }
+}
+
 fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Result<Response, CliError> {
     let mut on_status = |message: &str| cmd::output::status(mode, message);
     let mut machine = MachineProgress { processed: 0, total: 0 };
@@ -532,8 +560,10 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
                 filename_as_title,
                 account,
             };
+            leave::refuse_if_left(&directory)?;
             let _lock = lock_vault(&directory, wait)?;
             let s = clone::run_clone(&directory, progress, &options)?;
+            hold(&directory);
             let summary = format!(
                 "Cloned {} (plus {} shared with you) into {}",
                 plural(s.written, "note", "notes"),
@@ -548,8 +578,10 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
         }
         Command::Pull { directory } => {
             let target = resolve_target_dir(directory)?;
+            leave::refuse_if_left(&target)?;
             let _lock = lock_vault(&target, wait)?;
             let s = pull::run_pull(&target, progress, &mut on_status)?;
+            hold(&target);
             let lines = pull_lines(&s, &target);
             let report = report_lines(&lines);
             Response::new(&s, pull_summary(&s))
@@ -563,6 +595,7 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
             yes,
         } => {
             let target = resolve_target_dir(directory)?;
+            leave::refuse_if_left(&target)?;
             let _lock = if dry_run {
                 None
             } else {
@@ -590,12 +623,22 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
         }
         Command::Sync { directory, yes } => {
             let target = resolve_target_dir(directory)?;
+            leave::refuse_if_left(&target)?;
             let _lock = lock_vault(&target, wait)?;
             let (data, summary, text, exit) = run_sync_command(&target, mode, progress, &mut on_status, yes);
             Response::new(data, summary).human(text).exit(exit)
         }
         Command::Background { directory, every } => {
             let target = resolve_target_dir(directory)?;
+            // left iCloud: the timer has nothing to do, and says nothing
+            if leave::left_here(&target).is_some() {
+                let data = serde_json::json!({ "synced": false, "step": "left" });
+                return Ok(if mode == Mode::Human {
+                    Response::silent()
+                } else {
+                    Response::new(data, "Not synced (left)")
+                });
+            }
             let now = icloud_notes_sync::vault::rt::now_ms();
             let changes = push::local_changes(&target)?;
             let every_ms = i64::try_from(every.saturating_mul(1000)).unwrap_or(i64::MAX);
@@ -631,6 +674,7 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
         }
         Command::Status { directory } => {
             let target = resolve_target_dir(directory)?;
+            leave::refuse_if_left(&target)?;
             let r = status::run_status(&target, &mut on_status)?;
             let mut lines = notice_lines(&r.notices);
             lines.extend(plan_lines(&r.entries, Some(r.unchanged), &target));
@@ -643,6 +687,7 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
         }
         Command::Restore { file, directory } => {
             let target = resolve_target_dir(directory)?;
+            leave::refuse_if_left(&target)?;
             let _lock = lock_vault(&target, wait)?;
             let r = restore::run_restore(&target, &file)?;
             let summary = format!("Restored {} to match the last synced copy.", r.file);
@@ -667,6 +712,7 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
             records,
         } => {
             let target = resolve_target_dir(directory)?;
+            leave::refuse_if_left(&target)?;
             let r = history::run_history(&target, &file, &history::HistoryOptions { records })?;
             let (ids, summary): (Vec<String>, String) = match &r {
                 history::HistoryResult::Records { records, .. } => (
@@ -700,6 +746,7 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
                 }
             };
             let target = resolve_target_dir(directory)?;
+            leave::refuse_if_left(&target)?;
             let r = diff::run_diff(&target, &file, from, to)?;
             let summary = if r.has_differences() {
                 "Differences found"
@@ -709,7 +756,57 @@ fn run(command: Command, mode: Mode, wait: Option<std::time::Duration>) -> Resul
             let text = diff::render_diff_result(&r);
             Response::new(&r, summary).human(text.clone()).meta("text", text)
         }
+        Command::Leave { directory, yes } => {
+            let target = resolve_target_dir(directory)?;
+            let vault = std::path::absolute(&target).map_err(cmd::Error::from)?;
+            let already = leave::left_here(&vault);
+            if already.is_none() {
+                if icloud_notes_sync::vault::state::read_clone_state(&vault)?.is_none() {
+                    return Err(cmd::Error::NotClonedDirectory {
+                        target_dir: vault.display().to_string(),
+                    }
+                    .into());
+                }
+                icloud_app::leave::omacloud_ready(&vault)?;
+                icloud_app::cli::confirm(
+                    mode,
+                    "leave",
+                    yes,
+                    &format!(
+                        "Sync once more, then stop syncing {} with iCloud on this computer and let Omacloud sync it? iCloud keeps its copy as it is.",
+                        vault.display()
+                    ),
+                )?;
+                let _lock = lock_vault(&vault, wait)?;
+                let (_, summary, text, exit) = run_sync_command(&vault, mode, progress, &mut on_status, false);
+                if exit != cmd::errors::EXIT_OK {
+                    if mode == Mode::Human && !text.is_empty() {
+                        eprintln!("{}", output::terminal_safe(&text));
+                    }
+                    return Err(CliError::new(
+                        "sync_failed",
+                        exit,
+                        format!("the last sync with iCloud failed ({summary}); nothing changed"),
+                    )
+                    .hint("run `icloud-notes sync` to see why, then leave again"));
+                }
+                let r = leave::finish(&vault, None)?;
+                return Ok(leave_response(&r));
+            }
+            let r = leave::finish(&vault, already)?;
+            leave_response(&r)
+        }
     })
+}
+
+fn leave_response(r: &leave::LeaveResult) -> Response {
+    let text = format!(
+        "{} {} iCloud on this computer: Omacloud syncs it{}. iCloud keeps its copy as it was.",
+        r.folder,
+        if r.already { "had left" } else { "left" },
+        if r.omacloud_synced { " (synced now)" } else { "" }
+    );
+    Response::new(r, format!("{} left iCloud", r.folder)).human(text)
 }
 
 /// `history`'s human report.

@@ -67,7 +67,8 @@ fn apply_edit(vault: &Path, edit: &Map<String, Value>) {
 }
 
 /// Every file under `vault` except the state directories (`.icloud-notes`,
-/// a layout 3 vault's `.icloud-md`, its backup `.icloud-md.bak-*`).
+/// a layout 3 vault's `.icloud-md`, its backup `.icloud-md.bak-*`) and the
+/// `.nosync` marker for Omacloud (tests/cmd_leave.rs checks it).
 fn working_files(vault: &Path) -> Vec<PathBuf> {
     fn walk(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -76,7 +77,7 @@ fn working_files(vault: &Path) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
-            if dir == root && (name == STATE_DIR || name.starts_with(LEGACY_STATE_DIR)) {
+            if dir == root && (name == STATE_DIR || name.starts_with(LEGACY_STATE_DIR) || name == ".nosync") {
                 continue;
             }
             if path.is_dir() {
@@ -281,10 +282,12 @@ fn run_binary(scenario: &Scenario) -> Run {
     }
 }
 
-/// The vault's files with state.json's `generator` normalized.
+/// The vault's files with state.json's `generator` normalized, less the
+/// `.nosync` marker for Omacloud (tests/cmd_leave.rs checks it).
 fn vault_files(vault: &Path) -> BTreeMap<String, Vec<u8>> {
     all_files(vault)
         .into_iter()
+        .filter(|(k, _)| k != ".nosync")
         .map(|(k, v)| {
             let v = if k == format!("{STATE_DIR}/state.json") {
                 normalize_generator(&v)

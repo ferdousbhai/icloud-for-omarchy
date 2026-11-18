@@ -1080,7 +1080,8 @@ ApplicationWindow {
         spacing: 0
 
         Rectangle {
-            visible: !backend.syncToolAvailable || !backend.cloned
+            // a vault that left iCloud for Omacloud is plain files: nothing to link
+            visible: !backend.leftICloud && (!backend.syncToolAvailable || !backend.cloned)
             Layout.fillWidth: true
             Layout.margins: 10
             implicitHeight: bannerRow.implicitHeight + 20
@@ -1179,7 +1180,7 @@ ApplicationWindow {
             readonly property int daysLeft: backend.signInDaysLeft
             readonly property bool shortSignIn: backend.cloned && backend.syncToolAvailable && daysLeft === -1 // -2: unknown
             readonly property string howTo: "In Apple's window, use your Apple ID and password (not the iPhone QR code), tick Keep me signed in, and click Trust."
-            visible: backend.authExpired || shortSignIn || (daysLeft >= 0 && daysLeft <= 5)
+            visible: !backend.leftICloud && (backend.authExpired || shortSignIn || (daysLeft >= 0 && daysLeft <= 5))
             Layout.fillWidth: true
             Layout.margins: 10
             implicitHeight: authRow.implicitHeight + 20
@@ -2135,6 +2136,8 @@ ApplicationWindow {
         if (started || backend.signInPending)
             return;
         started = true;
+        if (backend.leftICloud)
+            return; // Omacloud syncs the folder: no sync, no clone, no sign-in
         if (backend.cloned) {
             if (backend.syncToolAvailable && !backend.authExpired)
                 root.syncIfDue(60); // edits made while the app was closed go up first; the window's first activation is this step

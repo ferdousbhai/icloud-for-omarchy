@@ -67,6 +67,7 @@ timer's sync). All of it is new, in the app binary: see
 | Note history, diffs | `icloud-notes history NOTE [--records]`, `icloud-notes diff NOTE REF` | added (the engine's existed) |
 | Discard local edits (the History dialog points to a terminal) | `icloud-notes restore NOTE --yes` | added (the engine's `restore` existed) |
 | Link your Apple Notes: Clone my notes | `icloud-notes clone` | added |
+| (not in the window, on purpose) leave iCloud for Omacloud | `icloud-notes leave --yes` | added |
 | Sign-in banner, days left, Sign in | `icloud-notes status` (`signed_in`, `sign_in_days_left`), then `icloud-session sign-in` | added |
 | Sync log | each command's output; `sync`'s data carries `log` | added |
 | Background sync while closed | `icloud-notes --sync` (the systemd timer, every minute: the engine's `background` step, the window's own while it is open: a sync when the last is 15 minutes old, or within a minute of a local change to push; see [notes/README.md](../notes/README.md#background-sync)) | existed |
@@ -363,7 +364,7 @@ Every code each tool can emit, by exit.
 |---|---|
 | 1 | `read_only`, `error` (also an `attach` FILE that cannot be read, is not a regular file, is empty or is larger than 100 MB), `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed without an error from the engine: see the log; when the engine reports an error, that code and its exit are passed through, e.g. `account_mismatch` 3, `cloudkit_request_failed` 5), `push_rejected` (the push ran, but iCloud refused a change or something it depends on failed: the message names the first, the log the rest), `cancelled`, `error` |
 | 2 | `usage` (also `delete`, `delete-folder`, `restore`, `detach`, or a `write` that would leave the note empty or drop the link of one of its attachments, without `--yes` when nobody can be asked; a note or folder name that sync skips: one starting with a dot, or a folder named `attachments`), `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch`, and the engine's `too_many_deletions` passed through as it is (a `sync`, `push` or a change's `--push` found most of the vault's note files gone, more than 3 of them: nothing was pushed, a `sync`'s pull still ran; `icloud-notes push --dry-run` lists them, and `icloud-notes push --yes` or `sync --yes` moves them to Recently Deleted) |
-| 3 | `sign_in_required`, `session_rejected` (Apple refused the session icloud-sessiond holds: sign in again), `not_cloned` (run `icloud-notes clone`), and the engine's exit-3 codes a sync, pull, push or clone passes through (`account_mismatch`, `not_cloned_directory`, `unbound_account`, …); also `status` while signed out (the status is printed; with icloud-session unreachable the sign-in is unknown, `sign_in_known:false`, and `status` exits 0) |
+| 3 | `sign_in_required`, `session_rejected` (Apple refused the session icloud-sessiond holds: sign in again), `not_cloned` (run `icloud-notes clone`), `left_icloud` (the vault left iCloud on this computer: `sync`, `pull`, `push`, `clone`, `history`, `diff`, `restore` and a change's `--push` refuse; the files are Omacloud's), the engine's `leave` codes (`omacloud_missing`, `omacloud_not_set_up`, `omacloud_folder_off`), and the engine's exit-3 codes a sync, pull, push or clone passes through (`account_mismatch`, `not_cloned_directory`, `unbound_account`, …); also `status` while signed out (the status is printed; with icloud-session unreachable the sign-in is unknown, `sign_in_known:false`, and `status` exits 0) |
 | 4 | `not_found` (no such note or folder, no such FILE for `attach`, or no attachment of the note named FILE for `detach`) |
 | 5 | `offline`, `network` (iCloud out of reach: retry later), `session_service` (icloud-sessiond unreachable), `sync_tool_missing` (the engine is missing), and the engine's exit-5 codes a sync, pull, push or clone passes through (`bad_response`, `cloudkit_request_failed` for a 5xx, `keyring_unavailable`, …) |
 
@@ -376,7 +377,7 @@ they exit with the engine's codes, below.
 |---|---|
 | 1 | `internal` (a bug or an unexpected answer), `io` (a file or disk failure), `error` (icloud-sessiond answered with a failure), `vault_busy`, `vault_lock`, `vault_needs_update` (a read-only command on a layout 2 vault: a sync updates it), `vault_from_newer_tool`, `unsupported_vault_layout`, `corrupt_state_file`, `version_content_unavailable`, `cloudkit_request_failed` for an HTTP 4xx (iCloud refused the request) |
 | 2 | `usage`, `ambiguous_tracked_file`, `already_cloned_directory`, `too_many_deletions` (a `push` or `sync` found more than 3 tracked notes without a file, or with an empty one, and they are most of your own notes tracked (notes others share with you are never deleted from here and do not count): note files gone by accident look like this, so nothing was pushed; `push --dry-run` lists them, and `push --yes` or `sync --yes` moves them to Recently Deleted. In a `sync` it is the push half's error, and the pull still runs) |
-| 3 | `sign_in_required`, `session_rejected` (both: sign in again), `not_cloned_directory`, `unbound_account`, `account_mismatch`, `requested_account_mismatch`, `notes_unavailable` (Notes is not on for this Apple ID) |
+| 3 | `sign_in_required`, `session_rejected` (both: sign in again), `not_cloned_directory`, `unbound_account`, `account_mismatch`, `requested_account_mismatch`, `notes_unavailable` (Notes is not on for this Apple ID), `left_icloud` (the vault left iCloud on this computer), and `leave`'s `omacloud_missing` (install Omacloud: the hint has the command), `omacloud_not_set_up` (`omacloud init`), `omacloud_folder_off` (Omacloud doesn't sync the vault's folder of home: `omacloud folders add ~/Documents`) |
 | 4 | `untracked_file`, `unknown_version_snapshot`, `cloudkit_zone_fetch_failed` for a zone that no longer exists (`ZONE_NOT_FOUND`) |
 | 5 | `offline` (no network at all), `network` (a connection that failed), `session_service`, `keyring_unavailable`, `bad_response`, `cloudkit_request_failed` (an HTTP 5xx or a transport failure), `cloudkit_zone_fetch_failed` |
 
@@ -524,6 +525,20 @@ Work/Plan.md
   `attach` does not work on a note someone else shared.
 - `not_cloned` is this tool's own check before the engine runs; the engine
   says `not_cloned_directory`.
+- `leave [--yes]` (optional; the window never offers it): the vault leaves
+  iCloud for Omacloud on this computer. Omacloud must be installed, set up
+  and syncing `~/Documents` (else `omacloud_missing`, `omacloud_not_set_up`
+  or `omacloud_folder_off`, exit 3, each hint the command that fixes it;
+  nothing changes). Then one last sync (a failure is `sync_failed` with its
+  exit, and nothing changes), the engine's state moves to
+  `~/.local/share/icloud-notes/left-icloud-state/`, the vault's `.nosync`
+  marker (which keeps Omacloud off it while iCloud has it) goes, and
+  `omacloud sync` runs. iCloud keeps its copy as it was. The notes stay
+  plain files the window and these commands read and change; what would
+  reach iCloud refuses with `left_icloud`. Run on each computer; run again,
+  it finishes a leave cut short (`already: true`). `vault_busy` while the
+  window is open. Data: `{folder, left_at, kept_state, omacloud_synced,
+  already}`.
 - The commands that are the engine itself (`push --dry-run`, `history`,
   `diff`, `restore`) get the output flags as given; with none, `--styled` on
   a terminal and `--json` when piped.
@@ -823,7 +838,8 @@ ISO 8601.
 | `diff` | a snapshot ref: `{kind:"snapshot", from, to, hasDifferences, text}`; an epoch ref: `{kind:"epoch", epochId, hasDifferences, sections:[{label, skipped, hasDifferences?, text}]}` (no top-level `text`). The whole diff's text is always in `meta.text` |
 | `restore` | `{file}` |
 | `sync` | `{push, pull, vault_info}` (below) |
-| `vault-info` | `{vault, cloned, stateDir, stateFile, titleMode, defaultFolderDir, notes, lockPath}` |
+| `vault-info` | `{vault, cloned, stateDir, stateFile, titleMode, defaultFolderDir, notes, lockPath, left}` (`left`: the vault left iCloud here; `titleMode` is then the one it had) |
+| `leave [--yes]` | `{folder, left_at, kept_state, omacloud_synced, already}` (see icloud-notes above); `background` then answers `{synced:false, step:"left"}` |
 | `background [--every SECS]` | `{synced, step}`, plus `sync`'s `{push, pull, vault_info}` when it synced. What the Notes app runs every minute (its window while open, its timer while closed): `step` is `due` (the last sync is `--every` old, default 900, or there was none) or `changes` (local changes to push made since the last sync started), and then it syncs as `sync` does, never with `--yes`; or `settling` (a change younger than 10 s), `idle`, `signed_out` or `session_unavailable` (a due sync with nobody to sync as), and nothing else happens. A change a sync left behind waits for the next due sync or a new edit. Deciding needs no network and no lock and writes nothing; every sync (`sync` too) records its start and outcome in `background.json` beside the state. Exit 0 when it did not sync, else `sync`'s; text mode prints nothing then |
 
 See `/usr/lib/icloud-notes/icloud-notes-sync COMMAND --help`. `sync` (push,

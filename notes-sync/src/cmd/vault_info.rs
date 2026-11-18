@@ -32,6 +32,10 @@ pub struct VaultInfo {
     pub notes: Vec<TrackedNote>,
     /// The vault's lock file (shared with the app; see `cmd::lock`).
     pub lock_path: String,
+    /// The vault left iCloud on this computer (`leave`): Omacloud syncs
+    /// its files, nothing here syncs with iCloud, and the title mode is the
+    /// one it had.
+    pub left: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -59,7 +63,9 @@ pub fn run_vault_info(target_dir: &Path) -> Result<VaultInfo, Error> {
         .unwrap_or(&base_dir)
         .to_string_lossy()
         .into_owned();
+    let left = state.is_none() && super::leave::left_here(&vault).is_some();
     let (title_mode, default_folder_dir, notes) = match &state {
+        None if left => (super::leave::kept_title_mode(), None, Vec::new()),
         None => ("in-body", None, Vec::new()),
         Some(state) => {
             let default_folder_dir = state
@@ -89,5 +95,6 @@ pub fn run_vault_info(target_dir: &Path) -> Result<VaultInfo, Error> {
         default_folder_dir,
         notes,
         lock_path: lock_path(&vault).display().to_string(),
+        left,
     })
 }

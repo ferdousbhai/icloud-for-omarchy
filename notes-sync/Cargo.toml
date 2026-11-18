@@ -21,6 +21,8 @@ base64.workspace = true
 clap.workspace = true
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 icloud-session = { workspace = true, features = ["clap"] }
+# Leaving iCloud for Omacloud (`leave`), shared with the other apps.
+icloud-app.workspace = true
 icu_collator = "2"
 icu_properties = "2.3"
 indexmap = { version = "2", features = ["serde"] }

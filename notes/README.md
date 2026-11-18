@@ -309,6 +309,20 @@ quit it. Every command, the output modes (text on a terminal, JSON when
 piped), the exit and error codes and the JSON shapes are in the
 [command-line reference](https://github.com/ferdousbhai/icloud-for-omarchy/blob/main/docs/CLI.md).
 
+### Leaving iCloud for Omacloud
+
+Optional, and only from a terminal: `icloud-notes leave` hands the notes
+folder to [Omacloud](https://omacloud.computer), which then carries it
+between your computers, so the notes are kept once instead of twice. It
+needs Omacloud installed, set up and syncing `~/Documents`; otherwise it
+says which command to run and changes nothing. It syncs with iCloud one
+last time, stops every sync with iCloud on this computer, and asks Omacloud
+to sync. iCloud keeps its copy as it was; the engine's state is kept in
+`~/.local/share/icloud-notes/left-icloud-state/`. The window keeps working
+on the files, with no sign-in and no sync of its own. Run it on each
+computer. While iCloud has the folder, it holds a `.nosync` file, which
+keeps Omacloud off it.
+
 ## Your files
 
 Each note is one `.md` file. Editing or deleting a file with any other
