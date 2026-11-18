@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use icloud_app::cli::{usage, with_sign_in_hint};
+use icloud_app::leave::{self, Left};
 use icloud_photos::catalog::{Catalog, LAST_SYNC_KEY, Row, SYNC_TOKEN_KEY};
 use icloud_photos::cloudkit::{CloudKit, Kind, Modified, sanitize};
 use icloud_photos::config::{Dirs, DownloadMode, Settings};
@@ -226,6 +227,23 @@ enum Command {
     /// Open the iCloud sign-in window (in mock mode, sign the fake server back in).
     #[command(after_help = AFTER_HELP)]
     SignIn,
+    /// Leave iCloud for Omacloud: every original into the library folder, which Omacloud syncs.
+    ///
+    /// Optional, and for good on this computer. Needs Omacloud installed, set
+    /// up and syncing the library folder (~/Pictures); then syncs the
+    /// catalog, asks (type `leave` at a terminal; elsewhere --yes, only when
+    /// the person asked), downloads every original and Live Photo video not
+    /// in the folder yet, writes each album as a list of files in Albums/,
+    /// and records the leaving: nothing here talks to iCloud again, and
+    /// iCloud keeps its copy as it is. A download that fails stops it
+    /// (download_incomplete), leaving nothing; run it again to resume. Data:
+    /// {folder, left_at, downloaded, albums, omacloud_synced, already, warnings}.
+    #[command(after_help = AFTER_HELP)]
+    Leave {
+        /// Leave without asking: only when the person asked to leave iCloud for Photos.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Show the preferences, or change them.
     #[command(after_help = AFTER_HELP)]
     Config {
@@ -396,6 +414,20 @@ fn run(cli: Cli, mode: OutMode) -> Res<Response> {
         }
     };
     let ctx = Ctx { mode, dirs, settings };
+    // Left iCloud: what reaches iCloud refuses; what reads the catalog or
+    // the files here still works.
+    if let Some(left) = left_here(&ctx) {
+        match &cli.command {
+            Command::Status
+            | Command::Albums
+            | Command::List { .. }
+            | Command::Info { .. }
+            | Command::PruneCache
+            | Command::Config { .. }
+            | Command::Leave { .. } => {}
+            _ => return Err(leave::left_error("Photos", &left).into()),
+        }
+    }
     match cli.command {
         Command::Status => status(&ctx),
         Command::Sync { full } => sync_cmd(&ctx, full),
@@ -417,6 +449,7 @@ fn run(cli: Cli, mode: OutMode) -> Res<Response> {
         Command::Restore { ids } => restore(&ctx, &ids),
         Command::PruneCache => prune(&ctx),
         Command::SignIn => sign_in(),
+        Command::Leave { yes } => leave_cmd(&ctx, yes),
         Command::Config { library_dir, download } => config(ctx, library_dir, download),
     }
 }
@@ -465,6 +498,7 @@ fn status(ctx: &Ctx) -> Res<Response> {
         "cache_dir": ctx.dirs.cache,
         "settings": ctx.dirs.settings(),
         "download_mode": mode,
+        "left": left_here(ctx).map(|l| json!({ "at": l.at, "folder": l.folder })),
     });
     let signed = match (signed_in, &sign_in_error) {
         (Some(true), _) => "yes".to_owned(),
@@ -502,8 +536,14 @@ fn status(ctx: &Ctx) -> Res<Response> {
         plural(assets, "item", "items"),
         plural(albums, "album", "albums")
     );
+    let left = left_here(ctx);
+    let human = match &left {
+        Some(l) => format!("{human}\nLeft iCloud:   Omacloud syncs {}", l.folder.display()),
+        None => human,
+    };
     let resp = Response::new(v, summary).human(human);
-    Ok(if signed_in == Some(false) {
+    // left iCloud, being signed out is no failure
+    Ok(if signed_in == Some(false) && left.is_none() {
         resp.exit(EXIT_SIGN_IN)
     } else {
         resp
@@ -1482,9 +1522,248 @@ fn parse_date(s: &str) -> std::result::Result<i64, String> {
     Ok(days_from_civil(y, m as u32, d as u32) * 86_400 + secs)
 }
 
+// ---- leaving iCloud -----------------------------------------------------
+
+/// The record that Photos left iCloud, kept in the data directory
+/// (`left-icloud.json`; with the default directories the one
+/// `icloud_app::leave::left("icloud-photos")` reads, as the window does).
+fn left_file(ctx: &Ctx) -> PathBuf {
+    ctx.dirs.data.join("left-icloud.json")
+}
+
+fn left_here(ctx: &Ctx) -> Option<Left> {
+    match icloud_app::store::read_json::<Left>(&left_file(ctx)) {
+        Ok(l) => l,
+        // unreadable: left all the same, so nothing reaches iCloud by mistake
+        Err(_) => Some(Left {
+            version: 1,
+            at: 0,
+            folder: ctx.settings.library_dir.clone(),
+        }),
+    }
+}
+
+/// `omacloud sync`, a failure only a warning: its daemon syncs soon anyway.
+fn omacloud_sync(ctx: &Ctx, warnings: &mut Vec<String>) -> bool {
+    match leave::omacloud_sync() {
+        Ok(()) => true,
+        Err(e) => {
+            let w = format!(
+                "omacloud sync: {} (Omacloud's next sync takes the folder in)",
+                e.message
+            );
+            if ctx.text() {
+                warn(&format!("warning: {w}"));
+            }
+            warnings.push(w);
+            false
+        }
+    }
+}
+
+/// `bytes` as a person reads a download's size.
+fn about(bytes: i64) -> String {
+    let gb = bytes as f64 / 1e9;
+    if gb >= 10.0 {
+        format!("about {gb:.0} GB")
+    } else if gb >= 0.1 {
+        format!("about {gb:.1} GB")
+    } else {
+        format!("about {:.0} MB", (bytes as f64 / 1e6).ceil().max(1.0))
+    }
+}
+
+fn leave_cmd(ctx: &Ctx, yes: bool) -> Res<Response> {
+    let mut warnings = Vec::new();
+    if let Some(left) = left_here(ctx) {
+        // Again: Omacloud takes the folder in once more, in case it could
+        // not the first time.
+        let synced = omacloud_sync(ctx, &mut warnings);
+        let v = json!({
+            "folder": left.folder, "left_at": left.at, "downloaded": 0, "albums": 0,
+            "omacloud_synced": synced, "already": true, "warnings": warnings,
+        });
+        let text = format!("Photos left iCloud already; Omacloud syncs {}", left.folder.display());
+        return Ok(Response::new(v, text));
+    }
+    let dir = std::path::absolute(&ctx.settings.library_dir)?;
+    leave::omacloud_ready(&dir)?;
+
+    // The catalog up to date: every photo iCloud has now.
+    let t = ctx.transport()?;
+    run_sync(ctx, &*t, false)?;
+    let cat = ctx.catalog()?;
+    let missing = cat.missing_originals()?;
+    let rows: HashMap<String, Row> = cat.assets(None)?.into_iter().map(|r| (r.id.clone(), r)).collect();
+    let bytes: i64 = missing
+        .iter()
+        .filter_map(|id| rows.get(id))
+        .map(|r| r.size.max(0) + r.live_size.max(0))
+        .sum();
+    let size = if bytes > 0 {
+        format!(" ({})", about(bytes))
+    } else {
+        String::new()
+    };
+    let question = format!(
+        "Leave iCloud for Photos? Every original not here yet, {}{size}, is downloaded into {dir}, and Omacloud then \
+         uploads them to your own storage. Albums become lists of files in {dir}/Albums. Nothing here talks to iCloud \
+         again; iCloud keeps its copy as it is, and an iPhone keeps sending new photos to iCloud, not to Omacloud.",
+        plural(missing.len(), "item", "items"),
+        dir = dir.display(),
+    );
+    leave::confirm(ctx.mode, yes, "Photos", &question)?;
+
+    // Every original and Live Photo video into the folder.
+    let downloaded = download_all(ctx, t, &missing)?;
+
+    // Albums as lists of files, newest first, paths relative to the folder.
+    let albums = write_albums(&ctx.catalog()?, &dir)?;
+
+    let left = Left {
+        version: 1,
+        at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs()),
+        folder: dir.clone(),
+    };
+    icloud_app::store::write_json(&left_file(ctx), &left)?;
+    let synced = omacloud_sync(ctx, &mut warnings);
+    let v = json!({
+        "folder": dir, "left_at": left.at, "downloaded": downloaded, "albums": albums,
+        "omacloud_synced": synced, "already": false, "warnings": warnings,
+    });
+    let summary = format!(
+        "Photos left iCloud: {} downloaded, {} written; Omacloud syncs {}",
+        plural(downloaded, "item", "items"),
+        plural(albums, "album", "albums"),
+        dir.display()
+    );
+    Ok(Response::new(v, summary))
+}
+
+/// Downloads `ids` with the app's pool, progress on stderr at a terminal;
+/// any failure is `download_incomplete`.
+fn download_all(ctx: &Ctx, t: Arc<dyn Transport>, ids: &[String]) -> Res<usize> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<thumbs::Event>();
+    let pool = Downloader::start(
+        t,
+        ctx.targets(None),
+        thumbs::DOWNLOAD_WORKERS.min(ids.len()),
+        Box::new(move |e| {
+            let _ = tx.send(e);
+        }),
+    );
+    for id in ids {
+        pool.enqueue(id, Job::Original, Priority::Background);
+    }
+    let tty = ctx.text() && std::io::stderr().is_terminal();
+    let (mut done, mut failed) = (HashSet::new(), Vec::new());
+    while done.len() < ids.len() {
+        let e = rx.recv().map_err(|_| other("the download threads stopped"))?;
+        match e.result {
+            Err(err) if err.is_sign_in() => {
+                pool.clear_background();
+                return Err(err.into());
+            }
+            Err(err) => failed.push(format!("{}: {err}", e.id)),
+            Ok(f) => {
+                if let Some(err) = f.live_error {
+                    failed.push(format!("{}: Live Photo video: {err}", e.id));
+                }
+            }
+        }
+        done.insert(e.id);
+        if tty {
+            eprint!("\r\x1b[2Kdownloading: {}/{}", done.len(), ids.len());
+        }
+    }
+    if tty {
+        eprint!("\r\x1b[2K");
+    }
+    if let Some(first) = failed.first() {
+        if ctx.text() {
+            for f in &failed {
+                warn(&format!("error: {f}"));
+            }
+        }
+        return Err(CliError::new(
+            "download_incomplete",
+            EXIT_ERROR,
+            format!(
+                "{} of {} did not download, so Photos did not leave iCloud ({first})",
+                failed.len(),
+                ids.len()
+            ),
+        )
+        .hint("run `icloud-photos leave` again: it picks up where it stopped")
+        .into());
+    }
+    Ok(ids.len())
+}
+
+/// A name made safe for a file: no `/`, no leading dot, not empty.
+fn file_name(name: &str) -> String {
+    let n: String = name
+        .chars()
+        .map(|c| if c == '/' || c.is_control() { '-' } else { c })
+        .collect();
+    let n = n.trim().trim_start_matches('.').trim();
+    if n.is_empty() {
+        "Album".to_string()
+    } else {
+        n.to_string()
+    }
+}
+
+/// `<dir>/Albums/<name>.txt` for each album: one line per item, its path
+/// relative to `dir` (its Live Photo video on the next line), newest first.
+/// Written fresh every time. Returns how many.
+fn write_albums(cat: &Catalog, dir: &Path) -> Res<usize> {
+    let albums = cat.albums()?;
+    if albums.is_empty() {
+        return Ok(0);
+    }
+    let out = dir.join("Albums");
+    std::fs::create_dir_all(&out)?;
+    let rel = |p: &Path| p.strip_prefix(dir).unwrap_or(p).display().to_string();
+    let mut taken: HashSet<String> = HashSet::new();
+    for a in &albums {
+        let base = file_name(&a.name);
+        let mut name = base.clone();
+        let mut n = 2;
+        while !taken.insert(name.to_lowercase()) {
+            name = format!("{base} ({n})");
+            n += 1;
+        }
+        let mut text = String::new();
+        for r in cat.assets(Some(&a.id))? {
+            for p in [existing(&r.local_path), existing(&r.live_path)].into_iter().flatten() {
+                text.push_str(&rel(p));
+                text.push('\n');
+            }
+        }
+        icloud_app::store::write_atomic(&out.join(format!("{name}.txt")), text.as_bytes())?;
+    }
+    Ok(albums.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn album_file_names_are_safe() {
+        assert_eq!(file_name("Trips/2024"), "Trips-2024");
+        assert_eq!(file_name(".hidden"), "hidden");
+        assert_eq!(file_name("  "), "Album");
+        assert_eq!(about(2_500_000_000), "about 2.5 GB");
+        assert_eq!(about(12_000_000_000), "about 12 GB");
+        assert_eq!(about(1_200_000), "about 2 MB");
+    }
 
     #[test]
     fn dates_round_trip() {

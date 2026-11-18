@@ -22,7 +22,12 @@ fn main() -> gtk::glib::ExitCode {
             w.present();
             return;
         }
-        ui::window::build(app).start();
+        // Left iCloud: the photos are files now, and the window would only
+        // talk to iCloud.
+        match icloud_app::leave::left("icloud-photos").ok().flatten() {
+            Some(left) => left_window(app, &left).present(),
+            None => ui::window::build(app).start(),
+        }
     });
     let quit = gtk::gio::SimpleAction::new("quit", None);
     let a = app.clone();
@@ -30,4 +35,41 @@ fn main() -> gtk::glib::ExitCode {
     app.add_action(&quit);
     // Arguments are icloud-photos' business (commands), not GApplication's.
     app.run_with_args::<&str>(&[])
+}
+
+/// The window once Photos left iCloud on this computer: where the photos
+/// are now, and a button that opens the folder.
+fn left_window(app: &adw::Application, left: &icloud_app::leave::Left) -> adw::ApplicationWindow {
+    let folder = left.folder.clone();
+    let open = gtk::Button::builder()
+        .label("Open Folder")
+        .halign(gtk::Align::Center)
+        .css_classes(["pill", "suggested-action"])
+        .build();
+    let page = adw::StatusPage::builder()
+        .icon_name("image-x-generic-symbolic")
+        .title("Your Photos Are Files Now")
+        .description(format!(
+            "Photos left iCloud on this computer. Every original is in {}, which Omacloud keeps in sync on your computers; each album is a list of files in its Albums folder.",
+            folder.display()
+        ))
+        .child(&open)
+        .build();
+    let tv = adw::ToolbarView::new();
+    tv.add_top_bar(&adw::HeaderBar::new());
+    tv.set_content(Some(&page));
+    let window = adw::ApplicationWindow::builder()
+        .application(app)
+        .title("Photos")
+        .icon_name(APP_ID)
+        .default_width(560)
+        .default_height(480)
+        .content(&tv)
+        .build();
+    let parent = window.clone();
+    open.connect_clicked(move |_| {
+        let launcher = gtk::FileLauncher::new(Some(&gtk::gio::File::for_path(&folder)));
+        launcher.launch(Some(&parent), gtk::gio::Cancellable::NONE, |_| {});
+    });
+    window
 }

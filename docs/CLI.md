@@ -13,7 +13,7 @@ is the short version for an agent.
 | `icloud-session` | icloud-session | the one Apple sign-in every app uses (D-Bus daemon, sign-in window) |
 | `icloud-notes <command>` | icloud-notes | the Notes app: the vault `~/Documents/Notes`, its rules and its lock |
 | (`icloud-notes-sync`) | icloud-notes | the sync engine under Notes, installed off PATH at `/usr/lib/icloud-notes/icloud-notes-sync`; reached through `icloud-notes`, run directly only for development |
-| `icloud-photos <command>` | icloud-photos | the Photos app: catalog, downloads, uploads, deletes |
+| `icloud-photos <command>` | icloud-photos | the Photos app: catalog, downloads, uploads, deletes; `leave` hands the library folder to Omacloud for good |
 | `icloud-findmy <command>` | icloud-findmy | the Find My app: devices, locate, sound, Lost Mode, history |
 | `icloud-reminders <command>` | icloud-reminders | the Reminders app: `sync` (iCloud and the Markdown lists in `~/Documents/Reminders`, where reminders are read and changed); `background` is its notification timer; `leave` hands the folder to Omacloud for good |
 | `icloud-contacts <command>` | icloud-contacts | the Contacts app: search, show, add, edit, delete, vCard export |
@@ -96,6 +96,7 @@ timer's sync). All of it is new, in the app binary: see
 | Sign-in banner | `icloud-photos status` (exits 3 signed out), `icloud-photos sign-in` | existed |
 | About | `icloud-photos --version` | existed |
 | Cache trimming (automatic) | `icloud-photos prune-cache` | existed |
+| (no window action) | `icloud-photos leave`: every original into the library folder, which Omacloud syncs, and iCloud is left; the window then only shows where the photos are, with Open Folder | added |
 | Favourites, editing, album management | not in the app either | n/a |
 
 ### Find My (`findmy/src/bin/app`)
@@ -388,9 +389,9 @@ they exit with the engine's codes, below.
 
 | Exit | Codes |
 |---|---|
-| 1 | `cancelled`, `io`, `error` (also a signed download URL Apple refused even after a fresh lookup: not the session), `http` (a 4xx); a batch with failed items (the data lists them) |
-| 2 | `usage` (also `delete` without `--yes` when nobody can be asked) |
-| 3 | `sign_in_required`, `photos_unavailable` (iCloud Photos is not on for this Apple ID), `session_rejected`; also `status` while signed out (the status is printed) |
+| 1 | `cancelled`, `io`, `error` (also a signed download URL Apple refused even after a fresh lookup: not the session), `http` (a 4xx); a batch with failed items (the data lists them); `download_incomplete` (`leave`: some originals did not download, so nothing was left; run it again to resume), `omacloud`/`omacloud_<code>` (`leave`: Omacloud failed, with its own code) |
+| 2 | `usage` (also `delete` or `leave` without `--yes` when nobody can be asked) |
+| 3 | `sign_in_required`, `photos_unavailable` (iCloud Photos is not on for this Apple ID), `session_rejected`; also `status` while signed out (the status is printed; not once Photos left iCloud); `left_icloud` (any command that would reach iCloud once Photos left it on this computer: everything but `status`, `albums`, `list`, `info`, `prune-cache`, `config`, `leave`); `leave`'s `omacloud_missing` (install Omacloud), `omacloud_not_set_up` (`omacloud init`), `omacloud_folder_off` (Omacloud does not sync the library folder here: `omacloud folders add ~/Pictures`) |
 | 4 | `not_found` (no such item or album in the catalog: `sync` first) |
 | 5 | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
@@ -460,7 +461,7 @@ session from it and none signs in by itself.
   window and exits 3 with `sign_in_required`.
 - `expires_at` says when the sign-in lapses.
 - `leave` is every app's `leave` at once (optional, as each app's is):
-  Notes, Reminders and iCloud Drive, or those named, skipping what isn't
+  Notes, Reminders, iCloud Drive and Photos, or those named, skipping what isn't
   installed, isn't used here or left already. It checks Omacloud for every
   folder before anything changes (failing with the apps' `omacloud_*` codes,
   every app named in the message), asks once (type `leave`; elsewhere
@@ -610,6 +611,35 @@ $ icloud-photos --quiet download AQx... --out ~/Downloads/holiday
 - `--data-dir DIR` keeps the catalog, cache, preferences and library all
   under `DIR` (`DIR/data`, `DIR/cache`, `DIR/config`, `DIR/library`).
 - Every exit-5 error has a hint.
+
+#### Leaving iCloud
+
+Optional: nothing offers it, no window has a button for it, and at a terminal it asks you to type `leave`. Elsewhere it needs `--yes`, which an agent passes only when you asked to leave iCloud for this app.
+
+`icloud-photos leave` hands the library folder (`~/Pictures` unless
+changed with `config`) to Omacloud for good, on this computer:
+
+1. Omacloud must be installed, set up and syncing the folder, or it
+   refuses with the command that fixes it, and nothing changes.
+2. It syncs the catalog, then asks, naming how many originals will
+   download and about how big they are.
+3. It downloads every original and Live Photo video not in the folder
+   yet. One that fails stops it with `download_incomplete`, and nothing
+   is left; run it again and it picks up where it stopped.
+4. Each album becomes `Albums/<name>.txt` in the folder: one line per
+   file, its path relative to the folder, newest first, a Live Photo's
+   video on the line after it. These files are written fresh each time
+   `leave` runs. Favourites are not in the catalog, so they are not kept.
+5. It records the leaving (`left-icloud.json` in the data directory) and
+   runs `omacloud sync` (a failure there is only a warning).
+
+Afterwards nothing of Photos talks to iCloud on this computer: every
+command that would refuses with `left_icloud`, and the window only shows
+where the photos are, with Open Folder. iCloud keeps its copy, and an
+iPhone keeps sending new photos to iCloud, not to Omacloud. Photos puts
+no `.nosync` file in the folder: it never synced the folder both ways,
+it only downloaded copies, so Omacloud can sync it from the start.
+Run again, `leave` only asks Omacloud to sync (`already: true`).
 
 ### icloud-findmy
 
@@ -859,7 +889,7 @@ the last sign-in could not be kept.
 |---|---|
 | `validate` | `{dsid, apple_id, webservices:{"findme":"https://...",...}}` (keys sorted) |
 | `skill install`, `skill remove` | `{paths:[path], notices:[text]}` |
-| `leave` | `{left:[{app, result}], skipped:[{app, why}], failed:{app, code, message} or null}`: `app` is `notes`, `reminders` or `drive`; `result` is that app's own `leave` data |
+| `leave` | `{left:[{app, result}], skipped:[{app, why}], failed:{app, code, message} or null}`: `app` is `notes`, `reminders`, `drive` or `photos`; `result` is that app's own `leave` data |
 | `leave --dry-run` | `{apps:[{app, name, folder, state, code?, message?, hint?}]}`: `state` is `ready`, `left`, `not_used`, `not_installed`, or `omacloud` (Omacloud not ready for that folder: `code`, `message`, `hint` as `leave` would fail) |
 | `skill` | not JSON: the Markdown |
 
@@ -932,7 +962,7 @@ mode progress goes to stderr as `icloud-notes:progress:...` lines.
 
 | Command | `data` |
 |---|---|
-| `status` | `{signed_in, sign_in_error, mock, catalog, catalog_exists, assets, albums, downloaded, last_sync, last_sync_unix, incremental_sync_ready, library_dir, cache_dir, settings, download_mode}` |
+| `status` | `{signed_in, sign_in_error, mock, catalog, catalog_exists, assets, albums, downloaded, last_sync, last_sync_unix, incremental_sync_ready, library_dir, cache_dir, settings, download_mode, left}`: `left` is `{at, folder}` once Photos left iCloud here, else null |
 | `sync` | `{mode:"full"\|"incremental", assets, removed, albums, fell_back}` |
 | `albums` | `[{id, name, count}]` |
 | `list` | `[{id, filename, created, created_unix, kind:"photo"\|"video"\|"live", size, width, height, local_path, live_path}]` |
@@ -948,6 +978,7 @@ mode progress goes to stderr as `icloud-notes:progress:...` lines.
 | `prune-cache` | `{removed}` |
 | `sign-in` | `{started, mock}` |
 | `config` | `{library_dir, download, file, saved}` |
+| `leave` | `{folder, left_at, downloaded, albums, omacloud_synced, already, warnings:[text]}`: `downloaded` items fetched now, `albums` album files written; `omacloud_synced` false when `omacloud sync` failed (its next sync takes the folder in) |
 
 ### icloud-findmy
 

@@ -1,4 +1,4 @@
-//! `icloud-session leave [notes|reminders|drive ...] [--yes]`: every app's
+//! `icloud-session leave [notes|reminders|drive|photos ...] [--yes]`: every app's
 //! `leave` at once (see `icloud_app::leave`). Optional, like each app's:
 //! nothing offers it, a person types `leave` once for all of them, and
 //! `--yes` is for when they asked.
@@ -21,16 +21,18 @@ pub enum App {
     Notes,
     Reminders,
     Drive,
+    Photos,
 }
 
 impl App {
-    const ALL: [App; 3] = [App::Notes, App::Reminders, App::Drive];
+    const ALL: [App; 4] = [App::Notes, App::Reminders, App::Drive, App::Photos];
 
     fn name(self) -> &'static str {
         match self {
             App::Notes => "Notes",
             App::Reminders => "Reminders",
             App::Drive => "iCloud Drive",
+            App::Photos => "Photos",
         }
     }
 
@@ -39,6 +41,7 @@ impl App {
             App::Notes => "notes",
             App::Reminders => "reminders",
             App::Drive => "drive",
+            App::Photos => "photos",
         }
     }
 
@@ -48,6 +51,7 @@ impl App {
             App::Notes => "icloud-notes",
             App::Reminders => "icloud-reminders",
             App::Drive => "icloud-drive",
+            App::Photos => "icloud-photos",
         }
     }
 
@@ -56,6 +60,8 @@ impl App {
             App::Notes => home.join("Documents/Notes"),
             App::Reminders => home.join("Documents/Reminders"),
             App::Drive => home.join("iCloud Drive"),
+            // the library folder Photos' preferences name, else ~/Pictures
+            App::Photos => photos_library(home),
         }
     }
 
@@ -69,9 +75,24 @@ impl App {
             App::Notes => self.folder(home).join(".icloud-notes").is_dir(),
             App::Reminders => icloud_app::store::data_dir(self.bin()).is_some_and(|d| d.is_dir()),
             App::Drive => self.folder(home).is_dir(),
+            App::Photos => icloud_app::store::data_dir(self.bin()).is_some_and(|d| d.join("catalog.db").is_file()),
         };
         (!used).then_some("not used on this computer")
     }
+}
+
+/// Photos' library folder: `library_dir` in its settings.json, else
+/// ~/Pictures.
+fn photos_library(home: &std::path::Path) -> PathBuf {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home.join(".config"));
+    std::fs::read(config.join("icloud-photos/settings.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| v["library_dir"].as_str().map(PathBuf::from))
+        .unwrap_or_else(|| home.join("Pictures"))
 }
 
 fn on_path(bin: &str) -> bool {

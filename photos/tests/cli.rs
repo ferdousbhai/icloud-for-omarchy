@@ -145,6 +145,83 @@ impl Env {
     }
 }
 
+/// `icloud-photos leave`: refused without Omacloud (nothing downloaded),
+/// then every original into the library, albums as lists, the leaving
+/// recorded and Omacloud asked to sync; afterwards what reaches iCloud
+/// refuses and status still answers.
+#[test]
+fn leave_hands_the_library_to_omacloud() {
+    let env = Env::synced("leave", 4);
+    let library = env.data().join("library");
+    let data = env.data();
+    let with = |args: &[&str], omacloud: &Path| {
+        let mut all = vec!["--json", "--data-dir", data.to_str().unwrap()];
+        all.extend_from_slice(args);
+        env.bare_with(&all, &[("ICLOUD_OMACLOUD_BIN", omacloud)])
+    };
+    let missing = env.root.join("no-omacloud");
+    let r = with(&["leave", "--yes"], &missing);
+    assert_eq!(r.code, 3, "{}", r.stdout);
+    assert_eq!(r.doc()["error"]["code"], "omacloud_missing");
+    assert!(!library.exists() || std::fs::read_dir(&library).unwrap().next().is_none());
+
+    // Omacloud syncs one whole folder holding the data directory
+    let calls = env.root.join("calls");
+    env.stub(
+        "omacloud",
+        &format!(
+            "echo \"$*\" >> '{}'\nif [ \"$1\" = status ]; then echo '{{\"ok\":true,\"data\":{{\"set_up\":true,\"folder\":\"{}\",\"folders\":null}}}}'; else echo '{{\"ok\":true,\"data\":null}}'; fi",
+            calls.display(),
+            env.root.display()
+        ),
+    );
+    let omacloud = env.root.join("bin/omacloud");
+    // nobody to ask and no --yes: nothing happens
+    let r = with(&["leave"], &omacloud);
+    assert_eq!(r.code, 2, "{}", r.stdout);
+    assert_eq!(env.json(&["status"])["downloaded"], 0);
+
+    let r = with(&["leave", "--yes"], &omacloud);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let d = r.json();
+    assert_eq!(d["already"], false);
+    assert_eq!(d["omacloud_synced"], true);
+    assert_eq!(d["folder"], library.to_str().unwrap());
+    assert_eq!(env.json(&["status"])["downloaded"], 4);
+    let albums = env.json(&["albums"]);
+    assert_eq!(d["albums"], albums.as_array().unwrap().len());
+    for a in albums.as_array().unwrap() {
+        let file = library
+            .join("Albums")
+            .join(format!("{}.txt", a["name"].as_str().unwrap()));
+        let text = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines.len() >= a["count"].as_u64().unwrap() as usize, "{text}");
+        for l in lines {
+            assert!(library.join(l).is_file(), "{l} is a file in the library");
+        }
+    }
+    assert!(data.join("data/left-icloud.json").is_file());
+    assert!(
+        std::fs::read_to_string(&calls)
+            .unwrap()
+            .lines()
+            .any(|l| l == "sync --json")
+    );
+
+    // afterwards: what reaches iCloud refuses; status and the catalog answer
+    for args in [&["sync"][..], &["download", "--all"], &["thumb", "X"]] {
+        let r = with(args, &omacloud);
+        assert_eq!(r.code, 3, "{args:?}: {}", r.stdout);
+        assert_eq!(r.doc()["error"]["code"], "left_icloud", "{args:?}");
+    }
+    assert!(env.json(&["status"])["left"]["folder"].is_string());
+    assert_eq!(env.json(&["list"]).as_array().unwrap().len(), 4);
+    let again = with(&["leave", "--yes"], &omacloud);
+    assert_eq!(again.code, 0);
+    assert_eq!(again.json()["already"], true);
+}
+
 fn is_jpeg(p: &Path) -> bool {
     std::fs::read(p).is_ok_and(|b| b.starts_with(b"\xFF\xD8"))
 }
@@ -171,6 +248,7 @@ fn usage_help_and_exit_codes() {
         "prune-cache",
         "sign-in",
         "config",
+        "leave",
     ] {
         assert!(help.stdout.contains(cmd), "--help lists {cmd}");
         let own = env.bare(&[cmd, "--help"]);

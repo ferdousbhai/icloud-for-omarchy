@@ -146,7 +146,7 @@ enum Command {
     /// links it into ~/.claude/skills/ when Claude Code is installed; `remove` removes what
     /// install created. Only a copy icloud-session wrote (marked .managed-by-icloud-session) is
     /// ever changed; a new release refreshes it.
-    /// Leave iCloud for Omacloud: Notes, Reminders and iCloud Drive at once, or those named.
+    /// Leave iCloud for Omacloud: Notes, Reminders, iCloud Drive and Photos at once, or those named.
     ///
     /// Optional, and for good on this computer. Checks Omacloud for every
     /// folder first (nothing changes until all are ready), asks once (type

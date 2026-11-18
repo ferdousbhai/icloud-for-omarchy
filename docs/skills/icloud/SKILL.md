@@ -115,8 +115,9 @@ path (`Notes/Groceries.md`), apple-note-id, or a unique title.
   message names it.
 - Leaving iCloud is optional and for good on this computer: run
   `icloud-notes leave --yes`, `icloud-reminders leave --yes` or
-  `icloud-drive leave --yes` (or `icloud-session leave --yes` for all
-  of them, or `icloud-session leave notes drive --yes`) only when the person has asked, in so many
+  `icloud-drive leave --yes`, `icloud-photos leave --yes` (or
+  `icloud-session leave --yes` for all of them, or
+  `icloud-session leave notes drive --yes`) only when the person has asked, in so many
   words, to leave iCloud for that app; never on your own initiative, never
   for another app than the one named, and never as a fix for a sync error.
   It needs Omacloud: on `omacloud_missing`, `omacloud_not_set_up` or

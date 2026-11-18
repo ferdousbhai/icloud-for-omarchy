@@ -128,6 +128,37 @@ removed once empty. A library folder you chose yourself in Preferences is
 left where it is. After that first start, `~/Pictures/icloud-photos/` is a
 folder like any other and can be chosen again.
 
+## Leaving iCloud for Omacloud
+
+Optional: nothing offers it, no window has a button for it, and at a terminal it asks you to type `leave`. Elsewhere it needs `--yes`, which an agent passes only when you asked to leave iCloud for this app.
+
+`icloud-photos leave` makes the library folder (`~/Pictures`) your photos,
+for good, on this computer: every original and Live Photo video is
+downloaded into it, and [Omacloud](https://omacloud.computer) carries the
+folder to your other computers and its web page. Omacloud must be installed,
+set up and syncing `~/Pictures` first (`omacloud folders add ~/Pictures`);
+otherwise `leave` says which command to run and changes nothing.
+
+```console
+$ icloud-photos leave
+Leave iCloud for Photos? Every original not here yet, 1559 items (about 6.2 GB), is downloaded into /home/you/Pictures, ...
+Type leave to hand Photos to Omacloud, anything else to stop: leave
+```
+
+- A download that fails stops it, and nothing is left; run it again and it
+  picks up where it stopped.
+- Each album becomes a list of files, `~/Pictures/Albums/<album>.txt`,
+  newest first, written fresh each time `leave` runs.
+- Afterwards the window only shows where the photos are, with Open Folder,
+  and every command that would reach iCloud refuses (`left_icloud`).
+- iCloud keeps its copy as it is, and an iPhone keeps sending new photos to
+  iCloud, not to Omacloud.
+- Unlike Notes, Reminders and iCloud Drive, Photos puts no `.nosync` file in
+  its folder: it only ever downloaded copies, so Omacloud may sync
+  `~/Pictures` from the start.
+
+`icloud-session leave` does this for every iCloud app at once.
+
 ## What has and has not been checked against Apple
 
 Everything here talks to Apple's private web endpoints, which are not
