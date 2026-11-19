@@ -434,12 +434,10 @@ impl Window {
             }
         });
 
-        // Above omui's providers (USER + 1 to + 5), whose first unsets every
-        // property of every node.
         gtk::style_context_add_provider_for_display(
             &gtk::prelude::WidgetExt::display(&window),
             &ui.zoom_style,
-            gtk::STYLE_PROVIDER_PRIORITY_USER + 10,
+            omui::APP_PRIORITY,
         );
         ui.zoom(saved.zoom);
         actions::add(&ui);
