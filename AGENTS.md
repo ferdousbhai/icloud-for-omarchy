@@ -31,8 +31,11 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   (`engine.rs`, `sync.rs`), and the command line and the timer's `--sync` (`cli.rs`, `main.rs`),
   which print the Qt app's bytes (`json.rs` is QJsonDocument's layout, `files.rs` its text
   decoding). It has no window: started as the app, and for `export-pdf` (which lays out a page),
-  its binary runs `icloud-notes-app` beside it. Change a rule in both the C++ and the Rust until
-  the Qt app is gone. `tests/blackbox/` holds both to the same behaviour: the command line driven
+  its binary runs `icloud-notes-app` beside it. The window that replaces the Qt one is that binary
+  in this crate (`src/bin/app/`, GTK 4 on omui behind the default `ui` feature, so the command line
+  links no GTK), not installed until it does all the Qt window does; `dev/preview.sh` takes pictures
+  of either window on a seeded vault and the stub engine. Change a rule in both the C++ and the Rust
+  until the Qt app is gone. `tests/blackbox/` holds both to the same behaviour: the command line driven
   as a separate process, whichever binary `ICLOUD_NOTES_BIN` names (`notes/bin/test` builds the Qt
   app and the Rust binary, with the Qt app as its `icloud-notes-app`, and runs the suite on each;
   without the variable the tests run nothing). `tests/fixtures/syncmodel.json` pins what no
