@@ -12,19 +12,6 @@ use serde_json::{Map, Value};
 
 use crate::window::Ui;
 
-/// Whether one of the window's dialogs is open: the syncs that start on
-/// their own wait for it.
-pub fn open(ui: &Ui) -> bool {
-    let mut child = ui.shell.overlay.first_child();
-    while let Some(widget) = child {
-        if widget.has_css_class("dialog-backdrop") && widget.is_visible() {
-            return true;
-        }
-        child = widget.next_sibling();
-    }
-    false
-}
-
 fn text_of<'a>(map: &'a Map<String, Value>, key: &str) -> &'a str {
     map.get(key).and_then(Value::as_str).unwrap_or_default()
 }

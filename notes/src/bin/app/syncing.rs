@@ -150,7 +150,7 @@ impl Ui {
     /// What every sync that starts on its own waits for: a running sync,
     /// unsaved edits, an open dialog.
     fn sync_blocked(&self) -> bool {
-        self.backend.borrow().sync_running() || self.editor.dirty() || dialogs::open(self)
+        self.backend.borrow().sync_running() || self.editor.dirty() || self.shell.dialog_open()
     }
 
     /// The engine's step, when nothing blocks it; else again soon.
