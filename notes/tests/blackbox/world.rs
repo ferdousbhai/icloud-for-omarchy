@@ -618,6 +618,14 @@ pub struct Run {
     pub elapsed: Duration,
 }
 
+/// An object's keys, in order: a test built with the workspace parses with
+/// serde_json's `preserve_order` (another crate turns it on), alone without.
+pub fn sorted_keys(object: &Value) -> Vec<String> {
+    let mut keys: Vec<String> = object.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    keys
+}
+
 impl Run {
     /// stdout as one JSON document.
     pub fn doc(&self) -> Value {
@@ -629,8 +637,7 @@ impl Run {
     pub fn data(&self) -> Value {
         let doc = self.doc();
         assert!(self.out.starts_with("{\n    \"ok\": true,"), "{self:#?}");
-        let keys: Vec<&String> = doc.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["data", "ok", "summary"], "{self:#?}");
+        assert_eq!(sorted_keys(&doc), ["data", "ok", "summary"], "{self:#?}");
         doc["data"].clone()
     }
 
@@ -656,8 +663,7 @@ impl Run {
         assert_eq!((self.code, self.err.as_str()), (exit, ""), "{self:#?}");
         assert!(self.out.starts_with("{\n    \"ok\": false,"), "{self:#?}");
         let doc = self.doc();
-        let keys: Vec<&String> = doc.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["error", "ok"], "{self:#?}");
+        assert_eq!(sorted_keys(&doc), ["error", "ok"], "{self:#?}");
         let error = doc["error"].as_object().unwrap();
         assert_eq!(error["code"], code, "{self:#?}");
         assert!(

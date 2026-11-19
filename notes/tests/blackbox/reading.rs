@@ -452,7 +452,7 @@ fn notes_are_flagged_for_what_sync_would_make_of_them() {
     assert_eq!(note(&list, "Foreign.md")["id"], "id-x");
     assert_eq!(note(&list, "NoId.md")["id"], Value::Null);
     let status = w.json(["status"]).ok();
-    let flagged: Vec<&String> = status["flagged"].as_object().unwrap().keys().collect();
+    let flagged = crate::world::sorted_keys(&status["flagged"]);
     assert_eq!(
         flagged,
         [
