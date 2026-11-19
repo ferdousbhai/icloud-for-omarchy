@@ -179,8 +179,20 @@ impl Viewer {
                 Some(gtk::NamedAction::new(action)),
             ));
         }
+        // Escape goes back wherever the keyboard is: the Nav's own Escape
+        // and Alt+Left need it inside the viewer, and it is not there when
+        // the photo was opened from the page the viewer now covers.
+        let nav = app.nav.downgrade();
+        keys.add_shortcut(gtk::Shortcut::new(
+            gtk::ShortcutTrigger::parse_string("Escape"),
+            Some(gtk::CallbackAction::new(move |_, _| {
+                if let Some(nav) = nav.upgrade() {
+                    nav.pop();
+                }
+                glib::Propagation::Stop
+            })),
+        ));
         self.page.add_controller(keys);
-        // Escape and Alt+Left go back too: the Nav sees to them.
         let nav = app.nav.downgrade();
         self.back.connect_clicked(move |_| {
             if let Some(nav) = nav.upgrade() {
