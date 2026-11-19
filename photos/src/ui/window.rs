@@ -103,9 +103,7 @@ const PERIODIC_SYNC_SECS: u32 = 600;
 
 pub struct App {
     pub window: gtk::ApplicationWindow,
-    /// Keeps the window's overlay; toasts are still libadwaita's.
-    _shell: Rc<omui::Shell>,
-    pub toasts: adw::ToastOverlay,
+    shell: Rc<omui::Shell>,
     pub banner: omui::Banner,
     pub nav: adw::NavigationView,
     grid_page: adw::NavigationPage,
@@ -262,8 +260,6 @@ pub fn build(application: &gtk::Application) -> Rc<App> {
     body.append(&banner.widget);
     split.widget.set_vexpand(true);
     body.append(&split.widget);
-    let toasts = adw::ToastOverlay::new();
-    toasts.set_child(Some(&body));
 
     let window = gtk::ApplicationWindow::builder()
         .application(application)
@@ -276,13 +272,12 @@ pub fn build(application: &gtk::Application) -> Rc<App> {
         .build();
     // Each pane has a header of its own.
     omui::claim_titlebar(&window);
-    let shell = omui::Shell::new(&window, &toasts);
+    let shell = omui::Shell::new(&window, &body);
 
     let (tx, rx) = async_channel::unbounded::<Msg>();
     let app = Rc::new(App {
         window,
-        _shell: shell,
-        toasts,
+        shell,
         banner,
         nav,
         grid_page,
@@ -548,12 +543,7 @@ impl App {
     }
 
     pub fn toast(&self, text: &str) {
-        self.toasts.add_toast(
-            adw::Toast::builder()
-                .title(glib::markup_escape_text(text))
-                .timeout(4)
-                .build(),
-        );
+        self.shell.toast(text);
     }
 
     /// Report an error: the banner for a lapsed sign-in, a toast otherwise.
@@ -789,23 +779,15 @@ impl App {
                     self.launch(&path);
                 }
                 if self.want_toast.borrow_mut().remove(&e.id) {
-                    let toast = adw::Toast::builder()
-                        .title(glib::markup_escape_text(&format!(
-                            "Saved {}",
-                            path.file_name().unwrap_or_default().to_string_lossy()
-                        )))
-                        .button_label("Show")
-                        .timeout(5)
-                        .build();
+                    let saved = format!("Saved {}", path.file_name().unwrap_or_default().to_string_lossy());
                     let (win, file) = (self.window.clone(), gio::File::for_path(&path));
-                    toast.connect_button_clicked(move |_| {
+                    self.shell.toast_action(&saved, "Show", 5, move || {
                         gtk::FileLauncher::new(Some(&file)).open_containing_folder(
                             Some(&win),
                             gio::Cancellable::NONE,
                             |_| {},
                         );
                     });
-                    self.toasts.add_toast(toast);
                 }
                 self.viewer.refresh_info(self);
             }
@@ -866,27 +848,26 @@ impl App {
             self.toast("Not connected to iCloud yet");
             return;
         };
-        let dialog = adw::AlertDialog::new(
-            Some("Delete this photo?"),
-            Some(&format!(
-                "{} moves to Recently Deleted in iCloud on all your devices, and can be recovered there for about 30 days.",
-                row.filename
-            )),
+        let body = format!(
+            "{} moves to Recently Deleted in iCloud on all your devices, and can be recovered there for about 30 days.",
+            row.filename
         );
-        dialog.add_responses(&[("cancel", "Cancel"), ("delete", "Delete")]);
-        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-        dialog.set_default_response(Some("cancel"));
-        let a = self.clone();
-        dialog.choose(Some(&self.window), gio::Cancellable::NONE, move |response| {
-            if response != "delete" {
-                return;
-            }
-            let tx = a.tx.clone();
-            std::thread::spawn(move || {
-                let result = CloudKit::connect(&*t).and_then(|ck| ck.delete_asset(&row.id, row.change_tag.as_deref()));
-                let _ = tx.send_blocking(Msg::Deleted(row.id, result));
-            });
-        });
+        let tx = self.tx.clone();
+        // Enter and Escape cancel: only the button deletes.
+        omui::confirm(
+            &self.window,
+            "Delete this photo?",
+            &body,
+            "Delete",
+            omui::Appearance::Destructive,
+            move || {
+                std::thread::spawn(move || {
+                    let result =
+                        CloudKit::connect(&*t).and_then(|ck| ck.delete_asset(&row.id, row.change_tag.as_deref()));
+                    let _ = tx.send_blocking(Msg::Deleted(row.id, result));
+                });
+            },
+        );
     }
 
     fn on_deleted(self: &Rc<Self>, id: &str, result: Result<Modified>) {
@@ -896,14 +877,11 @@ impl App {
                 self.viewer.after_delete(self, id);
                 self.load_snapshot();
                 self.update_status();
-                let toast = adw::Toast::builder()
-                    .title("Moved to Recently Deleted")
-                    .button_label("Undo")
-                    .timeout(10)
-                    .build();
                 let (a, id, tag) = (self.clone(), id.to_owned(), m.change_tag);
-                toast.connect_button_clicked(move |_| a.restore(&id, tag.as_deref()));
-                self.toasts.add_toast(toast);
+                self.shell
+                    .toast_action("Moved to Recently Deleted", "Undo", 10, move || {
+                        a.restore(&id, tag.as_deref())
+                    });
             }
             Err(Error::CloudKit { code, .. }) if code == "CONFLICT" => {
                 self.toast("This photo changed on another device; syncing, then try again");
