@@ -123,7 +123,7 @@ impl Viewer {
 
     pub fn connect(&self, app: &Rc<App>) {
         let win = &app.window;
-        let add = |name: &str, f: Box<dyn Fn()>| win.add_action(&app.user_action(name, f));
+        let add = |name: &str, f: Box<dyn Fn()>| win.add_action(&super::window::action(name, f));
         let a = app.clone();
         add("viewer-prev", Box::new(move || a.viewer.step(&a, -1)));
         let a = app.clone();
