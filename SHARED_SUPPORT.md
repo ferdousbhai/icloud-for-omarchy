@@ -7,8 +7,8 @@ shared boundary.
 
 Application UI is shared another way: the look, the Omarchy theme, the icons
 and the common widgets are [omui](https://github.com/ferdousbhai/omui), a crate
-an app builds in from a git `rev` in its `Cargo.toml` (here, the Reminders and
-Find My windows so far). Nothing of omui is copied here, so the checker below has no part in
+an app builds in from a git `rev` in its `Cargo.toml` (here, the Photos, Find My
+and Reminders windows). Nothing of omui is copied here, so the checker below has no part in
 it. The byte copies that remain are `agent_skill.rs` and `recall_client.rs`.
 
 | Canonical implementation | Copies |

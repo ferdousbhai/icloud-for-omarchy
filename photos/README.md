@@ -29,7 +29,7 @@ installs an Omarchy `pre-refresh-pacman` hook so `omarchy refresh pacman`
 keeps the repository. See the root [README](../README.md#install) for
 uninstalling.
 
-To build and run from source instead (needs gtk4, libadwaita and Rust, and
+To build and run from source instead (needs gtk4 and Rust, and
 the icloud-session daemon installed, as [session/](../session/README.md)
 describes), from the repository root:
 
@@ -235,7 +235,8 @@ Layout:
 - `src/upload.rs` upload (verified live, see above)
 - `src/transport.rs` the HTTP seam every module above goes through
 - `src/session.rs` the only file that uses the `icloud-session` client
-- `src/ui/` the GTK 4 / libadwaita app, started by `src/app.rs` (`icloud-photos-app`)
+- `src/ui/` the GTK 4 app, with omui's look, widgets and Omarchy theme, started by
+  `src/app.rs` (`icloud-photos-app`)
 - `src/cli.rs` the command line (no GTK), over the same library code, started
   by `src/main.rs` (`icloud-photos`, which runs `icloud-photos-app` when given
   no arguments; `ICLOUD_PHOTOS_APP=path` points it at another build)
@@ -247,7 +248,10 @@ it with clippy and every other crate's tests.
 In debug builds, `ICLOUD_PHOTOS_SCREENSHOT=out.png` (optionally with
 `ICLOUD_PHOTOS_SCREENSHOT_VIEW=viewer` or `prefs`) renders the window to a
 PNG after the first sync and quits, so the UI can be checked headless with
-`GDK_BACKEND=broadway`.
+`GDK_BACKEND=broadway`. `dev/preview.sh <out-dir> [theme-dir ...]` takes pictures
+of the window on the fake server in a nested Hyprland, with a private home,
+session bus and Omarchy theme: the grid, the viewer, the preferences, About, an
+upload at work, a delete and its Undo toast, and the sign-in banner.
 
 ## Releasing
 

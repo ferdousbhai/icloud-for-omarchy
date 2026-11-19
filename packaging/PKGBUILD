@@ -11,7 +11,7 @@ arch=('x86_64' 'aarch64')
 url='https://github.com/ferdousbhai/icloud-for-omarchy'
 license=('MIT')
 options=('!debug' '!lto')
-makedepends=('rust' 'cargo' 'git' 'dbus' 'gtk4' 'libadwaita' 'libshumate' 'webkitgtk-6.0' 'qt6-base' 'qt6-declarative')
+makedepends=('rust' 'cargo' 'git' 'dbus' 'gtk4' 'libshumate' 'webkitgtk-6.0' 'qt6-base' 'qt6-declarative')
 
 pkgver() {
   local description
@@ -116,10 +116,12 @@ package_icloud-session() {
 
 package_icloud-photos() {
   pkgdesc='iCloud Photos on Omarchy: browse, download, upload and delete'
-  depends=('gtk4' 'libadwaita' "icloud-session>=$pkgver" 'hicolor-icon-theme' 'sqlite')
+  license=('MIT' 'ISC')  # ISC: the Lucide icons omui compiles into the window (NOTICE)
+  depends=('gtk4' "icloud-session>=$pkgver" 'hicolor-icon-theme' 'sqlite')
   optdepends=('wl-clipboard: icloud-photos copy (clipboard)'
               'xdg-utils: icloud-photos open (default app)')
   _package_gtk_app IcloudPhotos
+  _refuse_link usr/bin/icloud-photos-app libadwaita-1
 }
 
 package_icloud-findmy() {

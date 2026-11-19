@@ -118,8 +118,8 @@ class Packaging(unittest.TestCase):
             self.assertIn('"icloud-session>=$pkgver"', depends, package)
 
     def test_a_binary_linking_what_its_package_does_not_depend_on_is_refused(self):
-        # Find My and Reminders ship without libadwaita; their release
-        # binaries are checked when packaged. /usr/bin/ls stands in for a binary that links libc.
+        # No app ships libadwaita; the release binaries of the apps' windows
+        # are checked when packaged. /usr/bin/ls stands in for a binary that links libc.
         refuse = ["bash", "-c", 'source packaging/PKGBUILD; pkgdir=/; _refuse_link "$@"', "_"]
         linked = subprocess.run(refuse + ["usr/bin/ls", "libc"], cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(linked.returncode, 1)
@@ -129,7 +129,7 @@ class Packaging(unittest.TestCase):
         missing = subprocess.run(refuse + ["usr/bin/no-such-binary", "libadwaita-1"], cwd=ROOT, capture_output=True)
         self.assertEqual(missing.returncode, 1)
         recipe = (ROOT / "packaging/PKGBUILD").read_text()
-        for app in ["findmy", "reminders"]:
+        for app in ["photos", "findmy", "reminders"]:
             body = recipe.split(f"package_icloud-{app}() {{", 1)[1].split("\n}", 1)[0]
             self.assertIn(f"_refuse_link usr/bin/icloud-{app}-app libadwaita-1", body)
             # The Lucide icons omui compiles into the window are ISC (NOTICE).

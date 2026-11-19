@@ -326,6 +326,21 @@ fn the_command_line_links_no_gtk() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("libgtk-4"));
 }
 
+/// The window is omui's, and libadwaita in its process, even through a
+/// library it loads, would style it over.
+#[test]
+fn the_window_never_links_libadwaita() {
+    let Ok(out) = Command::new("ldd")
+        .arg(env!("CARGO_BIN_EXE_icloud-photos-app"))
+        .output()
+    else {
+        return; // no ldd here
+    };
+    let libs = String::from_utf8_lossy(&out.stdout);
+    assert!(libs.contains("libgtk-4"), "{libs}");
+    assert!(!libs.contains("libadwaita"), "{libs}");
+}
+
 #[test]
 fn status_and_sync() {
     let env = Env::new("status", 12);
