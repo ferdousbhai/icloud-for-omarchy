@@ -59,14 +59,7 @@ impl Viewer {
         if still::has_wallpaper_command() {
             menu.append(Some("Set as Wallpaper"), Some("win.viewer-wallpaper"));
         }
-        header.pack_end(
-            &gtk::MenuButton::builder()
-                .icon_name(name::MORE)
-                .menu_model(&menu)
-                .tooltip_text("More")
-                .has_frame(false)
-                .build(),
-        );
+        header.pack_end(&omui::icon_menu_button(name::MORE, "More", &menu));
         for (icon, action, tip) in [
             (name::DELETE, "win.viewer-delete", "Delete (Del)"),
             (name::DOWNLOAD, "win.viewer-download", "Download Original (Ctrl+S)"),

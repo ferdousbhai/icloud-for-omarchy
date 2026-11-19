@@ -663,12 +663,7 @@ fn build(app: &gtk::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banne
     let actions = gio::Menu::new();
     actions.append(Some("Play Sound"), Some("win.play-sound"));
     actions.append(Some("Lost Mode…"), Some("win.lost-mode"));
-    let actions_button = gtk::MenuButton::builder()
-        .icon_name(name::MORE)
-        .tooltip_text("Device Actions")
-        .has_frame(false)
-        .menu_model(&actions)
-        .build();
+    let actions_button = omui::icon_menu_button(name::MORE, "Device Actions", &actions);
     header.pack_end(&actions_button);
 
     let split = omui::Split::new(&list.widget, &map.widget, (260, 340), Some(640));

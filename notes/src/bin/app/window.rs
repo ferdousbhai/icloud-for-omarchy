@@ -223,15 +223,7 @@ impl Window {
         attach.set_action_name(Some("win.attach"));
         let sync_status = omui::icon_button(name::REFRESH, "Sync status");
         sync_status.set_action_name(Some("win.sync-status"));
-        let more = gtk::MenuButton::builder()
-            .icon_name(name::MORE)
-            .tooltip_text("More")
-            .menu_model(&more_menu())
-            .build();
-        // Drawn as the toolbar's other buttons are.
-        if let Some(button) = more.first_child() {
-            button.add_css_class("header-action");
-        }
+        let more = omui::icon_menu_button(name::MORE, "More", &more_menu());
         // pack_end goes from the right edge inwards.
         for widget in [
             more.upcast_ref::<gtk::Widget>(),

@@ -183,14 +183,7 @@ pub fn build(application: &gtk::Application) -> Rc<App> {
     menu.append(Some("Upload…"), Some("win.upload"));
     menu.append(Some("Preferences"), Some("win.preferences"));
     menu.append(Some("About Photos"), Some("win.about"));
-    sidebar_header.pack_end(
-        &gtk::MenuButton::builder()
-            .icon_name(name::MENU)
-            .menu_model(&menu)
-            .tooltip_text("Main Menu")
-            .has_frame(false)
-            .build(),
-    );
+    sidebar_header.pack_end(&omui::icon_menu_button(name::MENU, "Main Menu", &menu));
     let sidebar = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .css_classes(["sidebar"])
