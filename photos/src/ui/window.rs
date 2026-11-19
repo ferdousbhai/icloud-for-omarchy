@@ -918,18 +918,13 @@ pub fn action(name: &str, f: Box<dyn Fn()>) -> gio::SimpleAction {
 
 /// The app's name, version, author, licence and website.
 fn about(window: &gtk::ApplicationWindow) {
-    let dialog = omui::Dialog::new(
-        Some("Photos"),
-        Some(&format!(
-            "Version {}\n\nBrowse, download, upload and delete your iCloud photos, over the shared icloud-session sign-in.\n\nBy Ferdous Bhai. MIT License.",
-            env!("CARGO_PKG_VERSION")
-        )),
+    omui::about(
+        window,
+        "Photos",
+        env!("CARGO_PKG_VERSION"),
+        "Browse, download, upload and delete your iCloud photos, over the shared icloud-session sign-in.\n\nBy Ferdous Bhai. MIT License.",
+        Some("https://github.com/ferdousbhai/icloud-for-omarchy"),
     );
-    let website = gtk::LinkButton::with_label("https://github.com/ferdousbhai/icloud-for-omarchy", "Website");
-    website.set_halign(gtk::Align::Start);
-    dialog.set_extra_child(Some(website.upcast_ref()));
-    dialog.add_response("close", "Close");
-    dialog.present(window);
 }
 
 /// Keep the sidebar and grid in the same snapshot, including when an album
