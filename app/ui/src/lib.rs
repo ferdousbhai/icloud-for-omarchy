@@ -3,6 +3,11 @@
 //! [`background`], and the sign-in banner ([`SignInBanner`]). Internal: it
 //! builds no binary and ships in no package of its own.
 //!
+//! Reminders' window is omui's (no libadwaita): of this crate it takes the
+//! banner alone, from [`SignInBanner::omui`], and its `main`, `application`
+//! and `background` are omui's. The ones here, and the banner libadwaita
+//! draws, are for the windows still on libadwaita.
+//!
 //! This is the GTK half of `icloud-app` (`app/`), and a crate of its own
 //! rather than a feature of that one for a reason: the apps' command lines
 //! link `icloud-app` and must not load GTK (each app's `tests/cli.rs`

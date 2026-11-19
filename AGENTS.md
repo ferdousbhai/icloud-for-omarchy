@@ -48,7 +48,10 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   (`store.rs`), the lazily connected `SessionTransport` (`transport.rs`), and what the apps'
   `tests/cli.rs` share (`testing.rs`, feature `testing`, dev-dependencies only). `app/ui/` —
   `icloud-app-ui`, the GTK half: the sign-in banner (`banner.rs`, with Find My's password ask),
-  `background`, and the `*-app` binaries' `main`/`application`. Both are internal: no binary, in
+  `background`, and the `*-app` binaries' `main`/`application`. Reminders' window is
+  [omui](https://github.com/ferdousbhai/omui)'s and takes the banner alone (`SignInBanner::omui`);
+  the libadwaita banner, `main`, `application` and `background` stay until Find My leaves
+  libadwaita too. Both are internal: no binary, in
   no package. Put here what two or more of the apps would otherwise copy. Not here: anything
   every iCloud tool shares, GTK app or not (that is `icloud-session`, whose API is frozen), what
   one app alone needs (it stays in that app), and any GTK in `icloud-app` itself, not even
@@ -56,8 +59,12 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   modules of one crate, and each app's `the_command_line_binary_does_not_link_gtk` test fails
   when GTK reaches them. Only the `*-app` binaries use `icloud-app-ui`.
 - `photos/`, `findmy/`, `reminders/` — one crate per app: a library, a GTK-free CLI
-  binary (`src/main.rs` + `cli.rs`), and the GTK/libadwaita window as a separate `*-app` binary
-  (`src/bin/app/`; Photos keeps its UI in `src/ui/` + `app.rs`). Each has a fake Apple server
+  binary (`src/main.rs` + `cli.rs`), and the GTK window as a separate `*-app` binary
+  (`src/bin/app/`; Photos keeps its UI in `src/ui/` + `app.rs`): libadwaita's in Photos and Find
+  My; in Reminders plain GTK 4 with omui's look, Omarchy theme, icons and widgets (a git
+  dependency pinned by `rev` in the workspace `Cargo.toml`), which must not load libadwaita (its
+  `tests/cli.rs` checks). `reminders/dev/preview.sh` takes pictures of that window on the fake,
+  in a nested compositor. Each has a fake Apple server
   under `examples/` (selected with `ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=…`) and CLI
   tests in `tests/`.
 - `reminders/` — `icloud-reminders`, built like Photos and
@@ -129,4 +136,6 @@ packaging tests, then native x86_64/aarch64 package builds.
   crates.io publication is a separate explicit `cargo publish --locked -p icloud-session`.
 - The installer pins `add_signed_repo` in `tests/add_signed_repo.sha256`; update the hash
   deliberately when changing the function. Ghost has removed its old copy.
+- Reminders' window holds omui's Strata-derived code and Lucide icons: a change of the omui `rev`
+  keeps `NOTICE` (installed by the PKGBUILD) true.
 - `/target`, `/dist` and makepkg dirs are gitignored build output.

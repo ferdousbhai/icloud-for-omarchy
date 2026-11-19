@@ -10,29 +10,30 @@ use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
-use adw::prelude::*;
+use gtk::prelude::*;
 use gtk::{gio, glib};
 use jiff::tz::TimeZone;
 
-use icloud_app_ui::{SignInBanner, background};
+use icloud_app_ui::SignInBanner;
 use icloud_reminders::cloudkit::{Error, SessionTransport};
 use icloud_reminders::due::{self, Due};
 use icloud_reminders::model::{Change, Reminder};
 use icloud_reminders::service::Service;
 use icloud_reminders::store::{Cache, Store};
+use omui::{background, icons};
 
 const SYNC_SECS: u32 = 60;
 /// The sidebar row of every list's open reminders.
 const UPCOMING: &str = "";
 
 pub struct Window {
-    window: adw::ApplicationWindow,
-    toasts: adw::ToastOverlay,
+    window: gtk::ApplicationWindow,
+    shell: Rc<omui::Shell>,
     banner: SignInBanner,
     lists: gtk::ListBox,
     rows: gtk::ListBox,
-    content_title: adw::WindowTitle,
-    split: adw::NavigationSplitView,
+    content_title: omui::Title,
+    split: omui::Split,
     new_title: gtk::Entry,
     new_due: gtk::Entry,
     show_completed: gtk::ToggleButton,
@@ -49,10 +50,10 @@ pub struct Window {
 }
 
 impl Window {
-    pub fn new(app: &adw::Application, local: TimeZone) -> Rc<Self> {
+    pub fn new(app: &gtk::Application, local: TimeZone) -> Rc<Self> {
         let this = Rc::new_cyclic(|weak: &Weak<Window>| {
             let (w1, w2) = (weak.clone(), weak.clone());
-            let banner = SignInBanner::new(
+            let banner = SignInBanner::omui(
                 "Sign in to iCloud to see your reminders",
                 move || {
                     if let Some(this) = w1.upgrade() {
@@ -99,7 +100,7 @@ impl Window {
     }
 
     fn toast(&self, msg: &str) {
-        self.toasts.add_toast(adw::Toast::new(msg));
+        self.shell.toast(msg);
     }
 
     fn connect(self: &Rc<Self>) {
@@ -341,19 +342,16 @@ impl Window {
     /// The edit dialog, filled from `draft`: the reminder's values, or what
     /// was typed before a save that failed.
     fn edit_draft(self: &Rc<Self>, r: Reminder, draft: Draft) {
-        let dialog = adw::AlertDialog::new(Some("Edit Reminder"), None);
+        let dialog = omui::Dialog::new(Some("Edit Reminder"), None);
         let fields = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::None)
             .css_classes(["boxed-list"])
             .build();
-        let title = adw::EntryRow::builder().title("Title").text(&draft.title).build();
+        let (title_row, title) = omui::entry_row("Title", &draft.title);
         let due_text = self.due_text(&r);
-        let due = adw::EntryRow::builder()
-            .title("Due (2026-10-10 09:00, tomorrow 9:00, +2h; empty for none)")
-            .text(&draft.due)
-            .build();
-        fields.append(&title);
-        fields.append(&due);
+        let (due_row, due) = omui::entry_row("Due (2026-10-10 09:00, tomorrow 9:00, +2h; empty for none)", &draft.due);
+        fields.append(&title_row.widget);
+        fields.append(&due_row.widget);
         let notes = gtk::TextView::builder()
             .wrap_mode(gtk::WrapMode::WordChar)
             .top_margin(8)
@@ -393,26 +391,29 @@ impl Window {
                     .build(),
             );
         }
-        dialog.set_extra_child(Some(&body));
-        dialog.add_responses(&[("cancel", "_Cancel"), ("delete", "_Delete"), ("save", "_Save")]);
-        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-        dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
-        dialog.set_default_response(Some("save"));
+        dialog.set_extra_child(Some(body.upcast_ref()));
+        dialog.set_content_size(360, -1);
+        for (id, label) in [("cancel", "_Cancel"), ("delete", "_Delete"), ("save", "_Save")] {
+            dialog.add_response(id, label);
+        }
+        dialog.set_response_appearance("delete", omui::Appearance::Destructive);
+        dialog.set_response_appearance("save", omui::Appearance::Suggested);
+        dialog.set_default_response("save");
         dialog.set_close_response("cancel");
 
         // Save is enabled only while the title and due date are valid, so
         // a mistake never closes the dialog and loses the edits.
+        // Weak: the dialog owns the fields, and they own this.
         let weak = Rc::downgrade(self);
-        let validate = {
-            let (dialog, title, due, problem, due_text) = (
-                dialog.clone(),
-                title.clone(),
-                due.clone(),
-                problem.clone(),
-                due_text.clone(),
-            );
+        let validate = Rc::new({
+            let (dialog, title, due) = (dialog.downgrade(), title.downgrade(), due.downgrade());
+            let (problem, due_text) = (problem.clone(), due_text.clone());
             move || {
-                let Some(this) = weak.upgrade() else { return };
+                let (Some(this), Some(dialog), Some(title), Some(due)) =
+                    (weak.upgrade(), dialog.upgrade(), title.upgrade(), due.upgrade())
+                else {
+                    return;
+                };
                 let title_problem = title
                     .text()
                     .trim()
@@ -421,11 +422,9 @@ impl Window {
                 let due_problem = (due.text().trim() != due_text)
                     .then(|| this.parse_due(&due.text()).err())
                     .flatten();
-                for (row, bad) in [(&title, title_problem.is_some()), (&due, due_problem.is_some())] {
-                    if bad {
-                        row.add_css_class("error");
-                    } else {
-                        row.remove_css_class("error");
+                for (field, bad) in [(&title, title_problem.is_some()), (&due, due_problem.is_some())] {
+                    if let Some(row) = field.ancestor(gtk::ListBoxRow::static_type()) {
+                        omui::set_class(&row, "error", bad);
                     }
                 }
                 let text = title_problem.or(due_problem);
@@ -433,16 +432,15 @@ impl Window {
                 problem.set_label(text.as_deref().unwrap_or(""));
                 dialog.set_response_enabled("save", text.is_none());
             }
-        };
-        let validate = Rc::new(validate);
-        for row in [&title, &due] {
+        });
+        for field in [&title, &due] {
             let validate = validate.clone();
-            row.connect_changed(move |_| validate());
+            field.connect_changed(move |_| validate());
         }
         validate();
 
         let weak = Rc::downgrade(self);
-        dialog.connect_response(None, move |_, response| {
+        dialog.connect_response(move |_, response| {
             let Some(this) = weak.upgrade() else { return };
             match response {
                 "delete" => {
@@ -487,7 +485,7 @@ impl Window {
                 _ => {}
             }
         });
-        dialog.present(Some(&self.window));
+        dialog.present(&self.window);
     }
 
     /// Rebuilds the sidebar (keeping the selection), then the reminders.
@@ -506,7 +504,8 @@ impl Window {
         let entries = std::iter::once((UPCOMING.to_owned(), "Upcoming".to_owned()))
             .chain(cache.lists.iter().map(|l| (l.id.clone(), l.name.clone())));
         for (id, name) in entries {
-            let row = sidebar_row(&id, &name, open(&id));
+            let open = open(&id);
+            let row = omui::sidebar_row(&id, None, &name, (open > 0).then(|| open.to_string()).as_deref());
             if id == selected {
                 select = Some(row.clone());
             }
@@ -531,7 +530,10 @@ impl Window {
         let rows = cache.sorted(&self.local, |r| {
             (selected == UPCOMING || r.list_id == selected) && (completed || !r.completed)
         });
-        self.rows.remove_all();
+        // Row by row: `remove_all` would take the placeholder with them.
+        while let Some(row) = self.rows.row_at_index(0) {
+            self.rows.remove(&row);
+        }
         let now = jiff::Timestamp::now();
         for r in rows {
             self.rows
@@ -545,7 +547,7 @@ impl Window {
         cache: &Cache,
         with_list: bool,
         now: jiff::Timestamp,
-    ) -> adw::ActionRow {
+    ) -> gtk::ListBoxRow {
         let mut parts = Vec::new();
         let overdue = !r.completed && r.due.as_ref().is_some_and(|d| d.instant(&self.local) < now);
         if let Some(d) = &r.due {
@@ -557,19 +559,11 @@ impl Window {
         if let Some(first) = r.notes.lines().find(|l| !l.trim().is_empty()) {
             parts.push(first.to_owned());
         }
-        // Markup off first: the builder sets properties in order, and a title
-        // or note with an ampersand is no markup.
-        let row = adw::ActionRow::builder()
-            .use_markup(false)
-            .title(&r.title)
-            .subtitle(parts.join(" · "))
-            .activatable(true)
-            .subtitle_lines(1)
-            .build();
-        row.set_widget_name(&r.id);
-        if overdue {
-            row.add_css_class("overdue");
-        }
+        let row = omui::Row::new(&r.title, &parts.join(" · "));
+        row.set_subtitle_lines(1);
+        row.widget.set_activatable(true);
+        row.widget.set_widget_name(&r.id);
+        omui::set_class(&row.widget, "overdue", overdue);
         let check = gtk::CheckButton::builder()
             .active(r.completed)
             .valign(gtk::Align::Center)
@@ -579,7 +573,6 @@ impl Window {
                 "Mark as Completed"
             })
             .build();
-        check.add_css_class("selection-mode");
         let weak = Rc::downgrade(self);
         let reminder = r.clone();
         check.connect_toggled(move |c| {
@@ -599,7 +592,7 @@ impl Window {
             });
         });
         row.add_prefix(&check);
-        row
+        row.widget
     }
 }
 
@@ -616,60 +609,41 @@ fn store_in(dir: Option<PathBuf>) -> Result<Store, Error> {
         .ok_or_else(|| Error::Other("no data directory ($HOME is not set)".into()))
 }
 
-fn sidebar_row(id: &str, name: &str, open: usize) -> gtk::ListBoxRow {
-    let b = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    b.append(
-        &gtk::Label::builder()
-            .label(name)
-            .xalign(0.0)
-            .hexpand(true)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .build(),
-    );
-    if open > 0 {
-        b.append(
-            &gtk::Label::builder()
-                .label(open.to_string())
-                .css_classes(["dim-label"])
-                .build(),
-        );
-    }
-    let row = gtk::ListBoxRow::builder().child(&b).build();
-    row.set_widget_name(id);
-    row
-}
-
-const CSS: &str = "row.overdue .subtitle { color: var(--error-color); opacity: 1; }";
+/// Over omui's stylesheet: an overdue reminder's date, and a field of the
+/// edit dialog that cannot be saved as it is (omui's entry row has no look
+/// for that).
+pub const CSS: &str = "\
+row.overdue .row-subtitle { color: @om_danger; }
+row.entry-row.error { outline: 2px solid @om_danger; outline-offset: -2px; }
+row.entry-row.error .row-title { color: @om_danger; }
+";
 
 /// The window once the reminders left iCloud on this computer: where they
 /// are now, and a button that opens the folder.
-pub fn left(app: &adw::Application, left: &icloud_app::leave::Left) -> adw::ApplicationWindow {
+pub fn left(app: &gtk::Application, left: &icloud_app::leave::Left) -> gtk::ApplicationWindow {
     let folder = left.folder.clone();
     let open = gtk::Button::builder()
         .label("Open Folder")
-        .halign(gtk::Align::Center)
         .css_classes(["pill", "suggested-action"])
         .build();
-    let page = adw::StatusPage::builder()
-        .icon_name("checkbox-checked-symbolic")
-        .title("Your Reminders Are Files Now")
-        .description(format!(
+    let page = omui::EmptyState::new(
+        Some(icons::name::CHECKED),
+        "Your Reminders Are Files Now",
+        Some(&format!(
             "Reminders left iCloud on this computer. Each list is a checklist in {}, which Omacloud keeps in sync on your computers, and due reminders still notify.",
             folder.display()
-        ))
-        .child(&open)
-        .build();
-    let tv = adw::ToolbarView::new();
-    tv.add_top_bar(&adw::HeaderBar::new());
-    tv.set_content(Some(&page));
-    let window = adw::ApplicationWindow::builder()
+        )),
+    );
+    page.set_child(Some(open.upcast_ref()));
+    let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("Reminders")
         .icon_name(super::APP_ID)
         .default_width(560)
         .default_height(480)
-        .content(&tv)
+        .child(&page.widget)
         .build();
+    window.set_titlebar(Some(&omui::header(None)));
     let parent = window.clone();
     open.connect_clicked(move |_| {
         let launcher = gtk::FileLauncher::new(Some(&gio::File::for_path(&folder)));
@@ -678,40 +652,36 @@ pub fn left(app: &adw::Application, left: &icloud_app::leave::Left) -> adw::Appl
     window
 }
 
-fn build(app: &adw::Application, banner: SignInBanner, local: TimeZone) -> Window {
-    let css = gtk::CssProvider::new();
-    css.load_from_string(CSS);
-    if let Some(display) = gtk::gdk::Display::default() {
-        gtk::style_context_add_provider_for_display(&display, &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-    }
-
-    // Sidebar: the lists.
+fn build(app: &gtk::Application, banner: SignInBanner, local: TimeZone) -> Window {
+    // Sidebar: the lists, under a header of their own.
     let lists = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::Single)
         .activate_on_single_click(true)
-        .css_classes(["navigation-sidebar"])
         .build();
-    let sidebar_header = adw::HeaderBar::new();
-    sidebar_header.pack_start(
-        &gtk::Button::builder()
-            .icon_name("view-refresh-symbolic")
-            .tooltip_text("Sync Now (Ctrl+R)")
-            .action_name("win.refresh")
-            .build(),
-    );
-    let sidebar_tv = adw::ToolbarView::new();
-    sidebar_tv.add_top_bar(&sidebar_header);
-    sidebar_tv.set_content(Some(
-        &gtk::ScrolledWindow::builder().child(&lists).vexpand(true).build(),
-    ));
-    let sidebar_page = adw::NavigationPage::builder().title("Lists").child(&sidebar_tv).build();
+    let sidebar_header = omui::header(Some(omui::Title::new("Lists", "").widget.upcast_ref()));
+    let refresh = omui::icon_button(icons::name::REFRESH, "Sync Now (Ctrl+R)");
+    refresh.set_action_name(Some("win.refresh"));
+    sidebar_header.pack_start(&refresh);
+    let sidebar_list = gtk::ScrolledWindow::builder()
+        .child(&lists)
+        .vexpand(true)
+        .css_classes(["sidebar"])
+        .build();
+    let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    sidebar.append(&sidebar_header);
+    sidebar.append(&sidebar_list);
 
     // Content: the add line and the reminders.
-    let content_title = adw::WindowTitle::new("Upcoming", "");
-    let content_header = adw::HeaderBar::builder().title_widget(&content_title).build();
+    let content_title = omui::Title::new("Upcoming", "");
+    let content_header = omui::header(Some(content_title.widget.upcast_ref()));
+    // Shown while the window is too narrow for both panes.
+    let back = omui::icon_button(icons::name::BACK, "Lists");
+    back.set_visible(false);
+    content_header.pack_start(&back);
     let show_completed = gtk::ToggleButton::builder()
-        .icon_name("checkbox-checked-symbolic")
+        .icon_name(icons::name::CHECKED)
         .tooltip_text("Show Completed")
+        .css_classes(["header-action"])
         .build();
     content_header.pack_end(&show_completed);
 
@@ -733,47 +703,45 @@ fn build(app: &adw::Application, banner: SignInBanner, local: TimeZone) -> Windo
         .valign(gtk::Align::Start)
         .build();
     rows.set_placeholder(Some(
-        &adw::StatusPage::builder()
-            .icon_name("checkbox-checked-symbolic")
-            .title("No Reminders")
-            .css_classes(["compact"])
-            .build(),
+        &omui::EmptyState::new(Some(icons::name::CHECKED), "No Reminders", None)
+            .compact()
+            .widget,
     ));
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
     column.append(&add_line);
     column.append(&rows);
-    let clamp = adw::Clamp::builder()
-        .maximum_size(720)
-        .child(&column)
-        .margin_top(12)
-        .margin_bottom(12)
-        .margin_start(12)
-        .margin_end(12)
-        .build();
-    let content_tv = adw::ToolbarView::new();
-    content_tv.add_top_bar(&content_header);
-    content_tv.set_content(Some(
-        &gtk::ScrolledWindow::builder().child(&clamp).vexpand(true).build(),
-    ));
-    let content_page = adw::NavigationPage::builder()
-        .title("Reminders")
-        .child(&content_tv)
-        .build();
+    let clamp = omui::clamp(&column, 720);
+    clamp.set_margin_top(12);
+    clamp.set_margin_bottom(12);
+    clamp.set_margin_start(12);
+    clamp.set_margin_end(12);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    content.append(&content_header);
+    content.append(&gtk::ScrolledWindow::builder().child(&clamp).vexpand(true).build());
 
-    let split = adw::NavigationSplitView::builder()
-        .sidebar(&sidebar_page)
-        .content(&content_page)
-        .min_sidebar_width(200.0)
-        .max_sidebar_width(280.0)
-        .build();
+    let split = omui::Split::new(&sidebar, &content, (200, 280), Some(600));
+    split.connect_changed({
+        let back = back.downgrade();
+        move |split| {
+            if let Some(back) = back.upgrade() {
+                back.set_visible(split.is_collapsed());
+            }
+        }
+    });
+    back.connect_clicked({
+        let split = split.downgrade();
+        move |_| {
+            if let Some(split) = split.upgrade() {
+                split.set_show_content(false);
+            }
+        }
+    });
     let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
     body.append(&banner.widget);
-    split.set_vexpand(true);
-    body.append(&split);
-    let toasts = adw::ToastOverlay::new();
-    toasts.set_child(Some(&body));
+    split.widget.set_vexpand(true);
+    body.append(&split.widget);
 
-    let window = adw::ApplicationWindow::builder()
+    let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("Reminders")
         .icon_name(super::APP_ID)
@@ -781,15 +749,14 @@ fn build(app: &adw::Application, banner: SignInBanner, local: TimeZone) -> Windo
         .default_height(640)
         .width_request(360)
         .height_request(320)
-        .content(&toasts)
         .build();
-    let narrow = adw::Breakpoint::new(adw::BreakpointCondition::parse("max-width: 600sp").expect("valid condition"));
-    narrow.add_setter(&split, "collapsed", Some(&true.to_value()));
-    window.add_breakpoint(narrow);
+    // Each pane has a header of its own.
+    omui::claim_titlebar(&window);
+    let shell = omui::Shell::new(&window, &body);
 
     Window {
         window,
-        toasts,
+        shell,
         banner,
         lists,
         rows,

@@ -15,4 +15,5 @@ name = "icloud_app_ui"
 icloud-session.workspace = true
 gtk.workspace = true
 adw.workspace = true
+omui.workspace = true
 async-channel.workspace = true

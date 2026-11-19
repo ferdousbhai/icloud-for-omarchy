@@ -30,7 +30,7 @@ required-features = ["ui"]
 # the GTK stack.
 [features]
 default = ["ui"]
-ui = ["dep:icloud-app-ui", "dep:gtk", "dep:adw"]
+ui = ["dep:icloud-app-ui", "dep:gtk", "dep:omui"]
 
 [dependencies]
 # The workspace's session/ crate.
@@ -47,8 +47,9 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+# The GTK 4 omui is built on; cargo resolves both to one gtk4.
 gtk = { workspace = true, optional = true }
-adw = { workspace = true, optional = true }
+omui = { workspace = true, optional = true }
 # What the apps' windows share (app/ui/): only `icloud-reminders-app` uses it.
 icloud-app-ui = { workspace = true, optional = true }
 

@@ -1,7 +1,7 @@
-//! `icloud-reminders-app` opens the Reminders window (GTK4, libadwaita);
-//! the desktop entry runs it, and so does `icloud-reminders` with no
-//! command. Given a command it runs the command line, like
-//! `icloud-reminders`.
+//! `icloud-reminders-app` opens the Reminders window (GTK 4, with omui's
+//! look and widgets and Omarchy's current theme); the desktop entry runs it,
+//! and so does `icloud-reminders` with no command. Given a command it runs
+//! the command line, like `icloud-reminders`.
 //!
 //! The window's code lives in this binary, not in the library: the command
 //! line links the library, and the background timer runs it every minute,
@@ -10,17 +10,17 @@
 
 mod window;
 
-use adw::prelude::*;
+use gtk::prelude::*;
 
 pub const APP_ID: &str = "com.ferdousbhai.IcloudReminders";
 
 fn main() {
-    icloud_app_ui::main(icloud_reminders::cli::run, || {
+    omui::main(icloud_reminders::cli::run, || {
         let local = icloud_reminders::due::local_zone().unwrap_or_else(|e| {
             eprintln!("icloud-reminders: {e}");
             std::process::exit(1);
         });
-        let app = icloud_app_ui::application(APP_ID, "icloud-reminders", "Reminders", move |app| {
+        let app = omui::application(APP_ID, "icloud-reminders", "Reminders", window::CSS, move |app| {
             // Left iCloud: the files are the reminders, and the window would
             // only sync with iCloud.
             match icloud_app::leave::left("icloud-reminders").ok().flatten() {

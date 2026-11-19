@@ -3,7 +3,8 @@
 //! signed out (saying why, when the daemon knows), "Signing in…" while the
 //! daemon's sign-in window is open, hidden (and the window refreshed) once
 //! the account is signed in. Its button calls `icloud_session::sign_in()`,
-//! which only asks the daemon to open the window.
+//! which only asks the daemon to open the window. libadwaita draws it, or
+//! omui for a window that has left libadwaita ([`SignInBanner::omui`]).
 //!
 //! Find My can also want the Apple password again (HTTP 450) while the
 //! account is signed in. Its window then calls `SignInBanner::show_find_my`
@@ -16,6 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk::glib;
+use gtk::prelude::*;
 
 use super::background;
 
@@ -123,18 +125,81 @@ enum Change {
     FindMyAuthorized,
 }
 
+/// What the banner is, whichever toolkit draws it: the state, and how a
+/// view of it is put on screen.
+struct Core {
+    state: RefCell<State>,
+    /// Shows the view, or hides the banner. A boxed closure, so that nothing
+    /// here names the toolkit: Reminders' window must not load libadwaita,
+    /// and the linker leaves a library out only when no code it keeps names it.
+    draw: Box<dyn Fn(Option<View>)>,
+}
+
+impl Core {
+    /// Follows the daemon's status for as long as the process lives:
+    /// `on_signed_in` runs on each change the window should refresh for.
+    fn new(state: State, draw: Box<dyn Fn(Option<View>)>, on_signed_in: Box<dyn Fn()>) -> Rc<Core> {
+        let core = Rc::new(Core {
+            state: RefCell::new(state),
+            draw,
+        });
+        let (tx, rx) = async_channel::unbounded();
+        std::thread::Builder::new()
+            .name("icloud-session-watch".into())
+            // The daemon's status, then every change, until the window is gone.
+            .spawn(move || icloud_session::watch_forever(|status| tx.send_blocking(status).is_ok()))
+            .expect("spawn the sign-in status thread");
+        let following = core.clone();
+        glib::spawn_future_local(async move {
+            while let Ok(status) = rx.recv().await {
+                let change = following.state.borrow_mut().update(status);
+                following.render();
+                if change != Change::None {
+                    on_signed_in();
+                }
+            }
+        });
+        core
+    }
+
+    /// The banner's button: asks the daemon for the window its view names.
+    fn clicked(&self, on_error: Rc<dyn Fn(String)>) {
+        let action = self.state.borrow().view().and_then(|v| v.button).map(|(_, a)| a);
+        let (open, what): (fn() -> icloud_session::Result<()>, _) = match action {
+            Some(Action::AuthorizeFindMy) => (
+                icloud_session::authorize_find_my,
+                "Could not open Find My's password page",
+            ),
+            _ => (icloud_session::sign_in, "Could not start signing in"),
+        };
+        background(open, move |result| {
+            let msg = match result {
+                Ok(Ok(())) => return,
+                Ok(Err(e)) => format!("{what}: {e}"),
+                Err(e) => e,
+            };
+            on_error(msg);
+        });
+    }
+
+    fn render(&self) {
+        (self.draw)(self.state.borrow().view());
+    }
+}
+
 pub struct SignInBanner {
-    pub widget: adw::Banner,
-    state: Rc<RefCell<State>>,
+    /// libadwaita's banner or omui's, as the constructor says.
+    pub widget: gtk::Widget,
+    core: Rc<Core>,
 }
 
 impl SignInBanner {
     /// `title` is the app's ask ("Sign in to iCloud to see your
     /// reminders"). `on_signed_in` runs when the account turns signed in
     /// after being signed out (the window then syncs); `on_error` gets a
-    /// message for a toast.
+    /// message for a toast. Drawn by libadwaita.
     pub fn new(title: &'static str, on_signed_in: impl Fn() + 'static, on_error: impl Fn(String) + 'static) -> Self {
-        Self::build(State::new(title, false), on_signed_in, on_error)
+        Self::adw(State::new(title, false), on_signed_in, on_error)
     }
 
     /// [`SignInBanner::new`] for Find My's window, which also calls
@@ -146,93 +211,89 @@ impl SignInBanner {
         on_signed_in: impl Fn() + 'static,
         on_error: impl Fn(String) + 'static,
     ) -> Self {
-        Self::build(State::new(title, true), on_signed_in, on_error)
+        Self::adw(State::new(title, true), on_signed_in, on_error)
     }
 
-    fn build(state: State, on_signed_in: impl Fn() + 'static, on_error: impl Fn(String) + 'static) -> Self {
-        let widget = adw::Banner::builder()
+    /// [`SignInBanner::new`] drawn by omui, for a window that has left
+    /// libadwaita.
+    pub fn omui(title: &'static str, on_signed_in: impl Fn() + 'static, on_error: impl Fn(String) + 'static) -> Self {
+        // A button added to the banner, not the banner's own, which cannot
+        // be the suggested action.
+        let banner = Rc::new(omui::Banner::new(title, None));
+        let button = banner.add_button(BUTTON, true);
+        let draw = {
+            let (banner, button) = (banner.clone(), button.clone());
+            move |view: Option<View>| {
+                if let Some(view) = &view {
+                    banner.set_title(&view.title);
+                    button.set_label(view.button.map_or("", |(label, _)| label));
+                    button.set_visible(view.button.is_some());
+                }
+                banner.set_revealed(view.is_some());
+            }
+        };
+        let core = Core::new(State::new(title, false), Box::new(draw), Box::new(on_signed_in));
+        let (weak, on_error) = (Rc::downgrade(&core), Rc::new(on_error));
+        button.connect_clicked(move |_| {
+            if let Some(core) = weak.upgrade() {
+                core.clicked(on_error.clone());
+            }
+        });
+        Self {
+            widget: banner.widget.clone().upcast(),
+            core,
+        }
+    }
+
+    fn adw(state: State, on_signed_in: impl Fn() + 'static, on_error: impl Fn(String) + 'static) -> Self {
+        let banner = adw::Banner::builder()
             .title(state.title)
             .button_label(BUTTON)
             .button_style(adw::BannerButtonStyle::Suggested)
             .revealed(false)
             .build();
-        let state = Rc::new(RefCell::new(state));
-        let on_error = Rc::new(on_error);
-        let clicked = state.clone();
-        widget.connect_button_clicked(move |_| {
-            let action = clicked.borrow().view().and_then(|v| v.button).map(|(_, a)| a);
-            let on_error = on_error.clone();
-            let (open, what): (fn() -> icloud_session::Result<()>, _) = match action {
-                Some(Action::AuthorizeFindMy) => (
-                    icloud_session::authorize_find_my,
-                    "Could not open Find My's password page",
-                ),
-                _ => (icloud_session::sign_in, "Could not start signing in"),
-            };
-            background(open, move |result| {
-                let msg = match result {
-                    Ok(Ok(())) => return,
-                    Ok(Err(e)) => format!("{what}: {e}"),
-                    Err(e) => e,
-                };
-                on_error(msg);
-            });
-        });
-
-        let (tx, rx) = async_channel::unbounded();
-        std::thread::Builder::new()
-            .name("icloud-session-watch".into())
-            // The daemon's status, then every change, until the window is gone.
-            .spawn(move || icloud_session::watch_forever(|status| tx.send_blocking(status).is_ok()))
-            .expect("spawn the sign-in status thread");
-        let this = Self { widget, state };
-        let (banner, state) = (this.widget.clone(), this.state.clone());
-        glib::spawn_future_local(async move {
-            while let Ok(status) = rx.recv().await {
-                let change = state.borrow_mut().update(status);
-                render(&banner, &state.borrow());
-                if change != Change::None {
-                    on_signed_in();
+        let draw = {
+            let banner = banner.clone();
+            move |view: Option<View>| {
+                if let Some(view) = &view {
+                    banner.set_title(&view.title);
+                    banner.set_button_label(view.button.map(|(label, _)| label));
                 }
+                banner.set_revealed(view.is_some());
+            }
+        };
+        let core = Core::new(state, Box::new(draw), Box::new(on_signed_in));
+        let (weak, on_error) = (Rc::downgrade(&core), Rc::new(on_error));
+        banner.connect_button_clicked(move |_| {
+            if let Some(core) = weak.upgrade() {
+                core.clicked(on_error.clone());
             }
         });
-        this
+        Self {
+            widget: banner.upcast(),
+            core,
+        }
     }
 
     /// Shown by the window when a request answers `SignInRequired`.
     pub fn show(&self) {
-        self.state.borrow_mut().sign_in_needed = true;
-        self.render();
+        self.core.state.borrow_mut().sign_in_needed = true;
+        self.core.render();
     }
 
     /// Shown by the window when a request answers `FindMyAuthRequired`.
     pub fn show_find_my(&self) {
-        self.state.borrow_mut().find_my_needed = true;
-        self.render();
+        self.core.state.borrow_mut().find_my_needed = true;
+        self.core.render();
     }
 
     /// A request succeeded: nothing to ask for.
     pub fn hide(&self) {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.core.state.borrow_mut();
         state.sign_in_needed = false;
         state.find_my_needed = false;
         drop(state);
-        self.render();
-    }
-
-    fn render(&self) {
-        render(&self.widget, &self.state.borrow());
-    }
-}
-
-fn render(banner: &adw::Banner, state: &State) {
-    match state.view() {
-        Some(view) => {
-            banner.set_title(&view.title);
-            banner.set_button_label(view.button.map(|(label, _)| label));
-            banner.set_revealed(true);
-        }
-        None => banner.set_revealed(false),
+        self.core.render();
     }
 }
 

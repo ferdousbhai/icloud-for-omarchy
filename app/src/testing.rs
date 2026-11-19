@@ -90,16 +90,21 @@ fn needed_libs(path: &str) -> Vec<String> {
 }
 
 /// The command-line binary `cli` needs none of the `toolkit` libraries
-/// (`"libgtk-4."`, `"libadwaita-1."`, ...), so a command does not load them;
-/// the window's binary `app` needs them all. `app` is `None` or missing in
-/// a build without the `ui` feature.
-pub fn assert_cli_links_no_gtk(cli: &str, app: Option<&str>, toolkit: &[&str]) {
-    let ui = |libs: &[String]| libs.iter().filter(|l| toolkit.iter().any(|p| l.starts_with(p))).count();
+/// (`"libgtk-4."`, `"libshumate-1.0."`, ...), so a command does not load
+/// them; the window's binary `app` needs them all. Neither needs any of
+/// `never` (`"libadwaita-1."` for a window that has left libadwaita, which
+/// the crates it shares with the other windows still build against). `app`
+/// is `None` or missing in a build without the `ui` feature.
+pub fn assert_cli_links_no_gtk(cli: &str, app: Option<&str>, toolkit: &[&str], never: &[&str]) {
+    let among =
+        |libs: &[String], names: &[&str]| libs.iter().filter(|l| names.iter().any(|p| l.starts_with(p))).count();
     let libs = needed_libs(cli);
     assert!(libs.iter().any(|l| l.starts_with("libc.")), "{libs:?}");
-    assert_eq!(ui(&libs), 0, "{libs:?}");
+    assert_eq!(among(&libs, toolkit) + among(&libs, never), 0, "{libs:?}");
     if let Some(app) = app.filter(|p| Path::new(p).exists()) {
-        assert_eq!(ui(&needed_libs(app)), toolkit.len());
+        let libs = needed_libs(app);
+        assert_eq!(among(&libs, toolkit), toolkit.len(), "{libs:?}");
+        assert_eq!(among(&libs, never), 0, "{libs:?}");
     }
 }
 

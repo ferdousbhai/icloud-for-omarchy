@@ -37,7 +37,7 @@ once; otherwise it starts at your next login.
 
 - The sidebar lists **Upcoming** (every open reminder, soonest due first)
   and each of your lists with how many reminders are open in it.
-- Tick a reminder's circle to complete it; the check button in the header
+- Tick a reminder's box to complete it; the check button in the header
   shows completed ones too, so you can untick them.
 - Type a title in **New reminder** (Ctrl+N), and optionally a due time in
   the box beside it (`tomorrow 9:00`, `2026-10-12`, `17:30`, `+2h`), then
@@ -210,7 +210,7 @@ JSON shapes are in the [command-line reference](https://github.com/ferdousbhai/i
 
 ## Building from source
 
-Needs `rust`, `cargo`, `gtk4` and `libadwaita`. From the repository root:
+Needs `rust`, `cargo` and `gtk4`. From the repository root:
 
 ```bash
 bin/build icloud-reminders

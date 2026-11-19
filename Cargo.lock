@@ -703,6 +703,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glib-build-tools"
+version = "0.22.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9871f38b67853c358b8190f77b9f878eb27d933a950f1045b244c4559a9f5f0"
+
+[[package]]
 name = "glib-macros"
 version = "0.22.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -910,6 +916,7 @@ dependencies = [
  "gtk4",
  "icloud-session",
  "libadwaita",
+ "omui",
 ]
 
 [[package]]
@@ -1021,7 +1028,7 @@ dependencies = [
  "icloud-app-ui",
  "icloud-session",
  "jiff",
- "libadwaita",
+ "omui",
  "serde",
  "serde_json",
  "tempfile",
@@ -1467,6 +1474,15 @@ checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
  "simd-adler32",
+]
+
+[[package]]
+name = "omui"
+version = "0.3.0"
+source = "git+https://github.com/ferdousbhai/omui?rev=8258e01de5c47f19396126a3ed3e4fc37b8203d6#8258e01de5c47f19396126a3ed3e4fc37b8203d6"
+dependencies = [
+ "glib-build-tools",
+ "gtk4",
 ]
 
 [[package]]

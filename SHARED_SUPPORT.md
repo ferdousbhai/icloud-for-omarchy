@@ -1,9 +1,15 @@
 # Shared support copies
 
 These products vendor a small set of identical support files. Their installed
-apps and CLIs stay independent: there is no new runtime package or cross-repo
-import. Product services, application UI, provider logic, commands and embedded
-skill text are outside this shared boundary.
+apps and CLIs stay independent: there is no new runtime package. Product
+services, provider logic, commands and embedded skill text are outside this
+shared boundary.
+
+Application UI is shared another way: the look, the Omarchy theme, the icons
+and the common widgets are [omui](https://github.com/ferdousbhai/omui), a crate
+an app builds in from a git `rev` in its `Cargo.toml` (here, Reminders' window
+so far). Nothing of omui is copied here, so the checker below has no part in
+it. The byte copies that remain are `agent_skill.rs` and `recall_client.rs`.
 
 | Canonical implementation | Copies |
 | --- | --- |

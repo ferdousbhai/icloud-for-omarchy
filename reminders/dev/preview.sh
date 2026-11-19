@@ -13,7 +13,14 @@ set -Eeuo pipefail
 #   completed  with Show Completed on
 #   edit       the first reminder's dialog
 #   invalid    the same with a due date that cannot be read
+#   toast      a new reminder refused for its due date
+#   back       Ctrl+N and then Escape (in a narrow window: the sidebar again)
 #   banner     signed out: the cached reminders under the sign-in banner
+#   empty      signed out with nothing cached: the banner over an empty list
+#   left       after `icloud-reminders leave`: where the reminders are now
+#   save       the first reminder renamed in its dialog, and saved with Alt+S
+#   complete   the first reminder ticked
+# The last two change the fake's reminders for the scenes after them; each theme starts on a fresh fake.
 # `theme-dir` holds a `colors.toml` (an Omarchy theme, such as /usr/share/omarchy/themes/catppuccin-latte) and is
 # copied in as the scratch desktop's current theme; without one the pictures are named `-default`.
 #
@@ -41,17 +48,23 @@ done
 for theme in "${themes[@]}"; do
   [[ -z $theme || -f $theme/colors.toml ]] || { echo "preview: $theme has no colors.toml" >&2; exit 1; }
 done
-read -r -a scenes <<< "${ICLOUD_REMINDERS_PREVIEW_SCENES:-lists new completed edit invalid banner}"
+read -r -a scenes <<< "${ICLOUD_REMINDERS_PREVIEW_SCENES:-lists new completed edit invalid toast back banner empty left save complete}"
 # Ctrl+N puts the keyboard in the line that adds a reminder. From there the header's Show Completed is one stop back,
-# and the first reminder two on, past the due date. Its dialog opens with the keyboard on Save: the notes are one stop
-# back, and the due date one more, with Ctrl since Tab alone is the notes' own.
+# and the first reminder two on, past the due date. Its dialog opens with the keyboard in the title, one stop before
+# the due date. A reminder's box is the stop after the reminder.
 declare -A keys=(
   [lists]=""
   [new]="ctrl+n"
   [completed]="ctrl+n shift+ISO_Left_Tab space"
   [edit]="ctrl+n Tab Tab Return"
-  [invalid]="ctrl+n Tab Tab Return shift+ISO_Left_Tab ctrl+shift+ISO_Left_Tab text:someday"
+  [invalid]="ctrl+n Tab Tab Return Tab text:someday"
+  [toast]="ctrl+n text:Tea Tab text:someday Return"
+  [back]="ctrl+n Escape"
   [banner]=""
+  [empty]=""
+  [left]=""
+  [save]="ctrl+n Tab Tab Return text:Oatmilk alt+s"
+  [complete]="ctrl+n Tab Tab Tab space"
 )
 for scene in "${scenes[@]}"; do
   [[ -v keys[$scene] ]] || { echo "preview: no scene named $scene" >&2; exit 2; }
@@ -113,19 +126,23 @@ export XDG_RUNTIME_DIR=$runtime
 export LC_ALL=C TZ=UTC
 unset GTK_THEME
 
-# The fake iCloud, on a port of its own; it says which.
-"$target/examples/fake_reminders" 127.0.0.1:0 > "$root/fake.log" 2>&1 &
-fake_pid=$!
+# A fake iCloud with its reminders as seeded, on a port of its own (it says which), and the cache of them the window
+# opens with, so that the signed-out scene has reminders under its banner.
 fake=""
-for _ in {1..50}; do
-  fake=$(sed -n 's/^Fake iCloud Reminders on //p' "$root/fake.log")
-  [[ -z $fake ]] || break
-  sleep 0.1
-done
-[[ -n $fake ]] || { echo "preview: the fake iCloud did not start" >&2; cat "$root/fake.log" >&2; exit 1; }
-export ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=$fake
-# The cache the window opens with, so that the signed-out scene has reminders under its banner.
-"$target/icloud-reminders" sync --quiet > /dev/null
+start_fake() {
+  stop "$fake_pid"
+  "$target/examples/fake_reminders" 127.0.0.1:0 > "$root/fake.log" 2>&1 &
+  fake_pid=$!
+  fake=""
+  for _ in {1..50}; do
+    fake=$(sed -n 's/^Fake iCloud Reminders on //p' "$root/fake.log")
+    [[ -z $fake ]] || break
+    sleep 0.1
+  done
+  [[ -n $fake ]] || { echo "preview: the fake iCloud did not start" >&2; cat "$root/fake.log" >&2; exit 1; }
+  export ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=$fake
+  "$target/icloud-reminders" sync --full --quiet > /dev/null
+}
 
 # A session bus with no service directories: nothing can be dbus-activated on it.
 printf '%s\n' \
@@ -204,7 +221,15 @@ press() {
 # One scene: the app from its start, the scene's keys, the picture, and the app stopped again.
 shoot() {
   local scene=$1 picture=$2
-  [[ $scene != banner ]] || curl -fsS -X POST "$fake/fake/sign-out" > /dev/null
+  local data=$XDG_DATA_HOME/icloud-reminders
+  case $scene in
+    banner) curl -fsS -X POST "$fake/fake/sign-out" > /dev/null ;;
+    empty)
+      curl -fsS -X POST "$fake/fake/sign-out" > /dev/null
+      rm -f -- "$data/cache.json"
+      ;;
+    left) printf '{"version":1,"at":0,"folder":"%s/Documents/Reminders"}\n' "$HOME" > "$data/left-icloud.json" ;;
+  esac
   GDK_BACKEND=wayland "$target/icloud-reminders-app" > "$root/app.log" 2>&1 &
   app_pid=$!
   for _ in {1..100}; do
@@ -227,7 +252,14 @@ shoot() {
   [[ ! -s $root/app.log ]] || sed -n '1,20p' "$root/app.log" >&2
   stop "$app_pid"
   app_pid=""
-  [[ $scene != banner ]] || curl -fsS -X POST "$fake/mock/reauthenticate" > /dev/null
+  case $scene in
+    banner) curl -fsS -X POST "$fake/mock/reauthenticate" > /dev/null ;;
+    empty)
+      curl -fsS -X POST "$fake/mock/reauthenticate" > /dev/null
+      "$target/icloud-reminders" sync --full --quiet > /dev/null
+      ;;
+    left) rm -f -- "$data/left-icloud.json" ;;
+  esac
 }
 
 mkdir -p "$out"
@@ -241,6 +273,7 @@ for theme in "${themes[@]}"; do
     cp -- "$theme/colors.toml" "$current/theme/colors.toml"
     printf '%s\n' "$name" > "$current/theme.name"
   fi
+  start_fake
   for scene in "${scenes[@]}"; do
     shoot "$scene" "$out/$scene-$name.png"
   done

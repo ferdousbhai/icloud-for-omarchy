@@ -1044,12 +1044,14 @@ fn usage_is_coded() {
 }
 
 /// The timer runs `icloud-reminders` every minute: it must not load GTK.
+/// The window is omui's, and libadwaita in its process would style it over.
 #[test]
 fn the_command_line_binary_does_not_link_gtk() {
     assert_cli_links_no_gtk(
         env!("CARGO_BIN_EXE_icloud-reminders"),
         option_env!("CARGO_BIN_EXE_icloud-reminders-app"),
-        &["libgtk-4.", "libadwaita-1."],
+        &["libgtk-4."],
+        &["libadwaita-1."],
     );
 }
 

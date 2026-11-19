@@ -617,6 +617,7 @@ fn the_command_line_binary_does_not_link_gtk() {
         env!("CARGO_BIN_EXE_icloud-findmy"),
         option_env!("CARGO_BIN_EXE_icloud-findmy-app"),
         &["libgtk-4.", "libadwaita-1.", "libshumate-1.0."],
+        &[],
     );
 }
 

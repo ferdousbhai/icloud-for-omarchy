@@ -32,7 +32,7 @@ curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/dow
 | [notes/](notes/README.md), [notes-sync/](notes-sync/README.md) | `icloud-notes` | Apple Notes as a Qt/QML app (installed as `icloud-notes-app`) and the `icloud-notes` command (Rust, no toolkit; it starts the app when given no command), synced with iCloud by its engine, icloud-notes-sync (notes-sync/, in Rust, originally derived from icloud-md), which the package installs off PATH. |
 | [photos/](photos/README.md) | `icloud-photos` | iCloud Photos in GTK4/libadwaita: browse, download, upload and delete. |
 | [findmy/](findmy/README.md) | `icloud-findmy` | Find My devices in GTK4/libadwaita: locate, play a sound, Lost Mode, history trail. |
-| [reminders/](reminders/README.md) | `icloud-reminders` | iCloud Reminders in GTK4/libadwaita, and a systemd timer that notifies through Omarchy's notifications when a reminder falls due. |
+| [reminders/](reminders/README.md) | `icloud-reminders` | iCloud Reminders in GTK4 with Omarchy's current theme, and a systemd timer that notifies through Omarchy's notifications when a reminder falls due. |
 | [drive/](drive/README.md) | `icloud-drive` | iCloud Drive as the folder `~/iCloud Drive`, synced both ways by a background service; `icloud-drive start` turns it on. |
 | [session/](session/README.md), [sessiond/](sessiond/) | `icloud-session` | The shared sign-in: a D-Bus daemon, a sign-in window and a CLI (sessiond/), plus the Rust client crate every app links (session/). |
 
