@@ -48,10 +48,8 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   (`store.rs`), the lazily connected `SessionTransport` (`transport.rs`), and what the apps'
   `tests/cli.rs` share (`testing.rs`, feature `testing`, dev-dependencies only). `app/ui/` —
   `icloud-app-ui`, the GTK half: the sign-in banner (`banner.rs`, with Find My's password ask),
-  `background`, and the `*-app` binaries' `main`/`application`. Reminders' window is
-  [omui](https://github.com/ferdousbhai/omui)'s and takes the banner alone (`SignInBanner::omui`);
-  the libadwaita banner, `main`, `application` and `background` stay until Find My leaves
-  libadwaita too. Both are internal: no binary, in
+  drawn by [omui](https://github.com/ferdousbhai/omui), whose `main`, `application` and
+  `background` the windows take. Both are internal: no binary, in
   no package. Put here what two or more of the apps would otherwise copy. Not here: anything
   every iCloud tool shares, GTK app or not (that is `icloud-session`, whose API is frozen), what
   one app alone needs (it stays in that app), and any GTK in `icloud-app` itself, not even
@@ -60,11 +58,11 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   when GTK reaches them. Only the `*-app` binaries use `icloud-app-ui`.
 - `photos/`, `findmy/`, `reminders/` — one crate per app: a library, a GTK-free CLI
   binary (`src/main.rs` + `cli.rs`), and the GTK window as a separate `*-app` binary
-  (`src/bin/app/`; Photos keeps its UI in `src/ui/` + `app.rs`): libadwaita's in Photos and Find
-  My; in Reminders plain GTK 4 with omui's look, Omarchy theme, icons and widgets (a git
-  dependency pinned by `rev` in the workspace `Cargo.toml`), which must not load libadwaita (its
-  `tests/cli.rs` checks). `reminders/dev/preview.sh` takes pictures of that window on the fake,
-  in a nested compositor. Each has a fake Apple server
+  (`src/bin/app/`; Photos keeps its UI in `src/ui/` + `app.rs`): libadwaita's in Photos; in
+  Find My and Reminders plain GTK 4 with omui's look, Omarchy theme, icons and widgets (a git
+  dependency pinned by `rev` in the workspace `Cargo.toml`), which must not load libadwaita (their
+  `tests/cli.rs` check). `findmy/dev/preview.sh` and `reminders/dev/preview.sh` take pictures of
+  those windows on the fakes, in a nested compositor. Each has a fake Apple server
   under `examples/` (selected with `ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=…`) and CLI
   tests in `tests/`.
 - `reminders/` — `icloud-reminders`, built like Photos and
@@ -105,7 +103,7 @@ cargo fmt --all               # max_width = 120 (rustfmt.toml)
 bin/build-packages "$(uname -m)" # native Arch packages; no Docker
 ```
 
-Build deps: rust, sqlite, gtk4, libadwaita, libshumate (findmy), webkitgtk-6.0 (sign-in window;
+Build deps: rust, sqlite, gtk4, libadwaita (photos), libshumate (findmy), webkitgtk-6.0 (sign-in window;
 without it `bin/check` tests sessiond with `--no-default-features`), qt6-base, qt6-declarative,
 make. GitHub's Ubuntu runners use `bin/arch-run` with `arch-install-scripts` to build
 in a disposable native Arch chroot; local package builds run directly as a regular
@@ -136,6 +134,6 @@ packaging tests, then native x86_64/aarch64 package builds.
   crates.io publication is a separate explicit `cargo publish --locked -p icloud-session`.
 - The installer pins `add_signed_repo` in `tests/add_signed_repo.sha256`; update the hash
   deliberately when changing the function. Ghost has removed its old copy.
-- Reminders' window holds omui's Strata-derived code and Lucide icons: a change of the omui `rev`
-  keeps `NOTICE` (installed by the PKGBUILD) true.
+- The Find My and Reminders windows hold omui's Strata-derived code and Lucide icons: a change of
+  the omui `rev` keeps `NOTICE` (installed by the PKGBUILD) true.
 - `/target`, `/dist` and makepkg dirs are gitignored build output.

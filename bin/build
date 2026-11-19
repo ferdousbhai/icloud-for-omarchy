@@ -3,10 +3,11 @@
 #
 # Usage: bin/build [package...]   e.g. bin/build icloud-photos icloud-notes
 #
-# The Rust packages need rust and, for the apps' windows, gtk4, libadwaita,
-# libshumate (icloud-findmy) and webkitgtk-6.0 (icloud-session's sign-in
-# window). icloud-notes needs qt6-base, qt6-declarative and make, and
-# builds its sync engine (notes-sync/, icloud-notes-sync) with rust too.
+# The Rust packages need rust and, for the apps' windows, gtk4, libadwaita
+# (icloud-photos), libshumate (icloud-findmy) and webkitgtk-6.0
+# (icloud-session's sign-in window). icloud-notes needs qt6-base,
+# qt6-declarative and make, and builds its sync engine (notes-sync/,
+# icloud-notes-sync) with rust too.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

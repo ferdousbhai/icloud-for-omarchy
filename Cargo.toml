@@ -18,7 +18,7 @@ icloud-app = { path = "app" }
 icloud-app-ui = { path = "app/ui" }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_9"] }
 # The look, the Omarchy theme, the icons and the widgets of the windows that
-# have left libadwaita (Reminders so far).
+# have left libadwaita (Reminders and Find My so far).
 omui = { git = "https://github.com/ferdousbhai/omui", rev = "9f44a496ca98922b8e6e65e9491bcaa0cd1ca4a5" } # v0.3.1
 async-channel = "2"
 base64 = "0.22"

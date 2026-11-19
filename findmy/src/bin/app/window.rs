@@ -9,12 +9,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use adw::prelude::*;
+use gtk::prelude::*;
 use gtk::{gio, glib};
+use omui::background;
+use omui::icons::name;
 
 use super::devices::DeviceList;
 use super::map::DeviceMap;
-use icloud_app_ui::{SignInBanner, background};
+use icloud_app_ui::SignInBanner;
 use icloud_findmy::findme::{self, FindMe, SessionTransport};
 use icloud_findmy::history::{History, LazyHistory, Point};
 use icloud_findmy::models::{Device, Fix};
@@ -79,10 +81,10 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 pub struct Window {
-    window: adw::ApplicationWindow,
-    toasts: adw::ToastOverlay,
-    title: adw::WindowTitle,
-    split: adw::OverlaySplitView,
+    window: gtk::ApplicationWindow,
+    shell: Rc<omui::Shell>,
+    title: omui::Title,
+    split: omui::Split,
     banner: SignInBanner,
     list: Rc<DeviceList>,
     map: Rc<DeviceMap>,
@@ -112,7 +114,7 @@ pub struct Window {
 }
 
 impl Window {
-    pub fn new(app: &adw::Application) -> Rc<Self> {
+    pub fn new(app: &gtk::Application) -> Rc<Self> {
         let this = Rc::new_cyclic(|weak: &Weak<Window>| {
             let w = weak.clone();
             let w2 = weak.clone();
@@ -169,7 +171,7 @@ impl Window {
     }
 
     fn toast(&self, msg: &str) {
-        self.toasts.add_toast(adw::Toast::new(&toast_title(msg)));
+        self.shell.toast(msg);
     }
 
     /// The account just signed in (maybe a different one), or Find My was
@@ -551,7 +553,7 @@ impl Window {
         if self.acting.get() {
             return;
         }
-        let dialog = adw::AlertDialog::new(
+        let dialog = omui::Dialog::new(
             Some(&format!("Turn On Lost Mode for {}?", device.name)),
             Some("The device locks and shows your message, with a button to call the number you give."),
         );
@@ -559,17 +561,16 @@ impl Window {
             .selection_mode(gtk::SelectionMode::None)
             .css_classes(["boxed-list"])
             .build();
-        let phone = adw::EntryRow::builder()
-            .title("Phone number")
-            .input_purpose(gtk::InputPurpose::Phone)
-            .build();
-        let message = adw::EntryRow::builder().title("Message").text(LOST_MESSAGE).build();
-        fields.append(&phone);
-        fields.append(&message);
-        dialog.set_extra_child(Some(&fields));
-        dialog.add_responses(&[("cancel", "_Cancel"), ("lost", "_Turn On")]);
-        dialog.set_response_appearance("lost", adw::ResponseAppearance::Destructive);
-        dialog.set_default_response(Some("cancel"));
+        let (phone_row, phone) = omui::entry_row("Phone number", "");
+        phone.set_input_purpose(gtk::InputPurpose::Phone);
+        let (message_row, message) = omui::entry_row("Message", LOST_MESSAGE);
+        fields.append(&phone_row.widget);
+        fields.append(&message_row.widget);
+        dialog.set_extra_child(Some(fields.upcast_ref()));
+        dialog.add_response("cancel", "_Cancel");
+        dialog.add_response("lost", "_Turn On");
+        dialog.set_response_appearance("lost", omui::Appearance::Destructive);
+        dialog.set_default_response("cancel");
         dialog.set_close_response("cancel");
         // Both are needed, as on the command line: a locked device with
         // nothing to say or no number to call helps nobody.
@@ -592,12 +593,14 @@ impl Window {
         message.connect_changed(move |_| complete());
 
         let weak = Rc::downgrade(self);
-        dialog.connect_response(Some("lost"), move |_, _| {
+        dialog.connect_response(move |_, response| {
             let Some(this) = weak.upgrade() else { return };
-            let (phone, message) = (phone.text().to_string(), message.text().to_string());
-            this.lost_mode(device.clone(), phone, message);
+            if response == "lost" {
+                let (phone, message) = (phone.text().to_string(), message.text().to_string());
+                this.lost_mode(device.clone(), phone, message);
+            }
         });
-        dialog.present(Some(&self.window));
+        dialog.present(&self.window);
     }
 
     fn lost_mode(self: &Rc<Self>, device: Device, phone: String, message: String) {
@@ -643,53 +646,65 @@ impl Window {
     }
 }
 
-fn build(app: &adw::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banner: SignInBanner) -> Window {
-    let title = adw::WindowTitle::new("Find My", "");
-    let header = adw::HeaderBar::builder().title_widget(&title).build();
+fn build(app: &gtk::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banner: SignInBanner) -> Window {
+    let title = omui::Title::new("Find My", "");
+    let header = omui::header(Some(title.widget.upcast_ref()));
 
     let sidebar_toggle = gtk::ToggleButton::builder()
-        .icon_name("sidebar-show-symbolic")
+        .icon_name(name::SIDEBAR)
         .tooltip_text("Devices")
+        .css_classes(["header-action"])
         .build();
     header.pack_start(&sidebar_toggle);
-    let refresh = gtk::Button::builder()
-        .icon_name("view-refresh-symbolic")
-        .tooltip_text("Refresh (Ctrl+R)")
-        .action_name("win.refresh")
-        .build();
+    let refresh = omui::icon_button(name::REFRESH, "Refresh (Ctrl+R)");
+    refresh.set_action_name(Some("win.refresh"));
     header.pack_start(&refresh);
 
     let actions = gio::Menu::new();
     actions.append(Some("Play Sound"), Some("win.play-sound"));
     actions.append(Some("Lost Mode…"), Some("win.lost-mode"));
     let actions_button = gtk::MenuButton::builder()
-        .icon_name("view-more-symbolic")
+        .icon_name(name::MORE)
         .tooltip_text("Device Actions")
         .menu_model(&actions)
         .build();
     header.pack_end(&actions_button);
 
-    let split = adw::OverlaySplitView::builder()
-        .sidebar(&list.widget)
-        .content(&map.widget)
-        .min_sidebar_width(260.0)
-        .max_sidebar_width(340.0)
-        .build();
-    split
-        .bind_property("show-sidebar", &sidebar_toggle, "active")
-        .bidirectional()
-        .sync_create()
-        .build();
+    let split = omui::Split::new(&list.widget, &map.widget, (260, 340), Some(640));
+    // As libadwaita's overlay split did: the sidebar goes away as the window
+    // narrows, so it opens on the map, and comes back as it widens; its
+    // button follows.
+    let collapsed = Cell::new(false);
+    split.connect_changed({
+        let toggle = sidebar_toggle.downgrade();
+        move |split| {
+            if collapsed.replace(split.is_collapsed()) != split.is_collapsed() {
+                split.set_show_sidebar(!split.is_collapsed());
+            }
+            if let Some(toggle) = toggle.upgrade() {
+                toggle.set_active(split.shows_sidebar());
+            }
+        }
+    });
+    sidebar_toggle.set_active(split.shows_sidebar());
+    sidebar_toggle.connect_toggled({
+        let split = split.downgrade();
+        move |toggle| {
+            if let Some(split) = split.upgrade() {
+                split.set_show_sidebar(toggle.is_active());
+            }
+        }
+    });
 
-    let toolbar = adw::ToolbarView::new();
-    toolbar.add_top_bar(&header);
-    toolbar.add_top_bar(&banner.widget);
-    toolbar.set_content(Some(&split));
+    // The header in the content rather than the window's title bar, so that
+    // the keyboard reaches it first, before the sidebar and the map.
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    body.append(&header);
+    body.append(&banner.widget);
+    split.widget.set_vexpand(true);
+    body.append(&split.widget);
 
-    let toasts = adw::ToastOverlay::new();
-    toasts.set_child(Some(&toolbar));
-
-    let window = adw::ApplicationWindow::builder()
+    let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("Find My")
         .icon_name(super::APP_ID)
@@ -697,16 +712,13 @@ fn build(app: &adw::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banne
         .default_height(720)
         .width_request(360)
         .height_request(320)
-        .content(&toasts)
         .build();
-    window.add_css_class("cloud-desktop");
-    let narrow = adw::Breakpoint::new(adw::BreakpointCondition::parse("max-width: 640sp").expect("valid condition"));
-    narrow.add_setter(&split, "collapsed", Some(&true.to_value()));
-    window.add_breakpoint(narrow);
+    omui::claim_titlebar(&window);
+    let shell = omui::Shell::new(&window, &body);
 
     Window {
         window,
-        toasts,
+        shell,
         title,
         split,
         banner,
@@ -729,21 +741,20 @@ fn build(app: &adw::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banne
     }
 }
 
-/// A toast's title for `msg`, shown as it is: device names come from the
-/// account and must not be read as Pango markup.
-fn toast_title(msg: &str) -> glib::GString {
-    glib::markup_escape_text(msg)
+/// Over omui's stylesheet: the map's device badges (a round badge with the
+/// model icon, the selected one in the accent colour), and the battery and
+/// Lost Mode icons of a device's row in their state's colour, which omui's
+/// rows draw dim.
+pub const CSS: &str = "\
+.device-marker {
+  padding: 7px;
+  border-radius: 999px;
+  background-color: alpha(black, 0.75);
+  color: white;
+  box-shadow: 0 1px 4px alpha(black, 0.45);
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn toast_shows_device_names_verbatim() {
-        assert_eq!(
-            toast_title("No location for <b>Tom & Jerry</b>'s iPad"),
-            "No location for &lt;b&gt;Tom &amp; Jerry&lt;/b&gt;&apos;s iPad"
-        );
-    }
-}
+.device-marker.selected { padding: 9px; background-color: @om_accent; color: @om_bg; }
+.device-marker.stale { opacity: 0.6; }
+row.om-row .row-side > image.error { color: @om_danger; }
+row.om-row .row-side > image.warning { color: @om_warning; }
+";

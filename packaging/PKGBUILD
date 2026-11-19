@@ -124,8 +124,10 @@ package_icloud-photos() {
 
 package_icloud-findmy() {
   pkgdesc='Find My devices on Omarchy: locate, play a sound, Lost Mode, history trail'
-  depends=('gtk4' 'libadwaita' 'libshumate' "icloud-session>=$pkgver" 'hicolor-icon-theme' 'sqlite')
+  license=('MIT' 'ISC')  # ISC: the Lucide icons omui compiles into the window (NOTICE)
+  depends=('gtk4' 'libshumate' "icloud-session>=$pkgver" 'hicolor-icon-theme' 'sqlite')
   _package_gtk_app IcloudFindMy
+  _refuse_link usr/bin/icloud-findmy-app libadwaita-1
 }
 
 package_icloud-notes() {

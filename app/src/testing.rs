@@ -93,8 +93,8 @@ fn needed_libs(path: &str) -> Vec<String> {
 /// (`"libgtk-4."`, `"libshumate-1.0."`, ...), so a command does not load
 /// them; the window's binary `app` needs them all. Neither needs any of
 /// `never` (`"libadwaita-1."` for a window that has left libadwaita, which
-/// the crates it shares with the other windows still build against). `app`
-/// is `None` or missing in a build without the `ui` feature.
+/// the workspace still builds for Photos). `app` is `None` or missing in a
+/// build without the `ui` feature.
 pub fn assert_cli_links_no_gtk(cli: &str, app: Option<&str>, toolkit: &[&str], never: &[&str]) {
     let among =
         |libs: &[String], names: &[&str]| libs.iter().filter(|l| names.iter().any(|p| l.starts_with(p))).count();

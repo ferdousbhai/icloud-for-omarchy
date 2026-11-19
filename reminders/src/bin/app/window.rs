@@ -53,7 +53,7 @@ impl Window {
     pub fn new(app: &gtk::Application, local: TimeZone) -> Rc<Self> {
         let this = Rc::new_cyclic(|weak: &Weak<Window>| {
             let (w1, w2) = (weak.clone(), weak.clone());
-            let banner = SignInBanner::omui(
+            let banner = SignInBanner::new(
                 "Sign in to iCloud to see your reminders",
                 move || {
                     if let Some(this) = w1.upgrade() {

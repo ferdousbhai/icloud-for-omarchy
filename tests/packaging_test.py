@@ -118,8 +118,8 @@ class Packaging(unittest.TestCase):
             self.assertIn('"icloud-session>=$pkgver"', depends, package)
 
     def test_a_binary_linking_what_its_package_does_not_depend_on_is_refused(self):
-        # Reminders ships without libadwaita; its release binary is checked
-        # when packaged. /usr/bin/ls stands in for a binary that links libc.
+        # Find My and Reminders ship without libadwaita; their release
+        # binaries are checked when packaged. /usr/bin/ls stands in for a binary that links libc.
         refuse = ["bash", "-c", 'source packaging/PKGBUILD; pkgdir=/; _refuse_link "$@"', "_"]
         linked = subprocess.run(refuse + ["usr/bin/ls", "libc"], cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(linked.returncode, 1)
@@ -129,10 +129,11 @@ class Packaging(unittest.TestCase):
         missing = subprocess.run(refuse + ["usr/bin/no-such-binary", "libadwaita-1"], cwd=ROOT, capture_output=True)
         self.assertEqual(missing.returncode, 1)
         recipe = (ROOT / "packaging/PKGBUILD").read_text()
-        body = recipe.split("package_icloud-reminders() {", 1)[1].split("\n}", 1)[0]
-        self.assertIn("_refuse_link usr/bin/icloud-reminders-app libadwaita-1", body)
-        # The Lucide icons omui compiles into the window are ISC (NOTICE).
-        self.assertIn("license=('MIT' 'ISC')", body)
+        for app in ["findmy", "reminders"]:
+            body = recipe.split(f"package_icloud-{app}() {{", 1)[1].split("\n}", 1)[0]
+            self.assertIn(f"_refuse_link usr/bin/icloud-{app}-app libadwaita-1", body)
+            # The Lucide icons omui compiles into the window are ISC (NOTICE).
+            self.assertIn("license=('MIT' 'ISC')", body)
 
     def test_all_rust_crates_inherit_one_locked_suite_version(self):
         workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]

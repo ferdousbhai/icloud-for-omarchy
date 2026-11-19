@@ -915,7 +915,6 @@ dependencies = [
  "async-channel",
  "gtk4",
  "icloud-session",
- "libadwaita",
  "omui",
 ]
 
@@ -944,8 +943,8 @@ dependencies = [
  "icloud-app",
  "icloud-app-ui",
  "icloud-session",
- "libadwaita",
  "libshumate",
+ "omui",
  "rusqlite",
  "serde",
  "serde_json",

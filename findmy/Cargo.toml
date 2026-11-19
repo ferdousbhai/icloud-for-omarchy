@@ -26,11 +26,11 @@ required-features = ["ui"]
 
 # The core (findme, history, models) needs no GTK, so `cargo test
 # --no-default-features` runs on a machine without the GTK stack. `ui`
-# (gtk4, libadwaita, libshumate) builds the app; without it only the
-# command line is built.
+# (gtk4, omui, libshumate) builds the app; without it only the command
+# line is built.
 [features]
 default = ["ui"]
-ui = ["dep:icloud-app-ui", "dep:gtk", "dep:adw", "dep:shumate"]
+ui = ["dep:icloud-app-ui", "dep:gtk", "dep:omui", "dep:shumate"]
 
 [dependencies]
 # The workspace's session/ crate.
@@ -42,8 +42,9 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 rusqlite.workspace = true
+# The GTK 4 omui is built on; cargo resolves both to one gtk4.
 gtk = { workspace = true, optional = true }
-adw = { workspace = true, optional = true }
+omui = { workspace = true, optional = true }
 shumate = { package = "libshumate", version = "0.8", optional = true }
 # What the apps' windows share (app/ui/): only `icloud-findmy-app` uses it.
 icloud-app-ui = { workspace = true, optional = true }

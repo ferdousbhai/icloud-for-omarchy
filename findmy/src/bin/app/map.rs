@@ -5,10 +5,10 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use adw::prelude::*;
+use gtk::prelude::*;
 use shumate::prelude::*;
 
-use super::devices::set_class;
+use super::devices::device_icon;
 use icloud_findmy::history::Point;
 use icloud_findmy::models::{Device, Fix};
 
@@ -95,7 +95,7 @@ impl DeviceMap {
     /// Moves the highlight to `selected`'s marker.
     pub fn set_selected(&self, selected: Option<&str>) {
         for (id, m) in self.by_id.borrow().iter() {
-            set_class(&m.badge, "selected", selected == Some(id.as_str()));
+            omui::set_class(&m.badge, "selected", selected == Some(id.as_str()));
         }
     }
 
@@ -158,30 +158,10 @@ impl DeviceMap {
 
 /// A round badge with the model icon, centred on the position (so the trail
 /// ends under it); the selected device's badge is accent-coloured
-/// ([`DeviceMap::set_selected`]). The name is in the tooltip and the window
-/// subtitle.
+/// ([`DeviceMap::set_selected`], styled by the window's CSS). The name is in
+/// the tooltip and the window subtitle.
 fn style_badge(badge: &gtk::Image, d: &Device, now_ms: i64) {
-    badge.set_icon_name(Some(d.class.icon_name()));
-    set_class(badge, "stale", d.location.is_some_and(|f| f.is_old) || !d.online);
+    badge.set_icon_name(Some(device_icon(d.class)));
+    omui::set_class(badge, "stale", d.location.is_some_and(|f| f.is_old) || !d.online);
     badge.set_tooltip_text(Some(&format!("{}\n{}", d.name, d.summary(now_ms))));
 }
-
-/// Styles for the map badges, loaded once at startup.
-pub const CSS: &str = concat!(
-    include_str!("../../../../desktop.css"),
-    "
-.device-marker {
-  padding: 7px;
-  border-radius: 999px;
-  background-color: alpha(black, 0.75);
-  color: white;
-  box-shadow: 0 1px 4px alpha(black, 0.45);
-}
-.device-marker.selected {
-  padding: 9px;
-  background-color: var(--accent-bg-color);
-  color: var(--accent-fg-color);
-}
-.device-marker.stale { opacity: 0.6; }
-"
-);

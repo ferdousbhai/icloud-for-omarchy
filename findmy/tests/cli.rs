@@ -608,16 +608,16 @@ fn errors_go_where_the_mode_says() {
     assert!(err.starts_with("error: no device matches \"nokia\"\nhint: "), "{err}");
 }
 
-/// `icloud-findmy` is the command line only: GTK, libadwaita and libshumate
-/// are not among the libraries it needs, so commands do not load them. The
-/// app binary does need them.
+/// `icloud-findmy` is the command line only: GTK and libshumate are not
+/// among the libraries it needs, so commands do not load them. The app
+/// binary does need them, and neither needs libadwaita.
 #[test]
 fn the_command_line_binary_does_not_link_gtk() {
     assert_cli_links_no_gtk(
         env!("CARGO_BIN_EXE_icloud-findmy"),
         option_env!("CARGO_BIN_EXE_icloud-findmy-app"),
-        &["libgtk-4.", "libadwaita-1.", "libshumate-1.0."],
-        &[],
+        &["libgtk-4.", "libshumate-1.0."],
+        &["libadwaita-1."],
     );
 }
 

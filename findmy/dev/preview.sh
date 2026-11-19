@@ -45,14 +45,14 @@ for theme in "${themes[@]}"; do
 done
 read -r -a scenes <<< "${ICLOUD_FINDMY_PREVIEW_SCENES:-devices map sound lost filled banner password}"
 # `action:<name>` activates the window's action <name> over the scratch session bus, as its menu would; the rest are
-# keys. The window opens with the keyboard nowhere, one stop before the sidebar's button; the Lost Mode dialog opens
-# with it on Cancel, one stop before the phone number.
+# keys. The window opens with the keyboard on the sidebar's button; the Lost Mode dialog opens
+# with it in the phone number.
 declare -A keys=(
   [devices]=""
-  [map]="Tab space"
+  [map]="space"
   [sound]="action:play-sound"
   [lost]="action:lost-mode"
-  [filled]="action:lost-mode Tab text:+1_555_0100"
+  [filled]="action:lost-mode text:+1_555_0100"
   [banner]=""
   [password]=""
 )

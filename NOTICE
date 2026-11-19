@@ -131,13 +131,14 @@ Map data (c) OpenStreetMap contributors, available under the Open Database
 License (https://www.openstreetmap.org/copyright).
 
 ============================================================================
-reminders/ (icloud-reminders): omui, with Strata and Lucide
+findmy/ and reminders/ (icloud-findmy, icloud-reminders): omui, with Strata
+and Lucide
 ============================================================================
 
-The Reminders window (icloud-reminders-app) takes its look, its icons and
-its widgets from omui (https://github.com/ferdousbhai/omui, MIT, by the
+The Find My and Reminders windows (icloud-findmy-app, icloud-reminders-app)
+take their look, their icons and their widgets from omui (https://github.com/ferdousbhai/omui, MIT, by the
 author of this repository), a git dependency pinned by `rev` in Cargo.toml.
-Through it the binary holds code adapted from Strata and the Lucide icons.
+Through it the binaries hold code adapted from Strata and the Lucide icons.
 
 omui's theme code, empty GTK theme resource, hidden title bar and visual
 conventions are adapted from Strata (https://github.com/lgse/strata):

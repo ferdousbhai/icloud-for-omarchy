@@ -96,7 +96,7 @@ exit and error codes and the JSON shapes are in the
 
 ## Building from source
 
-Needs `rust`, `cargo`, `gtk4`, `libadwaita` and `libshumate`; the
+Needs `rust`, `cargo`, `gtk4` and `libshumate`; the
 `icloud-session` crate is the workspace's [`session/`](../session). From
 the repository root:
 
@@ -127,6 +127,12 @@ Sound and Lost Mode request instead of acting, and lists them at
 ICLOUD_SESSION_MOCK=1 cargo run -- play-sound "Test's iPhone" --yes --data-dir /tmp/findmy-dev
 curl -s http://127.0.0.1:8765/fake/actions
 ```
+
+`POST /fake/sign-out` makes it answer as signed out, and
+`POST /fake/find-my-password` as wanting the Apple password, until the
+app's button signs in again. `dev/preview.sh <out-dir> [theme-dir ...]`
+takes pictures of the window on the fake in a nested Hyprland, with a
+private home, session bus and Omarchy theme.
 
 `tests/cli.rs` runs the built binary this way for every command.
 
