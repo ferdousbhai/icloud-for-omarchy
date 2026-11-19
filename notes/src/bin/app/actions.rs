@@ -198,9 +198,14 @@ pub fn update(ui: &Ui) {
         ("link", formatting),
         ("attach", formatting),
     ] {
-        if let Some(action) = ui.window.lookup_action(name).and_downcast::<gio::SimpleAction>() {
-            action.set_enabled(on);
-        }
+        enable(ui, name, on);
+    }
+}
+
+/// Lets the window's action `name` run, or not, and so its buttons.
+pub fn enable(ui: &Ui, name: &str, on: bool) {
+    if let Some(action) = ui.window.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+        action.set_enabled(on);
     }
 }
 

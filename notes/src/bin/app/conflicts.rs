@@ -24,7 +24,6 @@ pub struct Conflicts {
     pub unreadable: gtk::Box,
     unreadable_text: gtk::Label,
     synced: gtk::Button,
-    strip: gtk::Button,
     /// The side picked for each block: "local", "remote", "both" or "".
     choices: RefCell<Vec<String>>,
     /// Edit as text: the markers in the editor, until another note opens.
@@ -113,7 +112,6 @@ impl Conflicts {
             unreadable,
             unreadable_text,
             synced,
-            strip,
             choices: RefCell::default(),
             as_text: std::cell::Cell::new(false),
         }
@@ -157,20 +155,22 @@ impl Ui {
                 }
             ));
             c.synced.set_visible(synced_copy);
-            let ready = !syncing && !self.editor.dirty();
-            c.synced.set_sensitive(ready);
-            c.strip.set_sensitive(ready);
         }
         if resolving {
             if c.choices.borrow().len() != blocks.len() {
                 c.choices.replace(vec![String::new(); blocks.len()]);
             }
-            self.fill_picker(&blocks, syncing);
+            self.fill_picker(&blocks);
         }
+        // Both write the note: never under a sync. (A button's sensitivity
+        // is its action's.)
+        crate::actions::enable(self, "recover-conflict", stuck && !syncing && !self.editor.dirty());
+        let chosen = c.choices.borrow().iter().all(|choice| !choice.is_empty());
+        crate::actions::enable(self, "resolve-conflicts", resolving && !syncing && chosen);
         resolving
     }
 
-    fn fill_picker(self: &Rc<Self>, blocks: &[Conflict], syncing: bool) {
+    fn fill_picker(self: &Rc<Self>, blocks: &[Conflict]) {
         let c = &self.conflicts;
         omui::clear(&c.column);
         let n = blocks.len();
@@ -223,12 +223,11 @@ impl Ui {
                 .label("Keep both, this computer's version first")
                 .active(choice == "both")
                 .build();
+            // Unticked, the block has no version picked again.
             let weak = Rc::downgrade(self);
             both.connect_toggled(move |button| {
-                if let Some(ui) = weak.upgrade()
-                    && button.is_active()
-                {
-                    ui.choose_conflict(index, "both");
+                if let Some(ui) = weak.upgrade() {
+                    ui.choose_conflict(index, if button.is_active() { "both" } else { "" });
                 }
             });
             hunk.append(&both);
@@ -261,7 +260,6 @@ impl Ui {
         let keep = gtk::Button::builder()
             .label("Keep selected")
             .css_classes(["suggested-action"])
-            .sensitive(!syncing && choices.iter().all(|c| !c.is_empty()))
             .action_name("win.resolve-conflicts")
             .build();
         buttons.append(&keep);
@@ -285,9 +283,17 @@ impl Ui {
             .build();
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let picked = choice == side;
-        let mark = omui::icon(if picked { name::OK } else { name::CHECK });
-        omui::set_class(&mark, if picked { "accent" } else { "unpicked" }, true);
-        head.append(&mark);
+        // A ticked circle for the version picked, an empty one (as a radio
+        // button's) for the other.
+        if picked {
+            let mark = omui::icon(name::OK);
+            mark.add_css_class("accent");
+            head.append(&mark);
+        } else {
+            let mark = crate::icons::image(crate::icons::CIRCLE);
+            mark.add_css_class("unpicked");
+            head.append(&mark);
+        }
         head.append(&omui::icon(icon));
         let title = omui::label(label, "heading");
         title.set_hexpand(true);

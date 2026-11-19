@@ -157,6 +157,10 @@ pub struct Ui {
     /// What stops the engine's run under way, for a close that writes the
     /// save waiting for it.
     pub run_stopper: RefCell<Option<icloud_notes::engine::Stopper>>,
+    /// The window looks again for the vault's lock another process holds,
+    /// for the run that waits for it (if any).
+    pub lock_retry: Cell<bool>,
+    pub waiting_run: Cell<Option<icloud_notes::sync::Kind>>,
     /// The engine's message when it refused a push that would delete most of
     /// the vault; empty once a push goes through.
     pub deletions_refused: RefCell<String>,
@@ -412,6 +416,8 @@ impl Window {
                 freshening: Cell::new(false),
                 soon: RefCell::default(),
                 run_stopper: RefCell::default(),
+                lock_retry: Cell::new(false),
+                waiting_run: Cell::new(None),
                 deletions_refused: RefCell::default(),
                 statuses: RefCell::default(),
                 watching: RefCell::default(),
@@ -452,10 +458,12 @@ impl Window {
             }
         });
 
+        // Above omui's providers (USER + 1 to + 5), whose first unsets every
+        // property of every node.
         gtk::style_context_add_provider_for_display(
             &gtk::prelude::WidgetExt::display(&window),
             &ui.zoom_style,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+            gtk::STYLE_PROVIDER_PRIORITY_USER + 10,
         );
         ui.zoom(saved.zoom);
         actions::add(&ui);
@@ -631,23 +639,27 @@ fn more_menu() -> gio::Menu {
 impl Ui {
     /// The vault's lock, held for as long as the window is open so no
     /// background sync runs the engine beside it, and the first status.
-    fn start(&self) {
+    fn start(self: &Rc<Self>) {
+        let taken = self.backend.borrow_mut().lock_vault();
+        let line = match taken {
+            Taken::Locked => None,
+            Taken::Busy => Some(format!(
+                "{} has the notes; syncing here waits for it.",
+                self.backend.borrow().lock_holder()
+            )),
+            Taken::Failed => Some(format!(
+                "Could not open the sync lock {}; nothing syncs until it opens.",
+                self.backend.borrow().vault().lock_path().display()
+            )),
+        };
+        if let Some(line) = line {
+            self.backend.borrow_mut().log(&line);
+        }
+        if taken == Taken::Busy {
+            self.wait_for_lock();
+        }
         {
-            let mut b = self.backend.borrow_mut();
-            match b.lock_vault() {
-                Taken::Locked => {}
-                Taken::Busy => {
-                    let line = format!("{} has the notes; syncing here waits for it.", b.lock_holder());
-                    b.log(&line);
-                }
-                Taken::Failed => {
-                    let line = format!(
-                        "Could not open the sync lock {}; nothing syncs until it opens.",
-                        b.vault().lock_path().display()
-                    );
-                    b.log(&line);
-                }
-            }
+            let b = self.backend.borrow();
             let vault = b.vault();
             self.set_status(if vault.left_icloud() {
                 "Omacloud syncs this folder; iCloud is no longer used here."
@@ -1043,17 +1055,12 @@ impl Ui {
                 key,
                 Key::Up | Key::Down | Key::Home | Key::End | Key::Page_Up | Key::Page_Down
             ) {
-                // The list moves the keyboard; a note it lands on opens, as
-                // in the two lists (a folder only opens on Enter or a click).
+                // The list moves the keyboard, then the note it lands on opens.
                 let weak = ui.weak();
                 let list = list.clone();
                 glib::idle_add_local_once(move || {
-                    let Some(ui) = weak.upgrade() else { return };
-                    let row = list.focus_child().and_downcast::<gtk::ListBoxRow>();
-                    if let Some(Item::Note { folder, file }) = row.as_ref().and_then(lists::item_of)
-                        && ui.backend.borrow().current_path() != icloud_notes_path(&folder, &file)
-                    {
-                        ui.open_note(&folder, &file);
+                    if let Some(ui) = weak.upgrade() {
+                        ui.open_focused_note(&list);
                     }
                 });
                 return false;
@@ -1070,6 +1077,7 @@ impl Ui {
                         focus_row(list, row.index());
                     } else {
                         focus_row(list, row.index() + 1);
+                        ui.open_focused_note(list);
                     }
                     true
                 }
@@ -1113,6 +1121,17 @@ impl Ui {
             _ => glib::Propagation::Proceed,
         });
         self.editor.view.add_controller(keys);
+    }
+
+    /// The note the tree's keyboard is on opens, as the two lists open the
+    /// row the arrows reach (a folder only opens on Enter or a click).
+    fn open_focused_note(self: &Rc<Self>, tree: &gtk::ListBox) {
+        let row = tree.focus_child().and_downcast::<gtk::ListBoxRow>();
+        if let Some(Item::Note { folder, file }) = row.as_ref().and_then(lists::item_of)
+            && self.backend.borrow().current_path() != icloud_notes_path(&folder, &file)
+        {
+            self.open_note(&folder, &file);
+        }
     }
 
     fn toggle_folder(&self, folder: &str) {

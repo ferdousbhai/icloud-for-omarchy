@@ -1504,6 +1504,9 @@ impl Backend {
         if self.note_changed_on_disk() {
             return Err(Refusal::error(CHANGED_ON_DISK));
         }
+        if self.sync.running {
+            return Err(Refusal::error("Wait for the sync to finish, then try again."));
+        }
         let resolved = syncmodel::resolve_conflicts(&self.note_content, choices);
         if resolved == self.note_content {
             return Err(Refusal::error("Choose a version for every change first."));

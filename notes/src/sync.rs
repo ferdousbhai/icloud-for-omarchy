@@ -4,6 +4,7 @@
 //! machine mode), parsed and never logged as it is; its stderr is progress
 //! and warnings, which are logged.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use icloud_session::Status;
@@ -64,6 +65,9 @@ pub enum Started {
     Ended(Vec<Run>),
     /// The engine: [`Backend::finish`] wants what it leaves.
     Running(Running),
+    /// Another process holds the vault's lock: [`Backend::go_on`] starts the
+    /// engine once it is free. Saves wait meanwhile, as they do for the engine.
+    Waiting,
 }
 
 /// One finished run, or one half of a sync: what the engine was asked
@@ -82,8 +86,10 @@ pub struct Run {
 
 #[derive(Debug, Default)]
 pub(crate) struct State {
-    /// The engine runs: saves wait for it to end.
+    /// The engine runs, or waits for the lock: saves wait for it to end.
     pub(crate) running: bool,
+    /// The engine and its arguments, while the run waits for the lock.
+    waiting: Option<(PathBuf, Vec<String>)>,
     mode: Mode,
     label: &'static str,
     log: String,
@@ -395,6 +401,7 @@ impl Backend {
             Started::Nothing => None,
             Started::Ended(runs) => Some(runs),
             Started::Running(running) => Some(self.finish(running.wait())),
+            Started::Waiting => unreachable!("start waits for the lock"),
         }
     }
 
@@ -403,6 +410,17 @@ impl Backend {
     /// it. Until [`Backend::finish`] is given what the run left, a save
     /// waits ([`Backend::save_note`]).
     pub fn start(&mut self, kind: Kind) -> Started {
+        let mut started = self.begin(kind);
+        while let Started::Waiting = started {
+            std::thread::sleep(LOCK_RETRY);
+            started = self.go_on();
+        }
+        started
+    }
+
+    /// [`Backend::start`] for a main loop, which must not wait for the lock:
+    /// [`Started::Waiting`] while someone else holds it.
+    pub fn begin(&mut self, kind: Kind) -> Started {
         // left iCloud: the engine would refuse every run (left_icloud)
         if self.sync.running || self.vault.left_icloud() {
             return Started::Nothing;
@@ -470,15 +488,25 @@ impl Backend {
                 ..Default::default()
             }));
         };
-        // The engine runs with the vault's lock held here. Someone else
-        // holding it (a background sync) means waiting for as long as that
-        // takes; a lock that cannot be opened at all means no sync.
-        let fd = loop {
-            match self.lock_vault() {
-                Taken::Locked => break self.lock.fd(),
-                Taken::Busy => std::thread::sleep(LOCK_RETRY),
-                Taken::Failed => break None,
+        self.sync.waiting = Some((tool, args));
+        self.go_on()
+    }
+
+    /// The run that waits for the lock, started once the lock is free:
+    /// [`Started::Waiting`] while someone else (a background sync) still
+    /// holds it, and no sync when the lock cannot be opened at all.
+    /// [`Started::Nothing`] when no run waits.
+    pub fn go_on(&mut self) -> Started {
+        let Some((tool, args)) = self.sync.waiting.take() else {
+            return Started::Nothing;
+        };
+        let fd = match self.lock_vault() {
+            Taken::Locked => self.lock.fd(),
+            Taken::Busy => {
+                self.sync.waiting = Some((tool, args));
+                return Started::Waiting;
             }
+            Taken::Failed => None,
         };
         let Some(fd) = fd else {
             self.append_log(&format!(

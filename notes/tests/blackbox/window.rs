@@ -61,3 +61,49 @@ fn a_first_argument_that_is_no_command_opens_the_app() {
         assert!(opens_the_window(&w, &mut app), "{first}");
     }
 }
+
+#[test]
+fn without_a_session_bus_a_second_launch_still_ends() {
+    let Some(w) = World::seeded() else { return };
+    let mut app = w.spawn([""; 0]);
+    assert!(opens_the_window(&w, &mut app));
+    let second = w
+        .cmd([""; 0])
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
+        .run();
+    assert_eq!(second.code, 0, "{second:?}");
+    assert!(
+        second.err.contains("Notes is open on this vault already."),
+        "{second:?}"
+    );
+    assert!(!app.exited(), "the first is still open");
+}
+
+/// Polls `done` for up to 20 seconds.
+fn eventually(mut done: impl FnMut() -> bool) -> bool {
+    let begun = Instant::now();
+    while begun.elapsed() < Duration::from_secs(20) {
+        if done() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+#[test]
+fn opened_while_another_process_syncs_the_window_takes_the_vault_once_it_is_done() {
+    let Some(w) = World::seeded() else { return };
+    let held = w.hold_lock("a background sync (icloud-notes --sync, pid 1)");
+    let mut app = w.spawn([""; 0]);
+    thread::sleep(Duration::from_secs(2));
+    assert!(!app.exited());
+    assert_eq!(
+        w.json(["status"]).ok()["lock"],
+        json!({"held_by": "a background sync (icloud-notes --sync, pid 1)", "app_open": false})
+    );
+    assert!(w.stub_log().is_empty(), "its first sync waits: {:?}", w.stub_log());
+    drop(held);
+    assert!(opens_the_window(&w, &mut app));
+    assert!(eventually(|| !w.stub_log().is_empty()), "the sync that waited ran");
+}

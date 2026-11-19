@@ -31,8 +31,8 @@ Cargo workspace (`Cargo.toml`):
   Started with no command (or a first word that is none), the `icloud-notes` binary runs
   `icloud-notes-app` beside it; so does `export-pdf`, which lays out a page. The window is that
   binary (`src/bin/app/`, GTK 4 on omui behind the default `ui` feature, so the command line links
-  no GTK), one per vault (its GApplication id), keeping its layout in
-  `$XDG_CONFIG_HOME/icloud-notes/window.json`; `dev/preview.sh` takes pictures of it on a seeded
+  no GTK), one per vault (its GApplication id; with no session bus, an app lock beside the vault's),
+  keeping its layout in `$XDG_CONFIG_HOME/icloud-notes/window.json`; `dev/preview.sh` takes pictures of it on a seeded
   vault and the stub engine. `tests/blackbox/` holds the binary to its behaviour: the command line
   driven as a separate process, the window on a Broadway display of the test's own, whichever binary
   `ICLOUD_NOTES_BIN` names (`bin/check` and the PKGBUILD's `check()` name the one cargo built;

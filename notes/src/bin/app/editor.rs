@@ -150,24 +150,17 @@ fn follow_cursor(view: &gtk::TextView, highlight: &Rc<Highlighter>) {
     let buffer = view.buffer();
     let h = highlight.clone();
     buffer.connect_changed(move |_| h.all());
-    let cursor_line = |view: &gtk::TextView| {
-        let buffer = view.buffer();
-        view.has_focus()
-            .then(|| buffer.iter_at_offset(buffer.cursor_position()).line())
-    };
-    let (h, v) = (highlight.clone(), view.downgrade());
-    buffer.connect_cursor_position_notify(move |_| {
-        if let Some(view) = v.upgrade() {
-            h.set_active_line(cursor_line(&view));
-        }
-    });
+    let cursor_line = |buffer: &gtk::TextBuffer| buffer.iter_at_offset(buffer.cursor_position()).line();
     let focus = gtk::EventControllerFocus::new();
-    let (h, v) = (highlight.clone(), view.downgrade());
-    focus.connect_enter(move |_| {
-        if let Some(view) = v.upgrade() {
-            h.set_active_line(cursor_line(&view));
+    let (h, f) = (highlight.clone(), focus.downgrade());
+    buffer.connect_cursor_position_notify(move |buffer| {
+        if let Some(focus) = f.upgrade() {
+            h.set_active_line(focus.contains_focus().then(|| cursor_line(buffer)));
         }
     });
+    // The view's own has_focus is not set yet as the focus enters it.
+    let (h, b) = (highlight.clone(), buffer.clone());
+    focus.connect_enter(move |_| h.set_active_line(Some(cursor_line(&b))));
     let h = highlight.clone();
     focus.connect_leave(move |_| h.set_active_line(None));
     view.add_controller(focus);

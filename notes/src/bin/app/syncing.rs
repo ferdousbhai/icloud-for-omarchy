@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use gtk::{glib, prelude::*};
 use icloud_notes::backend::Event;
+use icloud_notes::lock::Taken;
 use icloud_notes::sync::{Kind, Run, Started};
 use icloud_notes::{session, syncmodel};
 
@@ -213,31 +214,32 @@ impl Ui {
     }
 
     /// Starts `kind`, unless a run is under way. While another process holds
-    /// the vault's lock it waits for it.
+    /// the vault's lock it waits for it, and saves wait with it.
     pub fn run(self: &Rc<Self>, kind: Kind) {
         let started = {
             let mut b = self.backend.borrow_mut();
             if b.sync_running() {
                 return;
             }
-            if !b.holds_lock() && b.lock_vault() == icloud_notes::lock::Taken::Busy {
-                let holder = b.lock_holder();
-                drop(b);
-                self.set_status(&format!("Waiting for {holder} to finish…"));
-                let weak = Rc::downgrade(self);
-                glib::timeout_add_local_once(LOCK_RETRY, move || {
-                    if let Some(ui) = weak.upgrade() {
-                        ui.run(kind);
-                    }
-                });
-                return;
-            }
-            b.start(kind)
+            b.begin(kind)
         };
+        self.started(kind, started);
+    }
+
+    fn started(self: &Rc<Self>, kind: Kind, started: Started) {
         self.last_sync.set(Some(Instant::now()));
         match started {
             Started::Nothing => self.freshening.set(false),
             Started::Ended(runs) => self.ran(vec![runs]),
+            Started::Waiting => {
+                self.waiting_run.set(Some(kind));
+                let holder = self.backend.borrow().lock_holder();
+                self.set_status(&format!("Waiting for {holder} to finish…"));
+                self.spinner.set_visible(true);
+                self.show_banners();
+                self.show_vault();
+                self.wait_for_lock();
+            }
             Started::Running(running) => {
                 self.run_stopper.replace(Some(running.stopper()));
                 self.spinner.set_visible(true);
@@ -258,6 +260,44 @@ impl Ui {
                 );
             }
         }
+    }
+
+    /// Another process holds the vault's lock (a background sync, a command
+    /// line change): looks again until the window holds it, then starts the
+    /// run that waited for it, or reads what that process changed.
+    pub fn wait_for_lock(self: &Rc<Self>) {
+        if self.lock_retry.get() {
+            return;
+        }
+        self.lock_retry.set(true);
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local(LOCK_RETRY, move || {
+            let Some(ui) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let run = ui.waiting_run.get();
+            let started = {
+                let mut b = ui.backend.borrow_mut();
+                match run {
+                    Some(_) => b.go_on(),
+                    None if b.lock_vault() == Taken::Busy => Started::Waiting,
+                    None => Started::Nothing,
+                }
+            };
+            match (run, started) {
+                (_, Started::Waiting) => return glib::ControlFlow::Continue,
+                (Some(kind), started) => {
+                    ui.waiting_run.set(None);
+                    ui.started(kind, started);
+                }
+                (None, _) => {
+                    ui.backend.borrow_mut().refresh();
+                    ui.after_reload();
+                }
+            }
+            ui.lock_retry.set(false);
+            glib::ControlFlow::Break
+        });
     }
 
     /// A run's refused sign-ins, told to icloud-session off the main loop;

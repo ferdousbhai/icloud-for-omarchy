@@ -22,7 +22,8 @@ mod settings;
 mod syncing;
 mod window;
 
-use gtk::prelude::*;
+use gtk::{gio, prelude::*};
+use icloud_notes::lock::{Taken, VaultLock};
 
 pub const APP_ID: &str = "com.ferdousbhai.IcloudNotes";
 
@@ -42,6 +43,16 @@ fn main() -> gtk::glib::ExitCode {
     let app = omui::application(&application_id(), "icloud-notes", "Notes", window::CSS, |app| {
         window::Window::new(app).present();
     });
+    // GApplication is one per id only on a session bus; without one, the
+    // vault's own app lock still keeps a second window off it. (A launch
+    // that reaches the first window through the bus shows it and ends.)
+    let _ = app.register(gio::Cancellable::NONE);
+    let path = icloud_notes::vault::Vault::locate(None).lock_path();
+    let mut instance = VaultLock::new(format!("{}-app.lock", path.display()).into());
+    if !app.is_remote() && instance.try_lock(&format!("Notes (pid {})", std::process::id())) == Taken::Busy {
+        eprintln!("icloud-notes: Notes is open on this vault already.");
+        return gtk::glib::ExitCode::SUCCESS;
+    }
     // A word that is no command opens the window as no word does
     // (`icloud-notes bogus`): the arguments are not GApplication's.
     app.run_with_args::<&str>(&[])
@@ -50,7 +61,8 @@ fn main() -> gtk::glib::ExitCode {
 /// One window per vault, as the vault has one lock: a second launch on the
 /// same vault shows the first window and ends. The usual vault is the app's
 /// own id (the desktop entry's, which the window is known by); one named by
-/// `ICLOUD_NOTES_VAULT` gets an id of its own.
+/// `ICLOUD_NOTES_VAULT` gets an id of its own. Without a session bus,
+/// `main`'s app lock keeps it to one.
 fn application_id() -> String {
     match std::env::var_os("ICLOUD_NOTES_VAULT").filter(|dir| !dir.is_empty()) {
         None => APP_ID.to_string(),

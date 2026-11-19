@@ -1,6 +1,6 @@
-//! What only a window reaches of the backend: a save under a running sync,
-//! unsaved edits meeting a note that changed on disk or went away, and the
-//! warning before a save. (The command line's own use of the backend is
+//! What only a window reaches of the backend: a save under a running sync
+//! (or one waiting for another process's lock), unsaved edits meeting a note
+//! that changed on disk or went away, and the warning before a save. (The command line's own use of the backend is
 //! held by tests/blackbox/.) The engine here is a script with fixed answers.
 
 use std::fs;
@@ -427,4 +427,30 @@ fn the_windows_search_reads_the_first_notes_and_hands_them_to_recall() {
         b.search_window("~n", false).hits.is_empty(),
         "one character is no query"
     );
+}
+
+#[test]
+fn a_run_waits_for_another_processs_lock_and_saves_wait_with_it() {
+    let mut w = World::new("# Q\none\n");
+    let lock = icloud_notes::vault::Vault::at(w.dir.path().join("vault").to_string_lossy()).lock_path();
+    let mut other = icloud_notes::lock::VaultLock::new(lock);
+    assert_eq!(other.try_lock("a background sync"), icloud_notes::lock::Taken::Locked);
+    assert!(matches!(w.backend.begin(Kind::Pull), Started::Waiting));
+    assert!(w.backend.sync_running());
+    assert!(!w.backend.save_note("# Q\none, mine\n", None), "it waits");
+    assert!(matches!(w.backend.go_on(), Started::Waiting), "the lock is still taken");
+    assert_eq!(w.read("Q.md"), format!("{ID}# Q\none\n"));
+    assert!(
+        !w.backend.close_writes_queued_save(),
+        "the run is not this process's to stop"
+    );
+    other.release();
+    drop(other);
+    let Started::Running(running) = w.backend.go_on() else {
+        panic!("the engine starts once the lock is free");
+    };
+    assert!(w.backend.holds_lock());
+    w.backend.finish(running.wait());
+    assert_eq!(w.read("Q.md"), format!("{ID}# Q\none, mine\n"));
+    assert!(matches!(w.backend.go_on(), Started::Nothing), "no run waits");
 }

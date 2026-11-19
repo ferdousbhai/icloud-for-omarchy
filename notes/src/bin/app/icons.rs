@@ -1,5 +1,5 @@
 //! The icons omui does not bundle: Lucide's (ISC, as omui's are)
-//! bold, italic, link, paperclip, folder-plus and square-pen. omui's own are
+//! bold, italic, link, paperclip, folder-plus, square-pen and circle. omui's own are
 //! outlined into fills so GTK recolours them; these stay strokes, so each is
 //! drawn here in the theme's text colour, and again when the theme changes.
 
@@ -10,6 +10,8 @@ pub const ITALIC: &str = r#"<line x1="19" x2="10" y1="4" y2="4"/><line x1="14" x
 pub const LINK: &str = r#"<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>"#;
 pub const ATTACH: &str = r#"<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>"#;
 pub const NEW_FOLDER: &str = r#"<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>"#;
+/// Lucide's circle: a version of a conflict not picked.
+pub const CIRCLE: &str = r#"<circle cx="12" cy="12" r="10"/>"#;
 pub const NEW_NOTE: &str = r#"<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/>"#;
 
 /// The pixels an icon is drawn at: twice the 16 it is shown at, for a scaled screen.
