@@ -2,8 +2,8 @@
 
 use std::rc::Rc;
 
-use adw::prelude::*;
 use gtk::gio;
+use gtk::prelude::*;
 use icloud_photos::config::DownloadMode;
 
 use super::window::App;
@@ -11,10 +11,7 @@ use super::window::App;
 pub fn show(app: &Rc<App>) {
     let settings = app.settings.borrow().clone();
 
-    let folder = adw::ActionRow::builder()
-        .title("Originals folder")
-        .subtitle(settings.library_dir.display().to_string())
-        .build();
+    let folder = omui::Row::new("Originals folder", &settings.library_dir.display().to_string());
     let choose = gtk::Button::builder()
         .label("Choose…")
         .valign(gtk::Align::Center)
@@ -22,20 +19,20 @@ pub fn show(app: &Rc<App>) {
     folder.add_suffix(&choose);
 
     let modes = gtk::StringList::new(&["On demand", "All"]);
-    let mode = adw::ComboRow::builder()
-        .title("Download originals")
-        .subtitle("On demand: when you open or download one. All: every original, in the background.")
-        .model(&modes)
-        .selected(if settings.download == DownloadMode::All { 1 } else { 0 })
-        .build();
+    let (mode_row, mode) = omui::combo_row(
+        "Download originals",
+        "On demand: when you open or download one. All: every original, in the background.",
+        &modes,
+        if settings.download == DownloadMode::All { 1 } else { 0 },
+    );
 
-    let group = adw::PreferencesGroup::builder().title("Library").build();
-    group.add(&folder);
-    group.add(&mode);
-    let page = adw::PreferencesPage::new();
-    page.add(&group);
-    let dialog = adw::PreferencesDialog::new();
-    dialog.add(&page);
+    let group = omui::Group::new("Library", "");
+    group.add(&folder.widget);
+    group.add(&mode_row.widget);
+    let dialog = omui::Dialog::new(Some("Preferences"), None);
+    dialog.set_extra_child(Some(group.widget.upcast_ref()));
+    dialog.set_content_size(560, -1);
+    dialog.add_response("close", "Close");
 
     let (a, row) = (app.clone(), folder);
     choose.connect_clicked(move |_| {
@@ -62,8 +59,8 @@ pub fn show(app: &Rc<App>) {
     });
 
     let a = app.clone();
-    mode.connect_selected_notify(move |row| {
-        let all = row.selected() == 1;
+    mode.connect_selected_notify(move |mode| {
+        let all = mode.selected() == 1;
         a.settings.borrow_mut().download = if all { DownloadMode::All } else { DownloadMode::OnDemand };
         save(&a);
         if all {
@@ -73,7 +70,7 @@ pub fn show(app: &Rc<App>) {
         }
     });
 
-    dialog.present(Some(&app.window));
+    dialog.present(&app.window);
 }
 
 fn save(app: &App) {

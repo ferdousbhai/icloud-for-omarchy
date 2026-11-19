@@ -399,21 +399,7 @@ impl App {
         let a = self.clone();
         action("regrid", Box::new(move || a.grid.regrid()));
         let a = self.clone();
-        action(
-            "about",
-            Box::new(move || {
-                adw::AboutDialog::builder()
-                    .application_name("Photos")
-                    .application_icon("com.ferdousbhai.IcloudPhotos")
-                    .developer_name("Ferdous Bhai")
-                    .version(env!("CARGO_PKG_VERSION"))
-                    .website("https://github.com/ferdousbhai/icloud-for-omarchy")
-                    .license_type(gtk::License::MitX11)
-                    .comments("Browse, download, upload and delete your iCloud photos, over the shared icloud-session sign-in.")
-                    .build()
-                    .present(Some(&a.window));
-            }),
-        );
+        action("about", Box::new(move || about(&a.window)));
         let open = gio::SimpleAction::new("open-asset", Some(glib::VariantTy::STRING));
         let a = self.clone();
         open.connect_activate(move |_, v| {
@@ -935,6 +921,22 @@ impl App {
             }
         }
     }
+}
+
+/// The app's name, version, author, licence and website.
+fn about(window: &gtk::ApplicationWindow) {
+    let dialog = omui::Dialog::new(
+        Some("Photos"),
+        Some(&format!(
+            "Version {}\n\nBrowse, download, upload and delete your iCloud photos, over the shared icloud-session sign-in.\n\nBy Ferdous Bhai. MIT License.",
+            env!("CARGO_PKG_VERSION")
+        )),
+    );
+    let website = gtk::LinkButton::with_label("https://github.com/ferdousbhai/icloud-for-omarchy", "Website");
+    website.set_halign(gtk::Align::Start);
+    dialog.set_extra_child(Some(website.upcast_ref()));
+    dialog.add_response("close", "Close");
+    dialog.present(window);
 }
 
 /// Keep the sidebar and grid in the same snapshot, including when an album
