@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use adw::prelude::*;
+use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use icloud_photos::upload::{BatchEvent, BatchSummary, Step, is_supported, upload_batch};
 
@@ -20,7 +20,7 @@ pub enum UploadMsg {
 }
 
 pub struct UploadUi {
-    dialog: adw::Dialog,
+    dialog: omui::Dialog,
     progress: gtk::ProgressBar,
     detail: gtk::Label,
     button: gtk::Button,
@@ -96,41 +96,25 @@ fn start(app: &Rc<App>, paths: Vec<PathBuf>) {
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(12)
-        .margin_top(12)
-        .margin_bottom(18)
-        .margin_start(18)
-        .margin_end(18)
         .build();
     content.append(&progress);
     content.append(&detail);
     content.append(&button);
-    let tv = adw::ToolbarView::new();
-    tv.add_top_bar(&adw::HeaderBar::builder().show_end_title_buttons(false).build());
-    tv.set_content(Some(&content));
-    let dialog = adw::Dialog::builder()
-        .title("Uploading to iCloud")
-        .content_width(440)
-        .child(&tv)
-        .can_close(false)
-        .build();
+    // Neither Escape nor anything else closes it while files are going up:
+    // the batch would carry on unseen. It gets its Close once it is over.
+    let dialog = omui::Dialog::new(Some("Uploading to iCloud"), None);
+    dialog.set_extra_child(Some(content.upcast_ref()));
+    dialog.set_content_size(440, -1);
+    dialog.set_can_close(false);
 
     let stop = Arc::new(AtomicBool::new(false));
-    let (a, s) = (app.clone(), stop.clone());
+    let s = stop.clone();
     button.connect_clicked(move |b| {
-        if a.upload.borrow().as_ref().is_some_and(|u| u.dialog.can_close()) {
-            // Release the borrow first: force_close runs the closed handler,
-            // which borrows `upload` again.
-            let ui = a.upload.borrow_mut().take();
-            if let Some(u) = ui {
-                u.dialog.force_close();
-            }
-        } else {
-            s.store(true, Ordering::Relaxed);
-            b.set_sensitive(false);
-            b.set_label("Stopping…");
-        }
+        s.store(true, Ordering::Relaxed);
+        b.set_sensitive(false);
+        b.set_label("Stopping…");
     });
-    dialog.present(Some(&app.window));
+    dialog.present(&app.window);
     *app.upload.borrow_mut() = Some(UploadUi {
         dialog,
         progress,
@@ -226,11 +210,13 @@ pub fn on_msg(app: &Rc<App>, msg: UploadMsg) {
             }
             lines.extend(ui.errors.iter().take(5).cloned());
             ui.detail.set_label(&lines.join("\n"));
+            ui.button.set_visible(false);
+            ui.dialog.add_response("close", "Close");
+            ui.dialog.set_default_response("close");
+            ui.dialog.set_close_response("close");
             ui.dialog.set_can_close(true);
-            ui.button.set_label("Close");
-            ui.button.set_sensitive(true);
-            let (d, a) = (ui.dialog.clone(), app.clone());
-            d.connect_closed(move |_| {
+            let a = app.clone();
+            ui.dialog.connect_response(move |_, _| {
                 a.upload.borrow_mut().take();
             });
             drop(guard);
