@@ -10,9 +10,13 @@
 //! Every `playSound` and `lostDevice` request is recorded (endpoint and
 //! JSON body): `GET /fake/actions` lists them, so a test or an agent can
 //! check what the app sent without a real device ringing.
+//!
+//! `POST /fake/sign-out` answers every Find My request 421 (signed out), and
+//! `POST /fake/find-my-password` answers them 450 (Find My wants the Apple
+//! password), until the app's Sign In (`/mock/reauthenticate`).
 
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use icloud_session::time::now_ms;
@@ -23,6 +27,8 @@ use serde_json::{Value, json};
 pub struct State {
     refreshes: AtomicU64,
     actions: Mutex<Vec<Value>>,
+    /// What every Find My request answers instead: 421 or 450; 0 for none.
+    refusing: AtomicU16,
 }
 
 impl State {
@@ -72,6 +78,10 @@ fn route(state: &State, path: &str, sent: &Value) -> (u16, Value) {
             .unwrap()
             .push(json!({"endpoint": endpoint, "body": sent}));
     };
+    let refusing = state.refusing.load(Ordering::SeqCst);
+    if refusing != 0 && path.starts_with("/fmipservice/") {
+        return (refusing, Value::Null);
+    }
     match path {
         // A restarted app picks up where the walk left off.
         "/fmipservice/client/web/initClient" => match state.refreshes.load(Ordering::SeqCst) {
@@ -91,8 +101,19 @@ fn route(state: &State, path: &str, sent: &Value) -> (u16, Value) {
             (200, fixture("lostDevice"))
         }
         "/fake/actions" => (200, json!(state.actions())),
-        // icloud_session::sign_in() in mock mode; this account never signs out.
-        "/mock/reauthenticate" => (200, json!({"ok": true})),
+        "/fake/sign-out" => {
+            state.refusing.store(421, Ordering::SeqCst);
+            (200, json!({"ok": true}))
+        }
+        "/fake/find-my-password" => {
+            state.refusing.store(450, Ordering::SeqCst);
+            (200, json!({"ok": true}))
+        }
+        // icloud_session::sign_in() in mock mode.
+        "/mock/reauthenticate" => {
+            state.refusing.store(0, Ordering::SeqCst);
+            (200, json!({"ok": true}))
+        }
         _ => (404, json!({"error": "not found"})),
     }
 }
