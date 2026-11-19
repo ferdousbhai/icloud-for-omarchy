@@ -27,6 +27,8 @@ required-features = ["ui"]
 [features]
 default = ["ui"]
 ui = ["dep:gtk", "dep:omui", "dep:async-channel"]
+# The window driven by a script (bin/qa): omui's scripted QA, which a release build leaves out.
+qa = ["ui", "omui/qa"]
 
 [dependencies]
 # The shared iCloud sign-in (a D-Bus client for icloud-sessiond).

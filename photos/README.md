@@ -245,10 +245,9 @@ Layout:
 an end-to-end run against the fake server, and `tests/cli.rs`, which runs
 the built binary against it for every command); the root `bin/check` runs
 it with clippy and every other crate's tests.
-In debug builds, `ICLOUD_PHOTOS_SCREENSHOT=out.png` (optionally with
-`ICLOUD_PHOTOS_SCREENSHOT_VIEW=viewer` or `prefs`) renders the window to a
-PNG after the first sync and quits, so the UI can be checked headless with
-`GDK_BACKEND=broadway`. `dev/preview.sh <out-dir> [theme-dir ...]` takes pictures
+`bin/qa photos` drives the window through `dev/qa/*.jsonl` on the fake server,
+headless (omui's scripted QA; `bin/check` runs it), and writes their pictures to
+`target/qa/photos/`. `dev/preview.sh <out-dir> [theme-dir ...]` takes pictures
 of the window on the fake server in a nested Hyprland, with a private home,
 session bus and Omarchy theme: the grid, the viewer, the preferences, About, an
 upload at work, a delete and its Undo toast, and the sign-in banner.

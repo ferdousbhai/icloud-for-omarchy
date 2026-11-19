@@ -1,0 +1,20 @@
+# Photos on the fake CloudKit: the library by month beside the albums, once the first sync is done; the preferences
+# (Ctrl+,) and About, each closed with Escape; then a narrow window, one pane.
+{"do":"wait","role":"progress-bar","name":"Loading","visible":false,"timeout_ms":30000}
+{"do":"wait","role":"button","name":"IMG_1120.JPG","visible":true}
+{"do":"shot","path":"grid.png"}
+{"do":"key","keys":"<Control>comma"}
+{"do":"state"}
+{"do":"shot","path":"prefs.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"action","name":"win.about"}
+{"do":"state"}
+{"do":"shot","path":"about.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"resize","width":560,"height":760}
+{"do":"state"}
+{"do":"list"}
+{"do":"shot","path":"narrow.png"}
+{"do":"quit"}

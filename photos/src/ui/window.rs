@@ -407,47 +407,6 @@ impl App {
         self.window.present();
         self.load_transport();
         self.watch_sign_in();
-        #[cfg(debug_assertions)]
-        self.dev_screenshot();
-    }
-
-    /// Debug builds only: `ICLOUD_PHOTOS_SCREENSHOT=out.png` renders the
-    /// window to a PNG after the first sync settles and quits;
-    /// `ICLOUD_PHOTOS_SCREENSHOT_VIEW=viewer` opens the newest photo first.
-    /// Lets the UI be checked headless (GDK_BACKEND=broadway) against the
-    /// fake server.
-    #[cfg(debug_assertions)]
-    fn dev_screenshot(self: &Rc<Self>) {
-        let Some(path) = std::env::var_os("ICLOUD_PHOTOS_SCREENSHOT") else {
-            return;
-        };
-        let view = std::env::var("ICLOUD_PHOTOS_SCREENSHOT_VIEW").unwrap_or_default();
-        let a = self.clone();
-        glib::timeout_add_seconds_local_once(6, move || {
-            if view == "viewer"
-                && let Some(id) = a.grid.ids().first()
-            {
-                a.open_viewer(id);
-            }
-            if view == "prefs" {
-                super::prefs::show(&a);
-            }
-            glib::timeout_add_seconds_local_once(4, move || {
-                let w = &a.window;
-                let paintable = gtk::WidgetPaintable::new(Some(w));
-                let snap = gtk::Snapshot::new();
-                paintable.snapshot(&snap, f64::from(w.width()), f64::from(w.height()));
-                if let (Some(node), Some(renderer)) = (snap.to_node(), w.native().and_then(|n| n.renderer())) {
-                    let tex = renderer.render_texture(node, None);
-                    if let Err(e) = tex.save_to_png(&path) {
-                        eprintln!("icloud-photos: screenshot: {e}");
-                    }
-                }
-                if let Some(app) = w.application() {
-                    app.quit();
-                }
-            });
-        });
     }
 
     pub(super) fn load_transport(&self) {

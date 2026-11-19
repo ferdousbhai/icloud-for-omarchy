@@ -61,7 +61,9 @@ Cargo workspace (`Cargo.toml`):
   Omarchy theme, icons and widgets (a git dependency pinned by `rev` in the workspace
   `Cargo.toml`), which must not load libadwaita (their `tests/cli.rs` check, and the PKGBUILD's
   `_refuse_link` for the release binaries). Each app's `dev/preview.sh` takes pictures of its
-  window on the fake, in a nested compositor. Each has a fake Apple server
+  window on the fake, in a nested compositor, and its `dev/qa/*.jsonl` drive the window headless
+  through omui's scripted QA (feature `qa`, which release builds leave off), run by `bin/qa`,
+  which says what they cannot reach. Each has a fake Apple server
   under `examples/` (selected with `ICLOUD_SESSION_MOCK=1 ICLOUD_SESSION_MOCK_URL=…`) and CLI
   tests in `tests/`.
 - `reminders/` — `icloud-reminders`, built like Photos and
@@ -84,7 +86,7 @@ Cargo workspace (`Cargo.toml`):
   against an in-memory Drive that mirrors what was measured of the real one; read the notes at the
   top of `remote.rs` before changing how changes are detected.
 - `packaging/PKGBUILD` — one split recipe for all six packages, built and tested together. `install.sh` — the signed-repo one-liner installer.
-- `bin/` — `build`, `check`, `check-shared-support` (vendored copies shared with sibling repos; this repo holds the canonical checker and its test, `tests/test_shared_support.py`; see `SHARED_SUPPORT.md`), `build-packages <arch>` (native Arch build), `arch-run` (disposable CI/verification chroot), `collect-packages`,
+- `bin/` — `build`, `check`, `qa` (the windows' QA scripts, headless), `check-shared-support` (vendored copies shared with sibling repos; this repo holds the canonical checker and its test, `tests/test_shared_support.py`; see `SHARED_SUPPORT.md`), `build-packages <arch>` (native Arch build), `arch-run` (disposable CI/verification chroot), `collect-packages`,
   `make-installers`, `release`, `verify-release`, `dev-install`/`dev-uninstall` (puts a release
   sessiond in `~/.local/bin` with a user D-Bus activation file).
 - `tests/` — installer tests (`install_test.sh`, stubbed pacman in a user namespace),
@@ -93,8 +95,8 @@ Cargo workspace (`Cargo.toml`):
 ## Commands
 
 ```sh
-bin/check                      # what changed since origin/main: clippy + tests of those crates and their dependents, Notes' black-box suite, and the installer/packaging tests it touches (the pre-push hook)
-bin/check --all                # everything routine: rustfmt, clippy -D warnings, all Rust tests, Notes' black-box suite, installer + packaging tests (CI runs the same on release)
+bin/check                      # what changed since origin/main: clippy + tests of those crates and their dependents, Notes' black-box suite, the windows' QA scripts, and the installer/packaging tests it touches (the pre-push hook)
+bin/check --all                # everything routine: rustfmt, clippy -D warnings, all Rust tests, Notes' black-box suite, the QA scripts, installer + packaging tests (CI runs the same on release, but the QA scripts)
 bin/check --deep               # --all plus the random-exploration suites (#[ignore = "deep: ..."]): bug hunting after big changes, not every push
 bin/build [icloud-photos ...] # release binaries into target/release/
 cargo test -p icloud-findmy   # one crate

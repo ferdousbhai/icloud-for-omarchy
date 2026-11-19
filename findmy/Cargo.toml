@@ -31,6 +31,8 @@ required-features = ["ui"]
 [features]
 default = ["ui"]
 ui = ["dep:icloud-app-ui", "dep:gtk", "dep:omui", "dep:shumate"]
+# The window driven by a script (bin/qa): omui's scripted QA, which a release build leaves out.
+qa = ["ui", "omui/qa"]
 
 [dependencies]
 # The workspace's session/ crate.

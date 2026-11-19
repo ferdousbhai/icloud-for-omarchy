@@ -1,0 +1,33 @@
+# Find My on the fake: the devices with their batteries, the first located one selected on the map.
+{"do":"wait","role":"list-item","name":"Test's iPhone","visible":true,"timeout_ms":15000}
+{"do":"wait","role":"button","name":"Device Actions","sensitive":true}
+{"do":"shot","path":"devices.png"}
+
+# Play Sound on the selected device: its toast.
+{"do":"action","name":"win.play-sound"}
+{"do":"wait","toasts":["Playing a sound on Test's iPhone"]}
+{"do":"shot","path":"sound.png"}
+
+# Lost Mode asks for a phone number before Turn On is enabled; Escape closes it.
+{"do":"action","name":"win.lost-mode"}
+{"do":"wait","dialog":"Turn On Lost Mode for Test's iPhone?"}
+{"do":"wait","role":"button","name":"Turn On","sensitive":false}
+{"do":"type","text":"+1 555 0100"}
+{"do":"wait","role":"button","name":"Turn On","sensitive":true}
+{"do":"shot","path":"lost-filled.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+
+# The sidebar put away with its button (Space on it, where the keyboard starts): the map alone, and back.
+{"do":"focus","role":"toggle-button","name":"Devices"}
+{"do":"key","keys":"space"}
+{"do":"wait","role":"list-item","name":"Test's iPhone","visible":false}
+{"do":"shot","path":"map.png"}
+{"do":"key","keys":"space"}
+{"do":"wait","role":"list-item","name":"Test's iPhone","visible":true}
+
+# A narrow window: the sidebar over the map.
+{"do":"resize","width":560,"height":720}
+{"do":"state"}
+{"do":"shot","path":"narrow.png"}
+{"do":"quit"}

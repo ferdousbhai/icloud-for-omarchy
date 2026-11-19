@@ -10,7 +10,8 @@
 #                      marked #[ignore = "deep: ..."]: for hunting bugs after a big change, not for
 #                      every push. Raise their case counts with each suite's *_CASES variable.
 #
-# Always: the shared-support check (bin/check-shared-support) and its test, rustfmt. Then, as chosen:
+# Always: the shared-support check (bin/check-shared-support) and its test, rustfmt, and the windows' QA scripts
+# (bin/qa). Then, as chosen:
 # clippy and the Rust tests, Notes' black-box suite (notes/tests/blackbox/), install.sh's shared add_signed_repo
 # hash and the installers against stubbed pacman (tests/install_test.sh), and the packaging and release
 # tests (tests/packaging_test.py). The notes-sync recorded scenarios and golden corpora run with that
@@ -127,6 +128,12 @@ if ((all || all_rust)) || touched '^(notes|notes-sync|session|app)/'; then
 else
   echo "Notes black-box suite: unchanged, skipped" >&2
 fi
+
+# The windows driven through their QA scripts (bin/qa), on every check: built with omui's scripted QA, which the
+# release builds and the PKGBUILD's check() leave out. After the black-box suite, whose binary is built without it.
+cargo build --locked -p icloud-notes -p icloud-notes-sync -p icloud-photos -p icloud-findmy -p icloud-reminders \
+  --bins --examples --features icloud-notes/qa,icloud-photos/qa,icloud-findmy/qa,icloud-reminders/qa
+bin/qa
 
 if touched '^(install[^/]*\.sh|tests/install_test\.sh|tests/add_signed_repo\.sha256|bin/make-installers)$'; then
   tests/install_test.sh

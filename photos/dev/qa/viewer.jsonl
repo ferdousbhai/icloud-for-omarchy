@@ -1,0 +1,11 @@
+# The newest photo in the viewer, and Delete's question, closed with Escape.
+{"do":"wait","role":"progress-bar","name":"Loading","visible":false,"timeout_ms":30000}
+{"do":"click","role":"button","name":"IMG_1120.JPG"}
+{"do":"wait","role":"label","name":"1 of 120","visible":true}
+{"do":"shot","path":"viewer.png"}
+{"do":"key","keys":"Delete"}
+{"do":"wait","dialog":"Delete this photo?"}
+{"do":"shot","path":"delete.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"quit"}

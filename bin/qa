@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# Drives the windows through their QA scripts, each app's dev/qa/*.jsonl: omui's scripted QA (feature `qa`, its
+# protocol in omui's README), on a broadway display of the run's own, with a private HOME and XDG directories, no
+# session bus, and the app's stand-in data: the repository's fake iCloud for Photos, Find My and Reminders, a
+# seeded scratch vault and the stub engine for Notes. No window opens anywhere visible, and nothing of the desktop
+# or the account it is run from is read. bin/check runs it; it builds nothing itself:
+#
+#   cargo build -p icloud-notes -p icloud-notes-sync -p icloud-photos -p icloud-findmy -p icloud-reminders --bins \
+#     --examples --features icloud-notes/qa,icloud-photos/qa,icloud-findmy/qa,icloud-reminders/qa
+#   bin/qa [notes|photos|findmy|reminders|<app>/dev/qa/<script>.jsonl ...]   (default: all four apps' scripts)
+#
+# A script fails on a command that fails, on GLib logging a warning or a critical, or on ending without `quit`; the
+# run then prints each command beside its answer and the app's output. A script's `shot`s are written under
+# target/qa/<app>/, the app's working directory.
+#   QA_TIMEOUT=120   seconds before one script's run is stopped
+#   QA_VERBOSE=1     the commands and answers, and the app's output, of a script that passed too
+#
+# What the scripts leave to each app's dev/preview.sh (a nested compositor, which tiles the window to any size):
+# - Broadway's screen is 1024x768, so no window is wider: Notes shows its tree, never the two lists. And a window
+#   asked to shrink keeps the least width its wide layout needs, so Notes cannot be made narrow enough for one pane.
+# - With the page connected that `key` and `type` need, GTK 4.24's broadway display aborts (broadway-output.c,
+#   append_node_ops: !reused_node->consumed) on a frame that brings in again, at two places, an icon drawn in the
+#   frame before: its renderer reuses a node by its pointer, and every image of one icon shares that node. So no
+#   script rebuilds a list of rows with icons after the first frame: Notes' tree on an unfold or a note opened,
+#   Photos' grid on coming back from the viewer or after a delete (its Undo toast), a Reminders list opened.
+set -Eeuo pipefail
+cd "$(dirname "$0")/.."
+repo=$PWD
+target=$(realpath -m -- "${CARGO_TARGET_DIR:-target}")
+apps=("$@")
+(( ${#apps[@]} )) || apps=(notes photos findmy reminders)
+command -v gtk4-broadwayd >/dev/null || { echo "qa: gtk4-broadwayd (gtk4) is required" >&2; exit 1; }
+
+root=""
+broadway_pid=""
+fake_pid=""
+app_pid=""
+stop() { # stop PID...: only the processes this script started
+  local pid
+  for pid in "$@"; do
+    [[ -z $pid ]] || kill -TERM "$pid" 2>/dev/null || true
+  done
+  for pid in "$@"; do
+    [[ -z $pid ]] || wait "$pid" 2>/dev/null || true
+  done
+}
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+  stop "$app_pid" "$fake_pid" "$broadway_pid"
+  [[ -z $root || $root != /tmp/icloud-qa.* ]] || rm -rf -- "$root"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# A file of the scratch vault, its mtime `days` back (the lists' order and dates).
+put() {
+  local relative=$1 days=$2 text=$3
+  mkdir -p "$(dirname -- "$root/vault/$relative")"
+  printf '%s' "$text" > "$root/vault/$relative"
+  touch -d "@$(( $(date +%s) - days * 86400 ))" "$root/vault/$relative"
+}
+
+# The stand-in an app runs on, started fresh for each script: its environment goes into `stand_in`.
+fake() { # fake EXAMPLE ARGS... -- BANNER: a fake Apple server, which prints BANNER and its URL once it listens
+  local example=$1 banner=${*: -1} url=""
+  "$target/debug/examples/$example" "${@:2:$#-3}" > "$root/fake.log" 2>&1 &
+  fake_pid=$!
+  for _ in {1..100}; do
+    url=$(sed -n "s/^$banner//p" "$root/fake.log")
+    [[ -z $url ]] || break
+    sleep 0.05
+  done
+  [[ -n $url ]] || { echo "qa: $example did not start" >&2; cat "$root/fake.log" >&2; return 1; }
+  stand_in+=(ICLOUD_SESSION_MOCK=1 "ICLOUD_SESSION_MOCK_URL=$url")
+}
+start_stand_in() {
+  stand_in=()
+  case $1 in
+  notes)
+    # Six notes in four folders, three of them tracked by the engine; the stub engine finds no sync due.
+    put .icloud-notes/state.json 9 '{"layoutVersion":4,"titleMode":"in-body","notes":{'\
+'"a":{"file":"Notes/Groceries.md","recordChangeTag":"t","modificationDate":0},'\
+'"b":{"file":"Notes/Trip ideas.md","recordChangeTag":"t","modificationDate":0},'\
+'"c":{"file":"Recipes/Pancakes.md","recordChangeTag":"t","modificationDate":0}}}'
+    put Notes/Groceries.md 0 $'---\napple-note-id: a\n---\n# Groceries\nmilk, eggs, **sourdough** from [the bakery](https://example.com)\n\n## Weekend\n- [ ] oat milk\n- [x] coffee\n'
+    put "Notes/Trip ideas.md" 2 $'---\napple-note-id: b\n---\n# Trip ideas\nKyoto in spring for the cherry blossoms.\n'
+    put Recipes/Pancakes.md 5 $'---\napple-note-id: c\n---\n# Pancakes\nflour, eggs, very hot pan\n'
+    put Recipes/Desserts/Brownies.md 12 $'# Brownies\ndark chocolate, a pinch of salt\n'
+    put "Work/Quarterly plan.md" 1 $'# Quarterly plan\nship the one-pane sidebar\n'
+    stand_in=("ICLOUD_NOTES_VAULT=$root/vault" "ICLOUD_NOTES_SYNC_BIN=$repo/notes/tests/stubs/icloud-notes-sync"
+      "ICLOUD_NOTES_SYNC_REAL=$target/debug/icloud-notes-sync" ICLOUD_NOTES_SYNC_STUB_STEP=idle)
+    ;;
+  photos) fake fake_cloudkit --port 0 -- 'Fake CloudKit with [0-9]* assets at ' ;;
+  findmy) fake fake_findme 127.0.0.1:0 -- 'Fake Find My on ' ;;
+  reminders) fake fake_reminders 127.0.0.1:0 -- 'Fake iCloud Reminders on ' ;;
+  *) echo "qa: no app named $1" >&2; return 2 ;;
+  esac
+}
+
+# One script: a fresh scratch home, display and stand-in, the app driven to its end, and all of it stopped again.
+run() {
+  local app=$1 script=$2 display port status=0
+  root=$(mktemp -d /tmp/icloud-qa.XXXXXX)
+  mkdir -p "$root"/{home,config,state,data,cache,runtime}
+  chmod 700 "$root/runtime"
+  # A display number and input port of this run's own; broadwayd listens on 127.0.0.1 alone, where the app sends
+  # the script's key presses as broadway's web page would.
+  display=$(( 100 + ($$ + RANDOM) % 800 ))
+  port=$(( 8080 + display ))
+  XDG_RUNTIME_DIR=$root/runtime gtk4-broadwayd --address 127.0.0.1 --port "$port" ":$display" \
+    > "$root/broadwayd.log" 2>&1 &
+  broadway_pid=$!
+  for _ in {1..100}; do
+    [[ -S $root/runtime/broadway$((display + 1)).socket ]] && break
+    kill -0 "$broadway_pid" 2>/dev/null || { cat "$root/broadwayd.log" >&2; return 1; }
+    sleep 0.05
+  done
+  start_stand_in "$app" || return 1
+  local shots=$target/qa/$app
+  mkdir -p "$shots"
+  # In the background and waited for, so that a signal runs the trap; `timeout` stops the app with it.
+  (cd "$shots" && exec env -u WAYLAND_DISPLAY -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS -u GTK_THEME \
+    HOME="$root/home" XDG_CONFIG_HOME="$root/config" XDG_STATE_HOME="$root/state" XDG_DATA_HOME="$root/data" \
+    XDG_CACHE_HOME="$root/cache" XDG_RUNTIME_DIR="$root/runtime" LC_ALL=C.UTF-8 TZ=UTC "${stand_in[@]}" \
+    GDK_BACKEND=broadway BROADWAY_DISPLAY=":$display" OMUI_QA=1 OMUI_QA_INPUT="127.0.0.1:$port" OMUI_QA_FD=3 \
+    timeout "${QA_TIMEOUT:-120}" "$target/debug/icloud-$app-app" < "$script" 3> "$root/answers" > "$root/app.log" 2>&1) &
+  app_pid=$!
+  wait "$app_pid" || status=$?
+  app_pid=""
+  if (( status != 0 || ${QA_VERBOSE:-0} )); then
+    # Each command beside its answer; the failure that ended the run comes last.
+    grep -Ev '^[[:space:]]*(#|$)' "$script" | awk -v answers="$root/answers" '
+      { if ((getline answer < answers) > 0) { print "> " $0; print "< " answer } else { print "> " $0 " (not run)" } }
+      END { while ((getline answer < answers) > 0) print "< " answer }' >&2
+    echo "--- the app's output:" >&2
+    cat "$root/app.log" >&2
+    [[ ! -s $root/broadwayd.log ]] || { echo "--- the display's:" >&2; cat "$root/broadwayd.log" >&2; }
+  fi
+  if (( status == 0 )); then
+    echo "qa: $app/${script##*/}: passed"
+  else
+    echo "qa: $app/${script##*/}: failed with status $status" >&2
+  fi
+  stop "$fake_pid" "$broadway_pid"
+  fake_pid="" broadway_pid=""
+  rm -rf -- "$root"
+  root=""
+  return "$status"
+}
+
+failed=0
+for app in "${apps[@]}"; do
+  # An app's scripts, or one script named by its path (notes/dev/qa/lists.jsonl).
+  scripts=("$repo/$app"/dev/qa/*.jsonl)
+  if [[ -f $app ]]; then
+    scripts=("$(realpath -- "$app")")
+    app=${app%%/*}
+  fi
+  [[ -x $target/debug/icloud-$app-app ]] || { echo "qa: build first (see bin/qa's header)" >&2; exit 1; }
+  for script in "${scripts[@]}"; do
+    [[ -e $script ]] || { echo "qa: $app has no dev/qa/*.jsonl" >&2; exit 1; }
+    run "$app" "$script" || failed=1
+  done
+done
+exit "$failed"

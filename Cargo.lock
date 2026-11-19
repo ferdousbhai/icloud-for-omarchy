@@ -1457,6 +1457,7 @@ source = "git+https://github.com/ferdousbhai/omui?rev=84fda37d4df6c0f0f47e8296c4
 dependencies = [
  "glib-build-tools",
  "gtk4",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,0 +1,43 @@
+# Notes on a scratch vault and the stub engine, in the tree: broadway's screen is 1024 wide, under the 1062 the two
+# lists need. A folder unfolded, a note opened and the one-pane window are left to dev/preview.sh (see bin/qa).
+{"do":"wait","role":"list-item","name":"Notes","visible":true}
+{"do":"wait","role":"label","name":"Ready.","visible":true}
+{"do":"shot","path":"tree.png"}
+
+# The divider: Right widens the sidebar a step, Home and End take it to the tree's least and most.
+{"do":"wait","role":"search-box","name":"Search notes","width":207}
+{"do":"focus","role":"separator","name":"Sidebar width"}
+{"do":"key","keys":"Right"}
+{"do":"wait","role":"search-box","name":"Search notes","width":223}
+{"do":"key","keys":"Home"}
+{"do":"wait","role":"search-box","name":"Search notes","width":147}
+{"do":"key","keys":"End"}
+{"do":"wait","role":"search-box","name":"Search notes","width":447}
+{"do":"shot","path":"divider.png"}
+
+# Sync status asks the engine what a push would do.
+{"do":"action","name":"win.sync-status"}
+{"do":"state"}
+{"do":"shot","path":"status.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+
+# The Sync log: Clear empties it and leaves it open, disabled once there is nothing left; Escape closes it.
+{"do":"action","name":"win.sync-log"}
+{"do":"wait","dialog":"Sync log"}
+{"do":"wait","role":"button","name":"Clear","in":{"role":"dialog","name":"Sync log"},"sensitive":true}
+{"do":"shot","path":"log.png"}
+{"do":"click","role":"button","name":"Clear","in":{"role":"dialog","name":"Sync log"}}
+{"do":"wait","dialog":"Sync log"}
+{"do":"wait","role":"button","name":"Clear","in":{"role":"dialog","name":"Sync log"},"sensitive":false}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+
+# New folder: its name asked for.
+{"do":"click","role":"button","name":"New folder"}
+{"do":"state"}
+{"do":"shot","path":"new-folder.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+
+{"do":"quit"}

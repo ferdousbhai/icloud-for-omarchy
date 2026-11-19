@@ -1,0 +1,35 @@
+# Reminders on the fake: Upcoming, once the first sync is done.
+{"do":"wait","role":"list-item","name":"Milk","visible":true,"timeout_ms":15000}
+{"do":"shot","path":"lists.png"}
+
+# Ctrl+N: the keyboard in the line that adds a reminder. A due date that cannot be read is refused with a toast.
+{"do":"key","keys":"<Control>n"}
+{"do":"wait","role":"text-box","name":"New reminder (Ctrl+N)","focused":true}
+{"do":"type","text":"Tea"}
+{"do":"key","keys":"Tab"}
+{"do":"type","text":"someday"}
+{"do":"key","keys":"Return"}
+{"do":"wait","toasts":["wants a due date like 2026-10-10, \"2026-10-10 17:30\", today, \"tomorrow 9:00\", 17:30 or +2h, not \"someday\""]}
+{"do":"shot","path":"toast.png"}
+
+# The first reminder's dialog, closed unsaved with Escape.
+{"do":"click","role":"list-item","name":"Milk"}
+{"do":"wait","dialog":"Edit Reminder"}
+{"do":"shot","path":"edit.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+
+# The first reminder ticked, then Show Completed.
+{"do":"set","role":"checkbox","name":"Mark as Completed","in":{"role":"list-item","name":"Milk"},"checked":true}
+{"do":"wait","role":"list-item","name":"Milk","visible":false}
+{"do":"wait","toasts":["Completed \"Milk\""]}
+{"do":"click","role":"toggle-button","name":"Show Completed"}
+{"do":"wait","role":"toggle-button","name":"Show Completed","checked":true}
+{"do":"shot","path":"completed.png"}
+
+# A narrow window: one pane, the reminders the keyboard is in, the lists one step back.
+{"do":"resize","width":480,"height":640}
+{"do":"wait","role":"list-item","name":"Upcoming","visible":false}
+{"do":"wait","role":"list-item","name":"Milk","visible":true}
+{"do":"shot","path":"narrow.png"}
+{"do":"quit"}
