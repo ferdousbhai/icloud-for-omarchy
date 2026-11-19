@@ -128,9 +128,6 @@ enum Change {
 struct Core {
     state: RefCell<State>,
     banner: omui::Banner,
-    /// A button added to the banner, not the banner's own, which cannot be
-    /// the suggested action.
-    button: gtk::Button,
 }
 
 impl Core {
@@ -158,8 +155,7 @@ impl Core {
         let view = self.state.borrow().view();
         if let Some(view) = &view {
             self.banner.set_title(&view.title);
-            self.button.set_label(view.button.map_or("", |(label, _)| label));
-            self.button.set_visible(view.button.is_some());
+            self.banner.set_button_label(view.button.map(|(label, _)| label));
         }
         self.banner.set_revealed(view.is_some());
     }
@@ -193,13 +189,12 @@ impl SignInBanner {
 
     /// Follows the daemon's status for as long as the process lives.
     fn build(state: State, on_signed_in: impl Fn() + 'static, on_error: impl Fn(String) + 'static) -> Self {
-        let banner = omui::Banner::new(state.title, None);
-        let button = banner.add_button(BUTTON, true);
+        let banner = omui::Banner::new(state.title, Some(BUTTON));
+        banner.set_button_suggested(true);
         let widget = banner.widget.clone().upcast();
         let core = Rc::new(Core {
             state: RefCell::new(state),
             banner,
-            button,
         });
         let (tx, rx) = async_channel::unbounded();
         std::thread::Builder::new()
@@ -218,7 +213,7 @@ impl SignInBanner {
             }
         });
         let (weak, on_error) = (Rc::downgrade(&core), Rc::new(on_error));
-        core.button.connect_clicked(move |_| {
+        core.banner.connect_button_clicked(move || {
             if let Some(core) = weak.upgrade() {
                 core.clicked(on_error.clone());
             }

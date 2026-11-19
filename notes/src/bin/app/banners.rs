@@ -20,67 +20,56 @@ const HOW_TO: &str = "In Apple's window, use your Apple ID and password (not the
 
 pub struct Banners {
     pub widget: gtk::Box,
+    /// Its own button is Clone….
     link: omui::Banner,
-    link_icon: gtk::Image,
-    clone: gtk::Button,
     vault: omui::Banner,
+    /// Its own button is Show them.
     deletions: omui::Banner,
-    show_them: gtk::Button,
     delete_them: gtk::Button,
+    /// Its own button is Sign in.
     sign_in: omui::Banner,
-    sign_in_button: gtk::Button,
 }
 
-/// A banner with a glyph before its text. Its buttons are added after it
-/// (omui's own button can be neither the suggested one nor disabled).
-fn banner(icon: &str, class: &str) -> (omui::Banner, gtk::Image) {
-    let banner = omui::Banner::new("", None);
-    let glyph = omui::icon(icon);
-    glyph.add_css_class(class);
-    if let Some(content) = banner.widget.child().and_downcast::<gtk::Box>() {
-        content.prepend(&glyph);
-    }
-    (banner, glyph)
+/// A banner with `icon` before its text, tinted by `class`, and `button` as its own.
+fn banner(icon: &str, class: &str, button: Option<&str>) -> omui::Banner {
+    let banner = omui::Banner::new("", button);
+    banner.set_icon(Some(icon), class);
+    banner
 }
 
 impl Banners {
     pub fn new() -> Banners {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let (link, link_icon) = banner(name::CLOUD, "accent");
-        let clone = link.add_button("Clone…", true);
-        let (vault, _) = banner(name::WARNING, "warning");
-        let (deletions, _) = banner(name::WARNING, "warning");
-        let show_them = deletions.add_button("Show them", false);
+        let link = banner(name::CLOUD, "accent", Some("Clone…"));
+        link.set_button_suggested(true);
+        let vault = banner(name::WARNING, "warning", None);
+        let deletions = banner(name::WARNING, "warning", Some("Show them"));
         let delete_them = deletions.add_button("Delete them…", false);
-        let (sign_in, _) = banner(name::WARNING, "warning");
-        let sign_in_button = sign_in.add_button("Sign in", true);
+        let sign_in = banner(name::WARNING, "warning", Some("Sign in"));
+        sign_in.set_button_suggested(true);
         for banner in [&link, &vault, &deletions, &sign_in] {
             widget.append(&banner.widget);
         }
         Banners {
             widget,
             link,
-            link_icon,
-            clone,
             vault,
             deletions,
-            show_them,
             delete_them,
             sign_in,
-            sign_in_button,
         }
     }
 
     /// What the banners' buttons do.
     pub fn connect(&self, ui: &Rc<Ui>) {
         let weak = Rc::downgrade(ui);
-        self.clone.connect_clicked(move |_| {
+        self.link.connect_button_clicked(move || {
             if let Some(ui) = weak.upgrade() {
                 dialogs::onboarding(&ui);
             }
         });
         let weak = Rc::downgrade(ui);
-        self.show_them.connect_clicked(move |_| {
+        self.deletions.connect_button_clicked(move || {
             if let Some(ui) = weak.upgrade() {
                 dialogs::sync_status(&ui);
             }
@@ -92,7 +81,7 @@ impl Banners {
             }
         });
         let weak = Rc::downgrade(ui);
-        self.sign_in_button.connect_clicked(move |_| {
+        self.sign_in.connect_button_clicked(move || {
             if let Some(ui) = weak.upgrade() {
                 ui.sign_in();
             }
@@ -120,14 +109,14 @@ impl Ui {
                 "The sync engine (icloud-notes-sync) is missing. Reinstall icloud-notes (sudo pacman -S icloud-notes) and restart to enable sync.",
             );
         }
-        banners
-            .link_icon
-            .set_icon_name(Some(if engine { name::CLOUD } else { name::WARNING }));
-        omui::set_class(&banners.link_icon, "accent", engine);
-        omui::set_class(&banners.link_icon, "warning", !engine);
-        banners.clone.set_visible(engine);
-        banners.clone.set_sensitive(!syncing);
-        banners.show_them.set_sensitive(!syncing);
+        if engine {
+            banners.link.set_icon(Some(name::CLOUD), "accent");
+        } else {
+            banners.link.set_icon(Some(name::WARNING), "warning");
+        }
+        banners.link.set_button_label(engine.then_some("Clone…"));
+        banners.link.set_button_enabled(!syncing);
+        banners.deletions.set_button_enabled(!syncing);
         banners.delete_them.set_sensitive(!syncing);
 
         let notice = b.vault().notice.clone().unwrap_or_default();
@@ -163,9 +152,9 @@ impl Ui {
         banners.sign_in.set_title(&text);
         let signing_in = self.signing_in.get();
         banners
-            .sign_in_button
-            .set_label(if signing_in { "Signing in…" } else { "Sign in" });
-        banners.sign_in_button.set_sensitive(!signing_in);
+            .sign_in
+            .set_button_label(Some(if signing_in { "Signing in…" } else { "Sign in" }));
+        banners.sign_in.set_button_enabled(!signing_in);
         banners.sign_in.set_revealed(!left && (expired || short || lapsing));
     }
 
