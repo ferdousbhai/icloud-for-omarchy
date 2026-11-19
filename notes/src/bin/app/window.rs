@@ -58,6 +58,7 @@ pub const CSS: &str = "
 .note-list > row { padding: 9px 12px; border-bottom: 1px solid alpha(@om_border, 0.3); }
 .note-list > row:selected { border-bottom-color: transparent; }
 .tree-row { border-spacing: 6px; }
+.note-tree > row.current { background: alpha(@om_accent, 0.18); }
 button.chevron { min-width: 12px; min-height: 12px; padding: 0; }
 button.chevron image { -gtk-icon-size: 12px; color: @om_dim_text; }
 .badges { margin-top: 2px; }
@@ -396,6 +397,7 @@ impl Window {
         );
         actions::add(&ui);
         crate::attach::connect(&ui);
+        ui.pane_keys();
         let weak = Rc::downgrade(&ui);
         window.connect_close_request(move |_| match weak.upgrade() {
             Some(ui) if !ui.may_close() => glib::Propagation::Stop,
@@ -855,29 +857,162 @@ impl Ui {
         }
     }
 
-    /// A row activated (a click, Enter). A folder of the tree unfolds, or
-    /// folds when it was open and selected already; a note goes to the
-    /// editor when one pane is shown at a time.
-    fn activate(&self, item: &Item) {
+    /// A row activated: Enter or a double click in the two lists, a click or
+    /// Enter in the tree. A folder of the list goes on to its notes; one of
+    /// the tree opens and unfolds, or folds when it was open and selected
+    /// already. A note opens and goes on to the editor (in the tree, a click
+    /// on a note that is not open yet only opens it).
+    fn activate(self: &Rc<Self>, item: &Item) {
         match item {
-            Item::Folder(folder) if self.narrow.get() => self.toggle_folder(folder),
-            Item::Folder(_) => {}
-            Item::Note { .. } => {
-                if self.split.is_collapsed() {
-                    self.split.set_show_content(true);
+            Item::Folder(folder) if self.narrow.get() => {
+                let was = self.backend.borrow().current_folder() == folder.as_str();
+                let expanded = self.expanded.borrow().iter().any(|f| f == folder);
+                self.open_folder(folder);
+                if self.backend.borrow().current_folder() == folder.as_str() && self.hits.borrow().is_none() {
+                    self.set_expanded(folder, !(was && expanded));
+                }
+            }
+            Item::Folder(_) => focus_list(&self.lists.notes),
+            Item::Note { folder, file } => {
+                let path = icloud_notes_path(folder, file);
+                let open = self.backend.borrow().current_path() == path;
+                if !open && !self.open_note(folder, file) {
+                    return;
+                }
+                if open || !self.narrow.get() {
+                    self.to_editor();
                 }
             }
         }
     }
 
+    /// The keyboard to the editor; one pane at a time, the editor shown.
+    fn to_editor(&self) {
+        if self.split.is_collapsed() {
+            self.split.set_show_content(true);
+        }
+        self.editor.view.grab_focus();
+    }
+
+    /// The arrows across the panes: Right goes deeper (folders, notes,
+    /// editor), Left and Escape back out; in the tree Right unfolds a folder
+    /// and then steps into it, Left folds it or steps out to its parent.
+    fn pane_keys(self: &Rc<Self>) {
+        let on = |list: &gtk::ListBox, f: fn(&Rc<Ui>, &gtk::ListBox, gtk::gdk::Key) -> bool| {
+            let keys = gtk::EventControllerKey::new();
+            let weak = self.weak();
+            let target = list.clone();
+            keys.connect_key_pressed(move |_, key, _, modifiers| match weak.upgrade() {
+                Some(ui) if modifiers.is_empty() && f(&ui, &target, key) => glib::Propagation::Stop,
+                _ => glib::Propagation::Proceed,
+            });
+            list.add_controller(keys);
+        };
+        on(&self.lists.folders, |ui, list, key| {
+            key == gtk::gdk::Key::Right && {
+                if let Some(item) = list
+                    .focus_child()
+                    .and_downcast::<gtk::ListBoxRow>()
+                    .as_ref()
+                    .and_then(lists::item_of)
+                {
+                    ui.activate(&item);
+                }
+                true
+            }
+        });
+        on(&self.lists.notes, |ui, list, key| match key {
+            gtk::gdk::Key::Left | gtk::gdk::Key::Escape => {
+                focus_list(&ui.lists.folders);
+                true
+            }
+            gtk::gdk::Key::Right => {
+                if let Some(item) = list
+                    .focus_child()
+                    .and_downcast::<gtk::ListBoxRow>()
+                    .as_ref()
+                    .and_then(lists::item_of)
+                {
+                    ui.activate(&item);
+                }
+                true
+            }
+            _ => false,
+        });
+        on(&self.lists.tree, |ui, list, key| {
+            let Some(row) = list.focus_child().and_downcast::<gtk::ListBoxRow>() else {
+                return false;
+            };
+            let Some(item) = lists::item_of(&row) else { return false };
+            let expanded = |folder: &str| ui.expanded.borrow().iter().any(|f| f == folder);
+            match (key, &item) {
+                (gtk::gdk::Key::Right, Item::Folder(folder)) => {
+                    if !expanded(folder) && ui.hits.borrow().is_none() {
+                        ui.toggle_folder(folder);
+                        focus_row(list, row.index());
+                    } else {
+                        focus_row(list, row.index() + 1);
+                    }
+                    true
+                }
+                (gtk::gdk::Key::Right, Item::Note { .. }) => {
+                    ui.activate(&item);
+                    ui.to_editor();
+                    true
+                }
+                (gtk::gdk::Key::Left, Item::Folder(folder)) if expanded(folder) && ui.hits.borrow().is_none() => {
+                    ui.toggle_folder(folder);
+                    focus_row(list, row.index());
+                    true
+                }
+                (gtk::gdk::Key::Left, _) => {
+                    let depth = |row: &gtk::ListBoxRow| row.child().map_or(0, |c| c.margin_start());
+                    let mine = depth(&row);
+                    let parent = (0..row.index())
+                        .rev()
+                        .find(|&i| list.row_at_index(i).is_some_and(|r| depth(&r) < mine));
+                    if let Some(parent) = parent {
+                        focus_row(list, parent);
+                    }
+                    true
+                }
+                _ => false,
+            }
+        });
+        // Escape in the editor walks back out to the list (one pane at a
+        // time, the split itself goes back to the sidebar).
+        let keys = gtk::EventControllerKey::new();
+        let weak = self.weak();
+        keys.connect_key_pressed(move |_, key, _, _| match weak.upgrade() {
+            Some(ui) if key == gtk::gdk::Key::Escape && !ui.split.is_collapsed() => {
+                focus_list(if ui.narrow.get() {
+                    &ui.lists.tree
+                } else {
+                    &ui.lists.notes
+                });
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
+        });
+        self.editor.view.add_controller(keys);
+    }
+
     fn toggle_folder(&self, folder: &str) {
+        let open = self.expanded.borrow().iter().any(|f| f == folder);
+        self.set_expanded(folder, !open);
+    }
+
+    /// A folder of the tree shown open, or folded.
+    fn set_expanded(&self, folder: &str, open: bool) {
         {
             let mut expanded = self.expanded.borrow_mut();
-            match expanded.iter().position(|f| f == folder) {
-                Some(at) => {
+            let at = expanded.iter().position(|f| f == folder);
+            match (at, open) {
+                (Some(at), false) => {
                     expanded.remove(at);
                 }
-                None => expanded.push(folder.to_string()),
+                (None, true) => expanded.push(folder.to_string()),
+                _ => return,
             }
         }
         self.show_lists();
@@ -1109,6 +1244,30 @@ impl Ui {
             }
         });
         self.reread.replace(Some(source));
+    }
+}
+
+/// The keyboard to a list: its selected (or current) row, else its first.
+fn focus_list(list: &gtk::ListBox) {
+    let mut current = list.selected_row();
+    let mut i = 0;
+    while current.is_none()
+        && let Some(row) = list.row_at_index(i)
+    {
+        if row.has_css_class("current") {
+            current = Some(row);
+        }
+        i += 1;
+    }
+    if let Some(row) = current.or_else(|| list.row_at_index(0)) {
+        row.grab_focus();
+    }
+}
+
+/// The keyboard to row `index` of a list that was just refilled.
+fn focus_row(list: &gtk::ListBox, index: i32) {
+    if let Some(row) = list.row_at_index(index) {
+        row.grab_focus();
     }
 }
 

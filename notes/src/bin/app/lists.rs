@@ -114,6 +114,13 @@ impl Lists {
         let (folders, folder_pane) = list("folder-list");
         let (notes, note_pane) = list("note-list");
         let (tree, tree_pane) = list("note-tree");
+        // In the two lists a click or the arrows open the row they reach, and
+        // Enter (or a double click) goes on: to the notes, to the editor. In
+        // the tree the arrows only move, and a click or Enter opens: a folder
+        // the arrows pass is not opened.
+        folders.set_activate_on_single_click(false);
+        notes.set_activate_on_single_click(false);
+        tree.set_selection_mode(gtk::SelectionMode::None);
         for list in [&folders, &notes, &tree] {
             // The arrows move the selection, and the row they reach is chosen,
             // as a click chooses it.
@@ -169,8 +176,18 @@ fn while_updating(list: &gtk::ListBox, f: impl FnOnce()) {
     unsafe { list.set_data("updating", false) };
 }
 
-/// Selects the row standing for `item`, or none, without choosing it.
+/// Selects the row standing for `item`, or none, without choosing it. A
+/// list that selects nothing (the tree) marks it as the current row.
 pub fn select(list: &gtk::ListBox, item: Option<&Item>) {
+    if list.selection_mode() == gtk::SelectionMode::None {
+        let mut i = 0;
+        while let Some(row) = list.row_at_index(i) {
+            let current = item.is_some_and(|item| item_of(&row).as_ref() == Some(item));
+            omui::set_class(&row, "current", current);
+            i += 1;
+        }
+        return;
+    }
     while_updating(list, || {
         let mut i = 0;
         while let Some(row) = list.row_at_index(i) {
