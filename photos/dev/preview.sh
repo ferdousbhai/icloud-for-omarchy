@@ -9,9 +9,10 @@ set -Eeuo pipefail
 #
 # Each scene is written as <out-dir>/<scene>-<theme>.png:
 #   grid     the window as it opens: the albums beside All Photos by month (in a narrow window: the albums)
-#   photos   All Photos reached with the keyboard: in a narrow window, in place of the albums
+#   photos   in a narrow window, All Photos in place of the albums, reached with the keyboard (else as grid)
 #   viewer   the newest photo opened
 #   prefs    the preferences
+#   about    About Photos
 #   upload   a file being uploaded: the dialog that cannot be closed until it is done
 #   delete   Delete on the photo in the viewer: the question
 #   deleted  the same answered: the next photo, and the toast with Undo
@@ -44,31 +45,34 @@ done
 for theme in "${themes[@]}"; do
   [[ -z $theme || -f $theme/colors.toml ]] || { echo "preview: $theme has no colors.toml" >&2; exit 1; }
 done
-read -r -a scenes <<< "${ICLOUD_PHOTOS_PREVIEW_SCENES:-grid photos viewer prefs upload delete deleted banner}"
+read -r -a scenes <<< "${ICLOUD_PHOTOS_PREVIEW_SCENES:-grid photos viewer prefs about upload delete deleted banner}"
 # The newest of the fake's photos, a JPEG.
 newest=000A55E7-FAKE-4000-8000-000000000000
-# `action:<name>[=<string>]` activates the window's action <name> over the scratch session bus, as its menu or a tile
-# would; `text:` types (an underscore is a space); the rest are keys. The file chooser takes a path typed into it.
-# The photos are two stops in: past the albums' menu to the first album, which opens.
-declare -A keys=(
-  [grid]=""
-  [photos]="Tab Tab"
-  [viewer]="Tab Tab action:open-asset=$newest"
-  [prefs]="action:preferences"
-  [upload]="action:upload text:UPLOAD Return"
-  [delete]="Tab Tab action:open-asset=$newest action:viewer-delete"
-  [deleted]="Tab Tab action:open-asset=$newest action:viewer-delete Tab Return"
-  [banner]=""
-)
-for scene in "${scenes[@]}"; do
-  [[ -v keys[$scene] ]] || { echo "preview: no scene named $scene" >&2; exit 2; }
-done
 parent_runtime=${XDG_RUNTIME_DIR:?preview: XDG_RUNTIME_DIR is required}
 parent_display=${WAYLAND_DISPLAY:?preview: run this from a Wayland desktop}
 parent_socket=$parent_runtime/$parent_display
 settle=${ICLOUD_PHOTOS_PREVIEW_SETTLE:-3}
 size=${ICLOUD_PHOTOS_PREVIEW_SIZE:-1100x760}
 [[ $size =~ ^[0-9]+x[0-9]+$ ]] || { echo "preview: ICLOUD_PHOTOS_PREVIEW_SIZE is <width>x<height>" >&2; exit 2; }
+# `action:<name>[=<string>]` activates the window's action <name> over the scratch session bus, as its menu or a tile
+# would; `text:` types (an underscore is a space); the rest are keys. The file chooser takes a path typed into it.
+# A narrow window opens on the albums. The keyboard's first stop is the first of them, All Photos, which opens.
+photos=""
+(( ${size%x*} >= 640 )) || photos="Tab"
+declare -A keys=(
+  [grid]=""
+  [photos]="$photos"
+  [viewer]="$photos action:open-asset=$newest"
+  [prefs]="action:preferences"
+  [about]="action:about"
+  [upload]="action:upload text:UPLOAD Return"
+  [delete]="$photos action:open-asset=$newest action:viewer-delete"
+  [deleted]="$photos action:open-asset=$newest action:viewer-delete Tab Return"
+  [banner]=""
+)
+for scene in "${scenes[@]}"; do
+  [[ -v keys[$scene] ]] || { echo "preview: no scene named $scene" >&2; exit 2; }
+done
 
 root=""
 runtime=""
@@ -213,10 +217,12 @@ press() {
         name=${name%%=*}
       fi
       gdbus call "${window[@]}" --method org.gtk.Actions.Activate "$name" "$parameter" '{}' >/dev/null
-      sleep 1
+      # What it opens (a dialog, the file chooser) is drawn before the next key.
+      sleep 2
     elif [[ $key == text:* ]]; then
       local text=${key#text:}
-      wtype "${text//_/ }"
+      # A key at a time: the file chooser's completion drops keys that come together.
+      wtype -d 30 "${text//_/ }"
     else
       # The key, with the modifiers named before it held.
       local -a held=()

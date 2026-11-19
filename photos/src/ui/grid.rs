@@ -9,10 +9,11 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use adw::prelude::*;
+use gtk::prelude::*;
 use gtk::{gio, glib};
 use icloud_photos::catalog::GridRow;
 use icloud_photos::cloudkit::Kind;
+use omui::icons::name;
 
 /// Smallest tile edge; tiles grow to fill the width.
 const TILE: i32 = 140;
@@ -48,7 +49,7 @@ type UnbindTile = Box<dyn Fn(&str)>;
 
 pub struct Grid {
     pub root: gtk::Stack,
-    pub empty: adw::StatusPage,
+    pub empty: omui::EmptyState,
     scrolled: gtk::ScrolledWindow,
     store: gio::ListStore,
     columns: Rc<Cell<usize>>,
@@ -203,9 +204,9 @@ impl Grid {
                         picture.set_paintable(None::<&gtk::gdk::Paintable>);
                         badge.set_visible(t.kind == Kind::Video || t.is_live);
                         badge.set_icon_name(Some(if t.kind == Kind::Video {
-                            "media-playback-start-symbolic"
+                            name::PLAY
                         } else {
-                            "camera-photo-symbolic"
+                            name::CAMERA
                         }));
                         if let Some(cb) = bind_cb.borrow().as_ref() {
                             cb(&t.id, t.thumb.as_ref(), &picture);
@@ -284,13 +285,10 @@ impl Grid {
             .child(&list)
             .vexpand(true)
             .build();
-        let empty = adw::StatusPage::builder()
-            .icon_name("image-x-generic-symbolic")
-            .title("No photos yet")
-            .build();
+        let empty = omui::EmptyState::new(Some(name::IMAGE), "No photos yet", None);
         let root = gtk::Stack::new();
         root.add_named(&scrolled, Some("grid"));
-        root.add_named(&empty, Some("empty"));
+        root.add_named(&empty.widget, Some("empty"));
 
         let grid = Grid {
             root,

@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use adw::prelude::*;
+use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use icloud_photos::catalog::Catalog;
 use icloud_photos::cloudkit::{CloudKit, Modified};
@@ -105,8 +105,8 @@ pub struct App {
     pub window: gtk::ApplicationWindow,
     shell: Rc<omui::Shell>,
     pub banner: omui::Banner,
-    pub nav: adw::NavigationView,
-    grid_page: adw::NavigationPage,
+    /// The photos, with the viewer pushed over them.
+    pub nav: omui::Nav,
     grid_title: omui::Title,
     pub split: omui::Split,
     pub status: gtk::Label,
@@ -229,16 +229,10 @@ pub fn build(application: &gtk::Application) -> Rc<App> {
     grid_box.append(&grid_header);
     grid_box.append(&search_box);
     grid_box.append(&grid.root);
-    let grid_page = adw::NavigationPage::builder()
-        .title("All Photos")
-        .tag("grid")
-        .child(&grid_box)
-        .build();
     let viewer = Viewer::new();
-    let nav = adw::NavigationView::new();
-    nav.add(&grid_page);
+    let nav = omui::Nav::new(&grid_box);
 
-    let split = omui::Split::new(&sidebar, &nav, (200, 280), Some(640));
+    let split = omui::Split::new(&sidebar, &nav.widget, (200, 280), Some(640));
     split.connect_changed({
         let back = back.downgrade();
         move |split| {
@@ -280,7 +274,6 @@ pub fn build(application: &gtk::Application) -> Rc<App> {
         shell,
         banner,
         nav,
-        grid_page,
         grid_title,
         split,
         status,
@@ -355,7 +348,7 @@ impl App {
             }
             // The snapshot sets the page title along with the grid.
             *a.album.borrow_mut() = Albums::id_of(row);
-            a.nav.pop_to_tag("grid");
+            a.nav.pop_to_root();
             a.load_snapshot();
             a.split.set_show_content(true);
         });
@@ -670,7 +663,6 @@ impl App {
 
     fn apply_snapshot(&self, snap: Snapshot) {
         *self.album.borrow_mut() = snap.album.clone();
-        self.grid_page.set_title(snap.title());
         self.grid_title.set_title(snap.title());
         self.reloading.set(true);
         self.albums.set(snap.total, &snap.albums, snap.album.as_deref());
@@ -679,11 +671,11 @@ impl App {
         self.grid
             .empty
             .set_title(if first { "Getting your photos" } else { "No photos here" });
-        self.grid.empty.set_description(Some(if first {
+        self.grid.empty.set_description(if first {
             "The first sync lists your whole library; thumbnails follow as you scroll."
         } else {
             "Photos you add in iCloud, or upload from here, appear in this view."
-        }));
+        });
         self.grid.set_rows(snap.tiles, snap.rows, snap.columns);
     }
 
@@ -912,12 +904,8 @@ impl App {
         let ids = self.grid.ids();
         if let Some(i) = ids.iter().position(|x| x == id) {
             self.viewer.show(self, ids, i);
-            if self
-                .nav
-                .visible_page()
-                .is_none_or(|p| p.tag().as_deref() != Some("viewer"))
-            {
-                self.nav.push(&self.viewer.page);
+            if self.nav.visible_tag().as_deref() != Some("viewer") {
+                self.nav.push("viewer", &self.viewer.page);
             }
         }
     }

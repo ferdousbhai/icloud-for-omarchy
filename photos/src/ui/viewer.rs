@@ -6,21 +6,25 @@ use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use adw::prelude::*;
+use gtk::prelude::*;
 use gtk::{gio, glib};
 use icloud_photos::cloudkit::Kind;
 use icloud_photos::still::{self, display_file};
 use icloud_photos::thumbs::{Job, Priority};
 
+use omui::icons::name;
+
 use super::decode;
 use super::window::App;
 
 pub struct Viewer {
-    pub page: adw::NavigationPage,
-    title: adw::WindowTitle,
+    /// What the grid's [`omui::Nav`] pushes, tagged "viewer".
+    pub page: gtk::Box,
+    back: gtk::Button,
+    title: omui::Title,
     picture: gtk::Picture,
     info: gtk::Label,
-    spinner: adw::Spinner,
+    spinner: gtk::Spinner,
     prev: gtk::Button,
     next: gtk::Button,
     ids: RefCell<Vec<String>>,
@@ -46,8 +50,10 @@ fn osd_button(icon: &str, action: &str, halign: gtk::Align, tip: &str) -> gtk::B
 
 impl Viewer {
     pub fn new() -> Viewer {
-        let title = adw::WindowTitle::new("", "");
-        let header = adw::HeaderBar::builder().title_widget(&title).build();
+        let title = omui::Title::new("", "");
+        let header = omui::header(Some(title.widget.upcast_ref()));
+        let back = omui::icon_button(name::BACK, "Back");
+        header.pack_start(&back);
         let menu = gio::Menu::new();
         menu.append(Some("Copy Image"), Some("win.viewer-copy"));
         if still::has_wallpaper_command() {
@@ -55,32 +61,21 @@ impl Viewer {
         }
         header.pack_end(
             &gtk::MenuButton::builder()
-                .icon_name("view-more-symbolic")
+                .icon_name(name::MORE)
                 .menu_model(&menu)
                 .tooltip_text("More")
+                .has_frame(false)
                 .build(),
         );
-        header.pack_end(
-            &gtk::Button::builder()
-                .icon_name("user-trash-symbolic")
-                .action_name("win.viewer-delete")
-                .tooltip_text("Delete (Del)")
-                .build(),
-        );
-        header.pack_end(
-            &gtk::Button::builder()
-                .icon_name("document-save-symbolic")
-                .action_name("win.viewer-download")
-                .tooltip_text("Download Original (Ctrl+S)")
-                .build(),
-        );
-        header.pack_end(
-            &gtk::Button::builder()
-                .icon_name("adw-external-link-symbolic")
-                .action_name("win.viewer-open")
-                .tooltip_text("Open in Default App (Ctrl+O)")
-                .build(),
-        );
+        for (icon, action, tip) in [
+            (name::DELETE, "win.viewer-delete", "Delete (Del)"),
+            (name::DOWNLOAD, "win.viewer-download", "Download Original (Ctrl+S)"),
+            (name::EXTERNAL_LINK, "win.viewer-open", "Open in Default App (Ctrl+O)"),
+        ] {
+            let button = omui::icon_button(icon, tip);
+            button.set_action_name(Some(action));
+            header.pack_end(&button);
+        }
 
         let picture = gtk::Picture::builder()
             .content_fit(gtk::ContentFit::Contain)
@@ -88,20 +83,13 @@ impl Viewer {
             .hexpand(true)
             .vexpand(true)
             .build();
-        let spinner = adw::Spinner::builder()
-            .width_request(32)
-            .height_request(32)
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::Center)
-            .visible(false)
-            .build();
-        let prev = osd_button(
-            "go-previous-symbolic",
-            "win.viewer-prev",
-            gtk::Align::Start,
-            "Previous (←)",
-        );
-        let next = osd_button("go-next-symbolic", "win.viewer-next", gtk::Align::End, "Next (→)");
+        let spinner = omui::spinner();
+        spinner.set_size_request(32, 32);
+        spinner.set_halign(gtk::Align::Center);
+        spinner.set_valign(gtk::Align::Center);
+        spinner.set_visible(false);
+        let prev = osd_button(name::BACK, "win.viewer-prev", gtk::Align::Start, "Previous (←)");
+        let next = osd_button(name::FORWARD, "win.viewer-next", gtk::Align::End, "Next (→)");
         let overlay = gtk::Overlay::builder().child(&picture).build();
         overlay.add_overlay(&spinner);
         overlay.add_overlay(&prev);
@@ -112,18 +100,15 @@ impl Viewer {
         info.add_css_class("dim-label");
         info.add_css_class("caption");
 
-        let tv = adw::ToolbarView::new();
-        tv.add_top_bar(&header);
-        tv.set_content(Some(&overlay));
-        tv.add_bottom_bar(&info);
-        let page = adw::NavigationPage::builder()
-            .title("Photo")
-            .tag("viewer")
-            .child(&tv)
-            .build();
+        overlay.set_vexpand(true);
+        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        page.append(&header);
+        page.append(&overlay);
+        page.append(&info);
 
         Viewer {
             page,
+            back,
             title,
             picture,
             info,
@@ -195,17 +180,13 @@ impl Viewer {
             ));
         }
         self.page.add_controller(keys);
-        let esc = gtk::ShortcutController::new();
-        esc.set_scope(gtk::ShortcutScope::Managed);
-        let nav = app.nav.clone();
-        esc.add_shortcut(gtk::Shortcut::new(
-            gtk::ShortcutTrigger::parse_string("Escape"),
-            Some(gtk::CallbackAction::new(move |_, _| {
+        // Escape and Alt+Left go back too: the Nav sees to them.
+        let nav = app.nav.downgrade();
+        self.back.connect_clicked(move |_| {
+            if let Some(nav) = nav.upgrade() {
                 nav.pop();
-                glib::Propagation::Stop
-            })),
-        ));
-        self.page.add_controller(esc);
+            }
+        });
 
         // Swipe or scroll sideways between photos.
         let a = app.clone();
@@ -243,7 +224,6 @@ impl Viewer {
         };
         self.title.set_title(&row.filename);
         self.title.set_subtitle(&format!("{} of {len}", index + 1));
-        self.page.set_title(&row.filename);
         self.refresh_info(app);
 
         // A blurry stand-in right away, then the full rendition.
