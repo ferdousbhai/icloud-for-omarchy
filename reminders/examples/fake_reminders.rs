@@ -13,7 +13,8 @@
 //! update to `Deleted = 1`), and a list's `Name` is refused without
 //! `isEncrypted`, as Skykeep found CloudKit does (see `src/model.rs`). A
 //! list shared with other people carries a `share` ([`State::share`]).
-//! Every request is recorded: `GET /fake/requests` lists them.
+//! Every request is recorded: `GET /fake/requests` lists them. `/fake/sign-out`
+//! signs the account out, until the app's Sign In (`/mock/reauthenticate`).
 
 use std::collections::BTreeMap;
 use std::net::TcpListener;
@@ -329,6 +330,10 @@ impl State {
         }
         if path == "/fake/requests" {
             return (200, json!(self.requests()));
+        }
+        if path == "/fake/sign-out" {
+            *self.signed_out.lock().unwrap() = true;
+            return (200, json!({ "ok": true }));
         }
         if *self.signed_out.lock().unwrap() {
             return (421, Value::Null);
