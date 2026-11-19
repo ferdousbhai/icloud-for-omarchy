@@ -378,24 +378,26 @@ impl App {
 
     fn add_actions(self: &Rc<Self>) {
         let win = &self.window;
-        let action = |name: &str, f: Box<dyn Fn()>| {
-            let act = gio::SimpleAction::new(name, None);
-            act.connect_activate(move |_, _| f());
-            win.add_action(&act);
-        };
+        let action = |name: &str, f: Box<dyn Fn()>| win.add_action(&self.user_action(name, f));
         let a = self.clone();
         action("refresh", Box::new(move || a.sync()));
         let a = self.clone();
         action("upload", Box::new(move || super::upload::choose(&a)));
         let a = self.clone();
         action("preferences", Box::new(move || super::prefs::show(&a)));
+        // The grid's own, on a resize: it goes on under a dialog.
+        let regrid = gio::SimpleAction::new("regrid", None);
         let a = self.clone();
-        action("regrid", Box::new(move || a.grid.regrid()));
+        regrid.connect_activate(move |_, _| a.grid.regrid());
+        win.add_action(&regrid);
         let a = self.clone();
         action("about", Box::new(move || about(&a.window)));
         let open = gio::SimpleAction::new("open-asset", Some(glib::VariantTy::STRING));
         let a = self.clone();
         open.connect_activate(move |_, v| {
+            if a.dialog_open() {
+                return;
+            }
             if let Some(id) = v.and_then(|v| v.get::<String>()) {
                 a.open_viewer(&id);
             }
@@ -519,6 +521,34 @@ impl App {
             Msg::SignIn(s) => self.on_sign_in_state(s),
             Msg::SignInFailed(e) => self.on_sign_in_failed(&e),
         }
+    }
+
+    /// An action the keyboard reaches through a shortcut or an accelerator,
+    /// which does nothing while a dialog shows. omui's dialogs hold back the
+    /// window's widgets but not its shortcuts or the application's
+    /// accelerators (as libadwaita's did): Delete would ask a second time,
+    /// Ctrl+U open the file chooser over Preferences.
+    pub fn user_action(self: &Rc<Self>, name: &str, f: Box<dyn Fn()>) -> gio::SimpleAction {
+        let act = gio::SimpleAction::new(name, None);
+        let a = Rc::downgrade(self);
+        act.connect_activate(move |_, _| {
+            if a.upgrade().is_some_and(|a| !a.dialog_open()) {
+                f();
+            }
+        });
+        act
+    }
+
+    /// Whether an omui dialog shows: its backdrop is over the window's content.
+    fn dialog_open(&self) -> bool {
+        let mut child = self.shell.overlay.first_child();
+        while let Some(widget) = child {
+            if widget.has_css_class("dialog-backdrop") {
+                return true;
+            }
+            child = widget.next_sibling();
+        }
+        false
     }
 
     pub fn toast(&self, text: &str) {

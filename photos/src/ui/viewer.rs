@@ -123,11 +123,7 @@ impl Viewer {
 
     pub fn connect(&self, app: &Rc<App>) {
         let win = &app.window;
-        let add = |name: &str, f: Box<dyn Fn()>| {
-            let act = gio::SimpleAction::new(name, None);
-            act.connect_activate(move |_, _| f());
-            win.add_action(&act);
-        };
+        let add = |name: &str, f: Box<dyn Fn()>| win.add_action(&app.user_action(name, f));
         let a = app.clone();
         add("viewer-prev", Box::new(move || a.viewer.step(&a, -1)));
         let a = app.clone();
