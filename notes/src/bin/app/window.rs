@@ -27,7 +27,6 @@ use crate::attach::Strip;
 use crate::banners::Banners;
 use crate::conflicts::Conflicts;
 use crate::editor::Editor;
-use crate::icons;
 use crate::lists::{self, Handlers, Item, Lists};
 use crate::settings::Settings;
 
@@ -86,8 +85,6 @@ image.unpicked { opacity: 0.3; }
 .status-bar { border-top: 1px solid alpha(@om_border, 0.6); padding: 3px 14px; border-spacing: 8px; }
 .status-bar label { font-size: 0.85em; }
 .notice { color: @om_accent; }
-/* The toolbar's own icons are pictures in the text colour: GTK cannot grey them. */
-button.header-action:disabled > image { opacity: 0.4; }
 .pane-grip { min-width: 5px; }
 .unsaved { color: @om_warning; }
 ";
@@ -190,9 +187,9 @@ impl Window {
         // ---- the toolbar
         let header = omui::header(None);
         let sidebar_button = omui::icon_button(name::SIDEBAR, "Hide the sidebar");
-        let new_folder = icons::button(icons::NEW_FOLDER, "New folder");
+        let new_folder = omui::icon_button(name::NEW_FOLDER, "New folder");
         new_folder.set_action_name(Some("win.new-folder"));
-        let new_note = icons::button(icons::NEW_NOTE, "New note (Ctrl+N)");
+        let new_note = omui::icon_button(name::COMPOSE, "New note (Ctrl+N)");
         new_note.set_action_name(Some("win.new-note"));
         let delete = omui::icon_button(name::DELETE, "Delete note");
         delete.set_action_name(Some("win.delete-note"));
@@ -213,13 +210,13 @@ impl Window {
         }
         let checklist = omui::icon_button(name::CHECKED, "Checklist (Ctrl+Enter)");
         checklist.set_action_name(Some("win.checklist"));
-        let bold = icons::button(icons::BOLD, "Bold (Ctrl+B)");
+        let bold = omui::icon_button(name::BOLD, "Bold (Ctrl+B)");
         bold.set_action_name(Some("win.bold"));
-        let italic = icons::button(icons::ITALIC, "Italic (Ctrl+I)");
+        let italic = omui::icon_button(name::ITALIC, "Italic (Ctrl+I)");
         italic.set_action_name(Some("win.italic"));
-        let link = icons::button(icons::LINK, "Link (Ctrl+K)");
+        let link = omui::icon_button(name::LINK, "Link (Ctrl+K)");
         link.set_action_name(Some("win.link"));
-        let attach = icons::button(icons::ATTACH, "Attach a file (or drop or paste one)");
+        let attach = omui::icon_button(name::ATTACH, "Attach a file (or drop or paste one)");
         attach.set_action_name(Some("win.attach"));
         let sync_status = omui::icon_button(name::REFRESH, "Sync status");
         sync_status.set_action_name(Some("win.sync-status"));

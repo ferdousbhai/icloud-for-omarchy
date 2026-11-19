@@ -169,9 +169,7 @@ SOFTWARE.
 
 omui bundles icons from Lucide (https://github.com/lucide-icons/lucide)
 1.35.0, each stroke outlined as a filled path and renamed
-`om-<name>-symbolic`. The Notes window draws six more Lucide icons itself,
-as strokes (notes/src/bin/app/icons.rs: bold, italic, link, paperclip,
-folder-plus and square-pen). Lucide's license:
+`om-<name>-symbolic`. Lucide's license:
 
 ISC License
 

@@ -14,7 +14,6 @@ mod conflicts;
 mod dialogs;
 mod editor;
 mod highlight;
-mod icons;
 mod lists;
 mod pdf;
 mod search;

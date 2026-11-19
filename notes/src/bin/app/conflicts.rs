@@ -290,7 +290,7 @@ impl Ui {
             mark.add_css_class("accent");
             head.append(&mark);
         } else {
-            let mark = crate::icons::image(crate::icons::CIRCLE);
+            let mark = omui::icon(name::CIRCLE);
             mark.add_css_class("unpicked");
             head.append(&mark);
         }

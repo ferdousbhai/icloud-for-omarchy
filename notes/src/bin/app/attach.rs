@@ -31,7 +31,7 @@ impl Strip {
             .margin_top(14)
             .visible(false)
             .build();
-        let icon = crate::icons::image(crate::icons::ATTACH);
+        let icon = omui::icon(name::ATTACH);
         icon.set_opacity(0.6);
         widget.append(&icon);
         let items = gtk::Box::new(gtk::Orientation::Horizontal, 10);

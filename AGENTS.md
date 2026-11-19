@@ -133,7 +133,6 @@ packaging tests, then native x86_64/aarch64 package builds.
   crates.io publication is a separate explicit `cargo publish --locked -p icloud-session`.
 - The installer pins `add_signed_repo` in `tests/add_signed_repo.sha256`; update the hash
   deliberately when changing the function. Ghost has removed its old copy.
-- The Notes, Photos, Find My and Reminders windows hold omui's Strata-derived code and Lucide icons
-  (Notes draws a few more Lucide icons of its own, `notes/src/bin/app/icons.rs`): a change of the omui
-  `rev` keeps `NOTICE` (installed by the PKGBUILD) true.
+- The Notes, Photos, Find My and Reminders windows hold omui's Strata-derived code and Lucide
+  icons: a change of the omui `rev` keeps `NOTICE` (installed by the PKGBUILD) true.
 - `/target`, `/dist` and makepkg dirs are gitignored build output.

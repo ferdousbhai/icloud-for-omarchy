@@ -135,7 +135,7 @@ package_icloud-findmy() {
 
 package_icloud-notes() {
   pkgdesc='Apple Notes on Omarchy, synced with iCloud'
-  license=('MIT' 'ISC')  # ISC: the Lucide icons omui compiles into the window, and the window's own (NOTICE)
+  license=('MIT' 'ISC')  # ISC: the Lucide icons omui compiles into the window (NOTICE)
   depends=('gtk4' "icloud-session>=$pkgver" 'hicolor-icon-theme')
   provides=('icloud-notes-sync')
   replaces=('icloud-notes-sync')
