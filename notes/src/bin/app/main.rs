@@ -7,6 +7,7 @@
 //! line and the background timer link the library, and no GTK code may
 //! reach them.
 
+mod actions;
 mod editor;
 mod highlight;
 mod icons;

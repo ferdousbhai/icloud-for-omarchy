@@ -21,6 +21,7 @@ use icloud_notes::syncmodel;
 use icloud_notes::vault::Vault;
 use omui::icons::name;
 
+use crate::actions;
 use crate::editor::Editor;
 use crate::icons;
 use crate::lists::{self, Handlers, Item, Lists};
@@ -87,6 +88,9 @@ pub struct Ui {
     pub expanded: RefCell<Vec<String>>,
     pub editor: Editor,
     autosave: RefCell<Option<glib::SourceId>>,
+    /// The editor's font zoom (Ctrl++, Ctrl+-, Ctrl+0), and the style that sets it.
+    pub zoom: Cell<f64>,
+    zoom_style: gtk::CssProvider,
     pub status: gtk::Label,
     pub notice: gtk::Label,
     pub unsaved: gtk::Label,
@@ -251,6 +255,8 @@ impl Window {
                 expanded: RefCell::default(),
                 editor,
                 autosave: RefCell::default(),
+                zoom: Cell::new(1.0),
+                zoom_style: gtk::CssProvider::new(),
                 status,
                 notice,
                 unsaved,
@@ -290,7 +296,12 @@ impl Window {
             }
         });
 
-        add_actions(&ui);
+        gtk::style_context_add_provider_for_display(
+            &gtk::prelude::WidgetExt::display(&window),
+            &ui.zoom_style,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
+        actions::add(&ui);
         ui.start();
         // Everything else holds the state weakly: the window keeps it for as
         // long as it is open.
@@ -316,8 +327,18 @@ fn handlers(weak: &Weak<Ui>) -> Handlers {
             ui.activate(item);
         }
     };
-    let menu = |_: &Item, _: &gtk::Widget, _: f64, _: f64| {};
-    let dropped = |_: &Item, _: &str| {};
+    let w = weak.clone();
+    let menu = move |item: &Item, list: &gtk::Widget, x: f64, y: f64| {
+        if let Some(ui) = w.upgrade() {
+            actions::row_menu(&ui, item, list, x, y);
+        }
+    };
+    let w = weak.clone();
+    let dropped = move |note: &Item, folder: &str| {
+        if let Some(ui) = w.upgrade() {
+            actions::drop_note(&ui, note, folder);
+        }
+    };
     Handlers {
         chosen: Box::new(chosen),
         menu: Box::new(menu),
@@ -346,44 +367,6 @@ fn more_menu() -> gio::Menu {
     app.append(Some("Sync log"), Some("win.sync-log"));
     menu.append_section(None, &app);
     menu
-}
-
-/// What an action does to the window, with its parameter.
-type Activate = Box<dyn Fn(&Ui, Option<&glib::Variant>)>;
-
-/// The window's actions: what its buttons, menus and keys do, and what the
-/// preview script drives over D-Bus.
-fn add_actions(ui: &Rc<Ui>) {
-    let action = |name: &str, parameter: Option<&glib::VariantTy>, f: Activate| {
-        let action = gio::SimpleAction::new(name, parameter);
-        let weak = Rc::downgrade(ui);
-        action.connect_activate(move |_, parameter| {
-            if let Some(ui) = weak.upgrade() {
-                f(&ui, parameter);
-            }
-        });
-        ui.window.add_action(&action);
-    };
-    // A vault-relative note path, as `icloud-notes` names notes.
-    action(
-        "open-note",
-        Some(glib::VariantTy::STRING),
-        Box::new(|ui, parameter| {
-            let path: String = parameter.and_then(|p| p.get()).unwrap_or_default();
-            let (folder, file) = path.rsplit_once('/').unwrap_or(("", &path));
-            if ui.open_note(folder, file) && ui.split.is_collapsed() {
-                ui.split.set_show_content(true);
-            }
-        }),
-    );
-    action(
-        "refresh",
-        None,
-        Box::new(|ui, _| {
-            ui.backend.borrow_mut().refresh();
-            ui.show_vault();
-        }),
-    );
 }
 
 impl Ui {
@@ -509,6 +492,28 @@ impl Ui {
             file => format!("{} - Notes", lists::note_label(file)),
         };
         self.window.set_title(Some(&title));
+        drop(b);
+        actions::update(self);
+    }
+
+    /// The open note's title, as its list row shows it.
+    pub fn note_title(&self) -> String {
+        let b = self.backend.borrow();
+        let file = b.current_note();
+        let details = b.note_details(file);
+        if details.title.is_empty() {
+            lists::note_label(file).to_string()
+        } else {
+            details.title
+        }
+    }
+
+    /// The editor's text at `zoom` times its size, within limits.
+    pub fn zoom(&self, zoom: f64) {
+        let zoom = zoom.clamp(0.5, 4.0);
+        self.zoom.set(zoom);
+        self.zoom_style
+            .load_from_string(&format!("textview.note-text {{ font-size: {zoom:.3}em; }}"));
     }
 
     /// The lists of the layout on screen.
@@ -569,7 +574,7 @@ impl Ui {
     }
 
     /// Loads the open note into the editor.
-    fn load_editor(&self) {
+    pub fn load_editor(&self) {
         let body = syncmodel::editor_form(self.backend.borrow().note_body());
         self.editor.load(&body);
         self.unsaved.set_visible(false);
@@ -632,7 +637,7 @@ impl Ui {
         self.show_lists();
     }
 
-    fn open_folder(&self, folder: &str) {
+    pub fn open_folder(&self, folder: &str) {
         if folder == self.backend.borrow().current_folder() || !self.flush_edits() {
             return;
         }
@@ -643,9 +648,16 @@ impl Ui {
         self.show_vault();
     }
 
-    /// Makes `file` of `folder` the open note. False when edits that cannot
-    /// be saved yet keep the open one.
+    /// Makes `file` of `folder` the open note, to edit it. False when edits
+    /// that cannot be saved yet keep the open one.
     pub fn open_note(&self, folder: &str, file: &str) -> bool {
+        self.select_note(folder, file)
+    }
+
+    /// Makes it the open note, for acting on it (its menu, a drag) rather
+    /// than editing it. False when edits that cannot be saved yet keep the
+    /// open one.
+    pub fn select_note(&self, folder: &str, file: &str) -> bool {
         if !self.flush_edits() {
             return false;
         }
@@ -695,7 +707,7 @@ impl Ui {
 
     /// Saves the editor's text; false when it could not be written: the
     /// edits stay in the editor.
-    fn save(&self) -> bool {
+    pub fn save(&self) -> bool {
         let text = self.editor.text();
         let saved = self.backend.borrow_mut().save_note(&text, Some(&self.editor.saved()));
         if saved {
@@ -715,7 +727,7 @@ impl Ui {
 
     /// Saves before leaving the open note. Edits that fail the guardrails are
     /// never discarded: they stay in the editor, and this is false.
-    fn flush_edits(&self) -> bool {
+    pub fn flush_edits(&self) -> bool {
         if !self.editor.dirty() {
             return true;
         }
@@ -727,7 +739,7 @@ impl Ui {
     }
 
     /// What the backend says happened.
-    fn handle_events(&self) {
+    pub fn handle_events(&self) {
         let events = self.backend.borrow_mut().take_events();
         if events.contains(&Event::VaultChanged) {
             self.show_lists();
