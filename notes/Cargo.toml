@@ -2,20 +2,43 @@
 name = "icloud-notes"
 version.workspace = true
 edition.workspace = true
-description = "iCloud Notes on Omarchy: the black-box suite any icloud-notes binary must pass"
+description = "iCloud Notes on Omarchy: the vault, the command line and the background sync, without a window"
 license.workspace = true
 repository.workspace = true
 publish = false
 
-# No Rust target yet: the app is the Qt one beside this file (icloud-notes.pro).
+# The Qt app beside this file (icloud-notes.pro, src/*.cpp, qml/) is still
+# the one installed. This crate is its non-UI half in Rust, with no toolkit
+# in it: the vault, the note list and tree, the lock, saving and its
+# guardrails, and the merge of unsaved edits. The sync engine stays
+# icloud-notes-sync, run as a separate process.
+[lib]
+name = "icloud_notes"
+
 # tests/blackbox/ drives whichever icloud-notes binary ICLOUD_NOTES_BIN names,
-# so the same suite holds the Qt binary today and its Rust port after it.
+# so the same suite holds the Qt binary and a port of its command line.
 [[test]]
 name = "blackbox"
 path = "tests/blackbox/main.rs"
 
-[dev-dependencies]
+[dependencies]
+# The workspace's session/ crate: the sign-in, the output modes, the shared wording.
+icloud-session.workspace = true
+# The left-iCloud record's place (app/).
+icloud-app.workspace = true
+# Folder names sort as Apple Notes sorts them (numeric, ignoring case).
+icu_collator = "2"
+icu_locale_core = "2"
+# Which characters are digits, as a list marker's number.
+icu_properties = "2.3"
+# The local time in a conflict backup's name and a trashed file's record.
+jiff = "0.2"
+# renameat2, and the lock's descriptor handed to the engine.
+rustix = { version = "1", features = ["fs", "process"] }
 serde_json.workspace = true
-tempfile.workspace = true
-# The suite's stand-in for icloud-sessiond on its private bus.
+# ReportSignInRequired, which icloud-session's API keeps to itself.
 zbus.workspace = true
+
+[dev-dependencies]
+icloud-app = { workspace = true, features = ["testing"] }
+tempfile.workspace = true
