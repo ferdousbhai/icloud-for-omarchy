@@ -32,8 +32,8 @@ fn home() -> PathBuf {
 }
 
 /// The XDG Documents directory, read from `user-dirs.dirs` exactly as Qt
-/// reads it (QStandardPaths), odd files included: while the Qt app is the
-/// window, both must open the same vault. The last line that starts with
+/// reads it (QStandardPaths), odd files included: the Qt app that came
+/// before found the vault there, so this finds the same one. The last line that starts with
 /// the name counts, quotes around the whole value go, a leading `$HOME` is
 /// replaced as text and one final slash dropped. `~/Documents` without a
 /// file or a line, and where that reading gives no absolute path.

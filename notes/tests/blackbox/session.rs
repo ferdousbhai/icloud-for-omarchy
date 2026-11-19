@@ -1,8 +1,7 @@
 //! The suite's stand-in for icloud-sessiond: the part of its D-Bus interface
 //! icloud-notes uses (the account's properties, `SignIn`,
 //! `ReportSignInRequired`), served from the test process on the test's
-//! private bus. The repository's other fake is C++ linked into the Qt tests
-//! (tests/fake_session.h), which a separate binary under test cannot reach.
+//! private bus.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

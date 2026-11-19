@@ -83,11 +83,12 @@ Uninstalling (`omarchy pkg drop icloud-notes`, and `icloud-session` if
 nothing else uses it) also removes the sync engine and the background-sync
 timer.
 
-To build and run from source instead (from `notes/`):
+To build and run from source instead (from the repository's root, with
+rust and gtk4):
 
 ```bash
-./bin/build
-./build/icloud-notes
+bin/build icloud-notes
+target/release/icloud-notes
 ```
 
 ## First run
@@ -270,12 +271,12 @@ also starts it at once). To turn it off for yourself:
 What it did is in `journalctl --user -u icloud-notes-background`.
 
 Built from source without the package, the units are not installed. From
-`notes/`, after `./bin/build`, install them for your user with the
-service pointed at the binary you built:
+`notes/`, after `bin/build icloud-notes` in the repository's root, install
+them for your user with the service pointed at the binary you built:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-sed "s|^ExecStart=.*|ExecStart=$PWD/build/icloud-notes --sync|" data/icloud-notes-background.service \
+sed "s|^ExecStart=.*|ExecStart=$PWD/../target/release/icloud-notes --sync|" data/icloud-notes-background.service \
   > ~/.config/systemd/user/icloud-notes-background.service
 cp data/icloud-notes-background.timer ~/.config/systemd/user/
 systemctl --user daemon-reload

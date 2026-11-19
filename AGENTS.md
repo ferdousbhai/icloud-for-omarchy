@@ -10,7 +10,7 @@ and error code); `docs/skills/icloud/SKILL.md` is the installable skill, embedde
 
 ## Code index
 
-Cargo workspace (`Cargo.toml`) plus one Qt app:
+Cargo workspace (`Cargo.toml`):
 
 - `session/` — `icloud-session` client crate (`lib.rs`, `cli.rs`): talks to the daemon over
   D-Bus. Published separately to crates.io when needed and consumed by sibling repos
@@ -22,29 +22,25 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   (`cloudkit/`), Markdown (`md/`), vault (`vault/`), commands (`cmd/`). Recorded scenarios and
   golden corpora live in `tests/`; regenerate with `ICLOUD_NOTES_SYNC_REGEN=1 cargo test -p
   icloud-notes-sync`. Ships inside the icloud-notes package, not on its own.
-- `notes/` — `icloud-notes`, twice over while it moves off Qt. The Qt6/QML app and CLI (C++ in
-  `src/*.cpp`, QML in `qml/`, `notes/bin/build`, `notes/bin/test`) is the one installed. Beside it,
-  the cargo crate `icloud-notes` (`src/*.rs`) is its non-UI half in Rust, with no toolkit in it and
-  not packaged yet: the vault and its notes (`backend.rs`, with the save path and its guardrails),
-  the pure rules behind safe sync and the merge of unsaved edits (`syncmodel.rs`), the sidebar tree
-  (`notetree.rs`), the vault's lock (`lock.rs`), runs of the engine as a separate process
-  (`engine.rs`, `sync.rs`), and the command line and the timer's `--sync` (`cli.rs`, `main.rs`),
-  which print the Qt app's bytes (`json.rs` is QJsonDocument's layout, `files.rs` its text
-  decoding). It has no window: started as the app, and for `export-pdf` (which lays out a page),
-  its binary runs `icloud-notes-app` beside it. The window that replaces the Qt one is that binary
-  in this crate (`src/bin/app/`, GTK 4 on omui behind the default `ui` feature, so the command line
-  links no GTK), not installed until it does all the Qt window does; `dev/preview.sh` takes pictures
-  of either window on a seeded vault and the stub engine. Change a rule in both the C++ and the Rust
-  until the Qt app is gone. `tests/blackbox/` holds both to the same behaviour: the command line driven
-  as a separate process, whichever binary `ICLOUD_NOTES_BIN` names (`notes/bin/test` builds the Qt
-  app and the Rust binary, with the Qt app as its `icloud-notes-app`, and runs the suite on each;
-  without the variable the tests run nothing). `tests/fixtures/syncmodel.json` pins what no
-  command reaches (the merge of unsaved edits, the sidebar tree) as calls and the C++'s answers,
-  which `notes/bin/test` holds to the C++ (`tests/syncmodel_fixtures.cpp`; run with `--write`, it
-  refills the results from the C++) and `cargo test -p icloud-notes` to the Rust
-  (`tests/syncmodel.rs`); `tests/backend.rs` holds the window's save path, `tests/cli.rs` what
-  the binary links and hands to the app.
-- `app/` — `icloud-app`, what the GTK apps share (Photos, Find My, Reminders, and Cloud Contacts by git), with no GTK in it: the command lines'
+- `notes/` — `icloud-notes`: a library, the command line, and the window. The library has no toolkit
+  in it: the vault and its notes (`backend.rs`, with the save path and its guardrails), the pure rules
+  behind safe sync and the merge of unsaved edits (`syncmodel.rs`), the sidebar tree (`notetree.rs`),
+  the vault's lock (`lock.rs`), runs of the engine as a separate process (`engine.rs`, `sync.rs`),
+  and the command line and the timer's `--sync` (`cli.rs`, `main.rs`), which print the bytes the Qt
+  app that came before printed (`json.rs` is QJsonDocument's layout, `files.rs` its text decoding).
+  Started with no command (or a first word that is none), the `icloud-notes` binary runs
+  `icloud-notes-app` beside it; so does `export-pdf`, which lays out a page. The window is that
+  binary (`src/bin/app/`, GTK 4 on omui behind the default `ui` feature, so the command line links
+  no GTK), one per vault (its GApplication id), keeping its layout in
+  `$XDG_CONFIG_HOME/icloud-notes/window.json`; `dev/preview.sh` takes pictures of it on a seeded
+  vault and the stub engine. `tests/blackbox/` holds the binary to its behaviour: the command line
+  driven as a separate process, the window on a Broadway display of the test's own, whichever binary
+  `ICLOUD_NOTES_BIN` names (`bin/check` and the PKGBUILD's `check()` name the one cargo built;
+  without the variable the tests run nothing). `tests/fixtures/syncmodel.json` pins what no command
+  reaches (the merge of unsaved edits, the sidebar tree) as calls and the answers the Qt app's C++
+  gave (`tests/syncmodel.rs`); `tests/backend.rs` holds the window's save path and search,
+  `tests/cli.rs` what the binary links and hands to the app.
+- `app/` — `icloud-app`, what the GTK apps share (Notes, Photos, Find My, Reminders, and Cloud Contacts by git), with no GTK in it: the command lines'
   helpers on top of `icloud_session::output` (`cli.rs`: confirm, the "or Sign In in the app" hint,
   `session_failure`, warnings, name folding, the launcher that turns `icloud-<app>` with no command
   into `icloud-<app>-app`), an app's data directory, its `flock` and JSON files replaced whole
@@ -97,18 +93,18 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
 ## Commands
 
 ```sh
-bin/check                      # what changed since origin/main: clippy + tests of those crates and their dependents, and the Qt/installer/packaging tests it touches (the pre-push hook)
-bin/check --all                # everything routine: rustfmt, clippy -D warnings, all Rust tests, notes/bin/test, installer + packaging tests (CI runs the same on release)
-bin/check --deep               # --all plus the random-exploration suites (#[ignore = "deep: ..."], the Notes sequence test): bug hunting after big changes, not every push
-bin/build [icloud-photos ...] # release binaries into target/release/, Notes into notes/build/
+bin/check                      # what changed since origin/main: clippy + tests of those crates and their dependents, Notes' black-box suite, and the installer/packaging tests it touches (the pre-push hook)
+bin/check --all                # everything routine: rustfmt, clippy -D warnings, all Rust tests, Notes' black-box suite, installer + packaging tests (CI runs the same on release)
+bin/check --deep               # --all plus the random-exploration suites (#[ignore = "deep: ..."]): bug hunting after big changes, not every push
+bin/build [icloud-photos ...] # release binaries into target/release/
 cargo test -p icloud-findmy   # one crate
 cargo fmt --all               # max_width = 120 (rustfmt.toml)
 bin/build-packages "$(uname -m)" # native Arch packages; no Docker
 ```
 
 Build deps: rust, sqlite, gtk4, libshumate (findmy), webkitgtk-6.0 (sign-in window;
-without it `bin/check` tests sessiond with `--no-default-features`), qt6-base, qt6-declarative,
-make. GitHub's Ubuntu runners use `bin/arch-run` with `arch-install-scripts` to build
+without it `bin/check` tests sessiond with `--no-default-features`); Notes' window tests run
+gtk4's `gtk4-broadwayd`. GitHub's Ubuntu runners use `bin/arch-run` with `arch-install-scripts` to build
 in a disposable native Arch chroot; local package builds run directly as a regular
 Arch user. Release installer checks also use fresh chroots, never the host.
 CI (`.github/workflows/packages.yml`) runs fmt, the installer (which syntax-checks the scripts) and
@@ -118,7 +114,7 @@ packaging tests, then native x86_64/aarch64 package builds.
 
 - CLI contract, shared by every tool (Rust: `session/src/output.rs` — `OutputFlags`, `Response`,
   `CliError`, the shared hints and `session_failure`/`http_failure`; Notes mirrors it in
-  `notes/src/cli.cpp`): text on a terminal, the envelope `{"ok":true,"data","summary","meta"?}`
+  `notes/src/cli.rs`): text on a terminal, the envelope `{"ok":true,"data","summary","meta"?}`
   when piped or with `--json`; `--styled`, `--quiet` (data only), `--ids-only`, `--count`, combinable
   (ids-only > count > quiet > json > styled). Failures are `{"ok":false,"error":{"code","message",
   "hint"?}}` on stdout in machine modes, `error:`/`hint:` on stderr in text mode; remediation goes in
@@ -137,6 +133,7 @@ packaging tests, then native x86_64/aarch64 package builds.
   crates.io publication is a separate explicit `cargo publish --locked -p icloud-session`.
 - The installer pins `add_signed_repo` in `tests/add_signed_repo.sha256`; update the hash
   deliberately when changing the function. Ghost has removed its old copy.
-- The Photos, Find My and Reminders windows hold omui's Strata-derived code and Lucide icons: a change of
-  the omui `rev` keeps `NOTICE` (installed by the PKGBUILD) true.
+- The Notes, Photos, Find My and Reminders windows hold omui's Strata-derived code and Lucide icons
+  (Notes draws a few more Lucide icons of its own, `notes/src/bin/app/icons.rs`): a change of the omui
+  `rev` keeps `NOTICE` (installed by the PKGBUILD) true.
 - `/target`, `/dist` and makepkg dirs are gitignored build output.

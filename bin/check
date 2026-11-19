@@ -4,15 +4,14 @@
 #
 #   bin/check          what this change touches: the files changed since origin/main (commits and
 #                      the working tree) pick the crates to lint and test (plus the crates that depend
-#                      on them), the Qt app's tests, the installer tests and the packaging tests.
-#   bin/check --all    everything routine (the packages' check() in CI runs the same Rust and Qt tests).
-#   bin/check --deep   --all plus the random-exploration suites (model-based and property tests, the
-#                      Notes window's sequence test), marked #[ignore = "deep: ..."]: for hunting bugs
-#                      after a big change, not for every push. Raise their case counts with each
-#                      suite's *_CASES variable.
+#                      on them), Notes' black-box suite, the installer tests and the packaging tests.
+#   bin/check --all    everything routine (the packages' check() in CI runs the same Rust tests).
+#   bin/check --deep   --all plus the random-exploration suites (model-based and property tests),
+#                      marked #[ignore = "deep: ..."]: for hunting bugs after a big change, not for
+#                      every push. Raise their case counts with each suite's *_CASES variable.
 #
 # Always: the shared-support check (bin/check-shared-support) and its test, rustfmt. Then, as chosen:
-# clippy and the Rust tests, the Qt app's tests (notes/bin/test), install.sh's shared add_signed_repo
+# clippy and the Rust tests, Notes' black-box suite (notes/tests/blackbox/), install.sh's shared add_signed_repo
 # hash and the installers against stubbed pacman (tests/install_test.sh), and the packaging and release
 # tests (tests/packaging_test.py). The notes-sync recorded scenarios and golden corpora run with that
 # crate's tests (see notes-sync/tests/differential/README.md).
@@ -117,13 +116,16 @@ if ((${#pkgs[@]})); then
   fi
 fi
 
-# The Qt app runs the real notes engine, so either one changing runs its
-# tests; the Rust command line beside it links app/ too, and only there is
-# the black-box suite given a binary to drive.
+# Notes' black-box suite drives the icloud-notes binary as a separate
+# process, with the real engine behind the stub one, so either changing runs
+# it (the binary links session/ and app/ too); only here is it given a
+# binary to drive.
 if ((all || all_rust)) || touched '^(notes|notes-sync|session|app)/'; then
-  ICLOUD_DEEP=$deep notes/bin/test
+  cargo build --locked -p icloud-notes -p icloud-notes-sync --bins
+  ICLOUD_NOTES_BIN="$(realpath "${CARGO_TARGET_DIR:-target}")/debug/icloud-notes" \
+    cargo test --locked -p icloud-notes --test blackbox
 else
-  echo "Notes app: unchanged, skipped" >&2
+  echo "Notes black-box suite: unchanged, skipped" >&2
 fi
 
 if touched '^(install[^/]*\.sh|tests/install_test\.sh|tests/add_signed_repo\.sha256|bin/make-installers)$'; then

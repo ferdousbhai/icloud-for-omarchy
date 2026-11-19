@@ -921,8 +921,8 @@ fn export_pdf_writes_a_pdf_beside_the_note_once() {
         format!("{}\n", pdf.display())
     );
     assert_eq!(w.read("Notes/Alpha.md"), ALPHA);
-    // It needs no display of its own.
-    let headless = w.cmd(["export-pdf", "grid"]).env("QT_QPA_PLATFORM", "").run();
+    // It needs no display: this world starts none unless a window is.
+    let headless = w.cmd(["export-pdf", "grid"]).run();
     assert_eq!(headless.ok()["pdf"], json!(w.path("Work/Grid.pdf")));
 }
 

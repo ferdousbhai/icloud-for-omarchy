@@ -1,6 +1,5 @@
 //! The `icloud-notes` binary itself: what it links, and what it hands to
-//! the app's binary. Its commands are held by tests/blackbox/ (run on this
-//! binary and on the Qt app by notes/bin/test).
+//! the app's binary. Its commands are held by tests/blackbox/.
 
 use std::fs;
 use std::path::Path;
@@ -61,7 +60,8 @@ fn run(binary: &Path, args: &[&str], scratch_dir: &Path) -> Output {
 
 #[test]
 fn the_command_line_binary_does_not_link_gtk() {
-    // Nor Qt, whose app this crate's command line replaces, nor WebKit.
+    // Nor what draws the window or a page: GTK's libraries, the Qt the
+    // window was once drawn with, WebKit.
     assert_cli_links_no_gtk(
         CLI,
         None,

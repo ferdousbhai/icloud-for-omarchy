@@ -3,10 +3,8 @@
 #
 # Usage: bin/build [package...]   e.g. bin/build icloud-photos icloud-notes
 #
-# The Rust packages need rust and, for the apps' windows, gtk4, libshumate
+# They need rust and, for the apps' windows, gtk4, libshumate
 # (icloud-findmy) and webkitgtk-6.0 (icloud-session's sign-in window).
-# icloud-notes needs qt6-base, qt6-declarative and make, and builds its sync
-# engine (notes-sync/, icloud-notes-sync) with rust too.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -14,12 +12,11 @@ source packaging/PKGBUILD
 (( $# )) && pkgs=("$@") || pkgs=("${pkgname[@]}")
 
 cargo_args=()
-notes=0
 for pkg in "${pkgs[@]}"; do
   case $pkg in
     icloud-session) cargo_args+=(-p icloud-sessiond) ;;
     # The app and its sync engine, one package.
-    icloud-notes) cargo_args+=(-p icloud-notes-sync) notes=1 ;;
+    icloud-notes) cargo_args+=(-p icloud-notes -p icloud-notes-sync) ;;
     # Every other package is the crate of its own name.
     *)
       if [[ " ${pkgname[*]} " != *" $pkg "* ]]; then
@@ -33,6 +30,3 @@ done
 
 cargo build --release --locked --bins "${cargo_args[@]}"
 echo "Rust binaries: $(pwd)/target/release/"
-if (( notes )); then
-  notes/bin/build
-fi

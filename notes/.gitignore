@@ -1,5 +1,0 @@
-build*/
-*.o
-moc_*
-qrc_*
-Makefile

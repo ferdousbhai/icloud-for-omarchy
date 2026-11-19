@@ -2,19 +2,17 @@
 name = "icloud-notes"
 version.workspace = true
 edition.workspace = true
-description = "iCloud Notes on Omarchy: the vault, the command line and the background sync, without a window"
+description = "iCloud Notes on Omarchy: the window, the command line and the background sync"
 license.workspace = true
 repository.workspace = true
 publish = false
 
 default-run = "icloud-notes"
 
-# The Qt app beside this file (icloud-notes.pro, src/*.cpp, qml/) is still
-# the one installed. The library is its non-UI half in Rust, with no toolkit
-# in it: the vault, the note list and tree, the lock, saving and its
-# guardrails, the merge of unsaved edits, and the command line. The sync
-# engine stays icloud-notes-sync, run as a separate process. The window
-# that replaces the Qt one is the binary icloud-notes-app, not installed yet.
+# The library has no toolkit in it: the vault, the note list and tree, the
+# lock, saving and its guardrails, the merge of unsaved edits, and the
+# command line. The sync engine is icloud-notes-sync, run as a separate
+# process. The window is the binary icloud-notes-app.
 [lib]
 name = "icloud_notes"
 
@@ -35,8 +33,8 @@ required-features = ["ui"]
 default = ["ui"]
 ui = ["dep:gtk", "dep:omui", "dep:async-channel", "dep:cairo-rs", "dep:pangocairo"]
 
-# tests/blackbox/ drives whichever icloud-notes binary ICLOUD_NOTES_BIN names,
-# so the same suite holds the Qt binary and this one.
+# tests/blackbox/ drives the icloud-notes binary ICLOUD_NOTES_BIN names, as
+# a separate process (bin/check names the one built here).
 [[test]]
 name = "blackbox"
 path = "tests/blackbox/main.rs"

@@ -1,11 +1,8 @@
 //! The vault as the app works on it: its folders and notes with the badges
 //! the window shows, the open note, and every change to them, with the
 //! guardrails that keep a change from costing a note in iCloud. The window
-//! and the command line both go through here; nothing in it draws.
-//!
-//! This is the non-UI half of the C++ `NotesBackend` (src/notesbackend.cpp),
-//! which the Qt app still runs. Engine runs and the sign-in are in
-//! `sync.rs`.
+//! and the command line both go through here; nothing in it draws. Engine
+//! runs and the sign-in are in `sync.rs`.
 
 use std::collections::HashMap;
 use std::fs;

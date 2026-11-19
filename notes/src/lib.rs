@@ -4,9 +4,8 @@
 //! sync engine ([`sync`], [`engine`]) and the command line ([`cli`]).
 //!
 //! Nothing here links a toolkit: the `icloud-notes` binary is the command
-//! line and the timer's `--sync`, and a window is another binary on top of
-//! this crate. Until that one exists the Qt app (the C++ beside these
-//! files) is the window, and still carries its own copy of all this.
+//! line and the timer's `--sync`, and the window is another binary on top
+//! of this crate (`src/bin/app/`, behind the `ui` feature).
 
 pub mod attachments;
 pub mod backend;

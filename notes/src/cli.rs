@@ -12,8 +12,8 @@
 //! (ids-only > count > quiet > json > styled). A failure is
 //! `{"ok":false,"error":{"code","message","hint"?}}` on stdout in those
 //! machine modes, `error:`/`hint:` on stderr in text mode. The JSON is laid
-//! out as the Qt app's (`json.rs`), which this command line replaces, so a
-//! caller sees the same bytes from both.
+//! out as the Qt app's command line laid it out (`json.rs`), so a caller
+//! sees the bytes it saw before.
 //!
 //! Exit codes, as in every iCloud tool: 0 ok, 1 error, 2 usage or invalid
 //! request, 3 not signed in or not cloned, 4 not found, 5 offline or a

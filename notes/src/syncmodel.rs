@@ -3,10 +3,10 @@
 //! disk, the characters a plain-text editor gives back changed, titles and
 //! previews, folder order. Nothing here touches disk.
 //!
-//! This is the C++ `SyncModel` (src/syncmodel.h), which the Qt app still
-//! runs; tests/fixtures/syncmodel.json holds both to the same answers, to
-//! the byte. The merge works on UTF-16 units, as the C++ does, so that an
-//! offset found in a text's editor form holds in the text itself.
+//! It was the Qt app's C++ `SyncModel`; tests/fixtures/syncmodel.json holds
+//! it to that one's answers, to the byte. The merge works on UTF-16 units,
+//! as the C++ did, so that an offset found in a text's editor form holds in
+//! the text itself.
 
 use std::cmp::Ordering;
 use std::sync::OnceLock;

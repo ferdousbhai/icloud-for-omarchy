@@ -15,7 +15,7 @@
 # stderr. status, push --dry-run and diff report their changes in the
 # result and exit 0, a sign-in required exits 3, a usage error 2, offline 5
 # (the codes every iCloud tool shares). vault-info is the real engine's
-# ($ICLOUD_NOTES_SYNC_REAL, which bin/test builds): it reads the test's
+# ($ICLOUD_NOTES_SYNC_REAL, which the suite names): it reads the test's
 # vault as the app would.
 # background is the engine's step with its decision taken from
 # ICLOUD_NOTES_SYNC_STUB_STEP (the real decision is unit-tested in
@@ -142,7 +142,7 @@ if [ "$1" = "vault-info" ]; then
   [ -n "${ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG:-}" ] && echo "vault-info" >> "$ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_LOG"
   # ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_FAIL: vault-info gives no answer (as a crash would).
   [ -n "${ICLOUD_NOTES_SYNC_STUB_VAULT_INFO_FAIL:-}" ] && exit 1
-  exec "${ICLOUD_NOTES_SYNC_REAL:?bin/test names the real engine}" "${orig[@]}"
+  exec "${ICLOUD_NOTES_SYNC_REAL:?the suite names the real engine}" "${orig[@]}"
 elif [ "$1" = "sync" ] || [ "$1" = "background" ]; then
   step=""
   if [ "$1" = background ]; then

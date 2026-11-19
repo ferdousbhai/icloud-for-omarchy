@@ -44,8 +44,8 @@ pub fn stub_engine() -> PathBuf {
 }
 
 /// The real engine, which the stub forwards `vault-info` to and the cassette
-/// tests run: `ICLOUD_NOTES_SYNC_REAL` (notes/bin/test builds and names it),
-/// else the one cargo built beside this test.
+/// tests run: `ICLOUD_NOTES_SYNC_REAL` when set, else the one cargo built
+/// beside this test.
 pub fn real_engine() -> PathBuf {
     let path = std::env::var_os("ICLOUD_NOTES_SYNC_REAL")
         .map(PathBuf::from)
@@ -106,7 +106,7 @@ impl World {
     /// binary: there is nothing to drive, so the test has nothing to say.
     pub fn new() -> Option<World> {
         let Some(bin) = std::env::var_os("ICLOUD_NOTES_BIN").filter(|b| !b.is_empty()) else {
-            eprintln!("skipped: ICLOUD_NOTES_BIN names no icloud-notes binary (notes/bin/test sets it)");
+            eprintln!("skipped: ICLOUD_NOTES_BIN names no icloud-notes binary (bin/check sets it)");
             return None;
         };
         let bin = PathBuf::from(bin);

@@ -11,7 +11,7 @@ arch=('x86_64' 'aarch64')
 url='https://github.com/ferdousbhai/icloud-for-omarchy'
 license=('MIT')
 options=('!debug' '!lto')
-makedepends=('rust' 'cargo' 'git' 'dbus' 'gtk4' 'libshumate' 'webkitgtk-6.0' 'qt6-base' 'qt6-declarative')
+makedepends=('rust' 'cargo' 'git' 'dbus' 'gtk4' 'libshumate' 'webkitgtk-6.0')
 
 pkgver() {
   local description
@@ -31,7 +31,7 @@ prepare() {
 }
 
 _cargo_env() {
-  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$srcdir/icloud-for-omarchy/target}"  # absolute: notes/bin/test runs from tests/
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$srcdir/icloud-for-omarchy/target}"  # absolute: the Notes suite names a binary in it
   export RUSTFLAGS="$_rustflags --remap-path-prefix=$_root=/build --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
 }
 
@@ -39,14 +39,15 @@ build() {
   cd "$srcdir/icloud-for-omarchy"
   _cargo_env
   cargo build --frozen --release --workspace --bins
-  ICLOUD_NOTES_VERSION="$pkgver" notes/bin/build
 }
 
 check() {
   cd "$srcdir/icloud-for-omarchy"
   _cargo_env
-  cargo test --frozen --workspace
-  notes/bin/test
+  # Notes' black-box suite (notes/tests/blackbox/) drives the icloud-notes
+  # binary the workspace's tests built, its window on a Broadway display of
+  # its own (gtk4-broadwayd).
+  ICLOUD_NOTES_BIN="$CARGO_TARGET_DIR/debug/icloud-notes" cargo test --frozen --workspace
 }
 
 _release_bin() {
@@ -134,25 +135,21 @@ package_icloud-findmy() {
 
 package_icloud-notes() {
   pkgdesc='Apple Notes on Omarchy, synced with iCloud'
-  depends=('gcc-libs' 'glibc' 'hicolor-icon-theme' "icloud-session>=$pkgver" 'qt6-base' 'qt6-declarative')
+  license=('MIT' 'ISC')  # ISC: the Lucide icons omui compiles into the window, and the window's own (NOTICE)
+  depends=('gtk4' "icloud-session>=$pkgver" 'hicolor-icon-theme')
   provides=('icloud-notes-sync')
   replaces=('icloud-notes-sync')
   conflicts=('icloud-notes-sync')
-  cd "$srcdir/icloud-for-omarchy"
+  # The command line and the timer's sync link no toolkit; the window (and
+  # export-pdf, which lays out a page) is icloud-notes-app, found beside it.
+  _package_gtk_app IcloudNotes
+  _refuse_link usr/bin/icloud-notes-app libadwaita-1
   # The engine, run by the app and by `icloud-notes`; not a command of its own.
   _release_bin icloud-notes-sync usr/lib/icloud-notes/icloud-notes-sync
   install -Dm644 notes-sync/README.md "$pkgdir/usr/share/doc/$pkgname/notes-sync.md"
-  _install_licenses
-  # The command line and the timer's sync link no toolkit; for the window
-  # (and export-pdf) that binary becomes icloud-notes-app, found beside it.
-  _release_bin icloud-notes usr/bin/icloud-notes
-  cd notes
-  install -Dm755 build/icloud-notes "$pkgdir/usr/bin/icloud-notes-app"
-  install -Dm644 icloud-notes.desktop "$pkgdir/usr/share/applications/icloud-notes.desktop"
-  install -Dm644 icons/icloud-notes.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/icloud-notes.svg"
   # Background sync while the app is closed; it does nothing for a user
   # with no cloned notes.
-  _install_background_timer data
+  _install_background_timer notes/data
 }
 
 package_icloud-drive() {

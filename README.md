@@ -29,7 +29,7 @@ curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/dow
 
 | Directory | Package | What it is |
 |---|---|---|
-| [notes/](notes/README.md), [notes-sync/](notes-sync/README.md) | `icloud-notes` | Apple Notes as a Qt/QML app (installed as `icloud-notes-app`) and the `icloud-notes` command (Rust, no toolkit; it starts the app when given no command), synced with iCloud by its engine, icloud-notes-sync (notes-sync/, in Rust, originally derived from icloud-md), which the package installs off PATH. |
+| [notes/](notes/README.md), [notes-sync/](notes-sync/README.md) | `icloud-notes` | Apple Notes in GTK4 (`icloud-notes-app`) and the `icloud-notes` command (no toolkit; it starts the app when given no command), synced with iCloud by its engine, icloud-notes-sync (notes-sync/, in Rust, originally derived from icloud-md), which the package installs off PATH. |
 | [photos/](photos/README.md) | `icloud-photos` | iCloud Photos in GTK4: browse, download, upload and delete. |
 | [findmy/](findmy/README.md) | `icloud-findmy` | Find My devices in GTK4: locate, play a sound, Lost Mode, history trail. |
 | [reminders/](reminders/README.md) | `icloud-reminders` | iCloud Reminders in GTK4 with Omarchy's current theme, and a systemd timer that notifies through Omarchy's notifications when a reminder falls due. |
@@ -198,9 +198,9 @@ on aarch64), its `Include` line in `/etc/pacman.conf`, and
 ## Layout
 
 ```
-Cargo.toml, Cargo.lock   one Cargo workspace: session, sessiond, notes-sync, app, app/ui, photos, findmy, drive, reminders
+Cargo.toml, Cargo.lock   one Cargo workspace: session, sessiond, notes, notes-sync, app, app/ui, photos, findmy, drive, reminders
 session/  sessiond/      icloud-session: client crate / daemon, sign-in window, CLI
-notes/                   icloud-notes (qmake project, QML, tests, its own bin/build and bin/test)
+notes/                   icloud-notes: the vault, the command line and the window (its timer in notes/data/)
 notes-sync/              icloud-notes-sync, the sync engine the icloud-notes package ships
 app/  app/ui/            icloud-app, icloud-app-ui: what the GTK apps share (internal: no binary, in no package)
 photos/  findmy/         icloud-photos, icloud-findmy
@@ -223,21 +223,19 @@ the move. icloud-notes' release tags `v0.1.0`...`v0.3.8` are here as
 ## Development
 
 Needs `rust`, `sqlite`, `gtk4`, `libshumate` (findmy) and
-`webkitgtk-6.0` (the sign-in window) for the Rust crates, and `qt6-base`,
-`qt6-declarative` and `make` for Notes. The apps talk to the icloud-session
+`webkitgtk-6.0` (the sign-in window). The apps talk to the icloud-session
 daemon over D-Bus; for development without the package, `bin/dev-install`
 puts a release build of it in `~/.local/bin` with a user D-Bus activation
 file (`bin/dev-uninstall` undoes it).
 
 ```bash
 bin/build                       # every package; or name some: bin/build icloud-photos
-bin/check                        # rustfmt, clippy, all Rust tests, notes/bin/test, the installer checks
+bin/check                        # rustfmt, clippy, the Rust tests and Notes' black-box suite, the installer checks
 tests/install_test.sh           # the installers alone: stubbed pacman, scratch /etc in a user namespace
 cargo test -p icloud-findmy     # one crate
-notes/bin/test                  # the Qt app's tests alone (they run on a private D-Bus)
 ```
 
-Rust binaries land in `target/release/`, Notes in `notes/build/`. Each app
+Binaries land in `target/release/`. Each app
 can also run against a local fake of Apple's servers; its README says how.
 
 notes-sync's recorded scenarios and golden corpora run with `cargo test`;

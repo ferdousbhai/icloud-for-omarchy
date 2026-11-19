@@ -29,11 +29,11 @@ GTK-free CLI binaries and separate native windows (`icloud-photos-app`,
 ## The audit: GUI feature → command
 
 "Added" marks a gap this audit found and filled; everything else already
-existed. The GUI code audited: `notes/qml/main.qml` and
-`notes/src/notesbackend.*`, `photos/src/ui/`, `findmy/src/bin/app/`, and the
+existed. The GUI code audited: the Notes window of the time (Qt/QML, since
+replaced by `notes/src/bin/app/`), `photos/src/ui/`, `findmy/src/bin/app/`, and the
 sign-in flows in `sessiond/src/bin/signin.rs` and `sessiond/src/daemon.rs`.
 
-### Notes (`notes/qml`, `notes/src`)
+### Notes (`notes/src`)
 
 Notes had no command line beyond `icloud-notes --sync` (the background
 timer's sync). All of it is new, in the app binary: see
@@ -181,13 +181,13 @@ They could have gone into the sync engine, `icloud-notes-sync`, instead. They di
 because everything that makes an edit safe is the app's: which notes are
 read-only, the save checks, how a title maps to a file in each vault shape,
 how the conflict picker rewrites a note, the backups `recover` makes, and the
-vault's lock. That is C++ in `notes/src` (`NotesBackend`, `SyncModel`); a
-Rust copy would drift. The engine takes the same lock itself for clone,
+vault's lock. That is the notes library (`notes/src`: `backend.rs`,
+`syncmodel.rs`), which the window links too, so the two cannot drift. The engine takes the same lock itself for clone,
 pull, push, sync and restore (the app hands it the one it holds), and tells the
 app what it needs of the vault's state through `vault-info` (and in each
 `sync` answer, so a sync costs one engine run).
-`icloud-notes <command>` runs that code headless (a `QCoreApplication`; a
-`QGuiApplication` on the offscreen platform only for `export-pdf`), the same
+`icloud-notes <command>` runs that code with no toolkit (`export-pdf`, which
+lays out a page, runs in `icloud-notes-app`, with no display), the same
 way `icloud-photos` puts its commands in the app binary. `icloud-notes-sync` stays the engine, shipped inside the
 icloud-notes package and off PATH, and `icloud-notes` is the one command
 for notes: it runs the engine for `sync`, `pull`, `push` and `clone` the
@@ -206,7 +206,7 @@ PATH (a development build).
 
 All seven tools (`icloud-session`, `icloud-notes`, `icloud-notes-sync`,
 `icloud-photos`, `icloud-findmy`, `icloud-reminders`, `icloud-drive`) follow the same output contract
-(`session/src/output.rs` for the Rust tools; `notes/src/cli.cpp` mirrors it).
+(`session/src/output.rs`; `notes/src/cli.rs` mirrors it).
 
 ### Output modes
 

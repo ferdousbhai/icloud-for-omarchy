@@ -20,12 +20,10 @@ set -Eeuo pipefail
 #   log         the Sync log after the window's first sync
 #   newnote     New note, its title typed
 #   arrows      from the start, the keys alone: Down, Right, Down (a note the arrows reach opens)
-# The last five are the GTK window's alone: four drive its actions, which the Qt window does not have.
 # `theme-dir` holds a `colors.toml` (an Omarchy theme, such as /usr/share/omarchy/themes/catppuccin-latte) and is
 # copied in as the scratch desktop's current theme; without one the pictures are named `-default`.
 #
 #   ICLOUD_NOTES_PREVIEW_APP     the window's binary (default: target/debug/icloud-notes-app)
-#   ICLOUD_NOTES_PREVIEW_QT=1    that binary is the Qt app, which has no actions to drive: keys open the note
 #   ICLOUD_NOTES_PREVIEW_SCENES  the scenes to take (default: all)
 #   ICLOUD_NOTES_PREVIEW_SIZE    the size of the window and of the pictures (default 1100x700; narrower than 1062
 #                                the window shows the tree, narrower than 521 one pane at a time)
@@ -42,7 +40,6 @@ themes=("$@")
 here=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 target=$(realpath -m -- "$here/../../target/debug")
 app=${ICLOUD_NOTES_PREVIEW_APP:-$target/icloud-notes-app}
-qt=${ICLOUD_NOTES_PREVIEW_QT:-}
 [[ -x $app ]] || { echo "preview: build first (cargo build -p icloud-notes --bins), or name the app" >&2; exit 1; }
 # The stub forwards vault-info to the real engine, which reads the seeded vault as the app would.
 [[ -x $target/icloud-notes-sync ]] || { echo "preview: build first (cargo build -p icloud-notes-sync)" >&2; exit 1; }
@@ -52,23 +49,17 @@ done
 for theme in "${themes[@]}"; do
   [[ -z $theme || -f $theme/colors.toml ]] || { echo "preview: $theme has no colors.toml" >&2; exit 1; }
 done
-all="notes search readonly conflict unreadable attach bare"
-[[ -n ${ICLOUD_NOTES_PREVIEW_QT:-} ]] || all+=" delete status log newnote arrows"
+all="notes search readonly conflict unreadable attach bare delete status log newnote arrows"
 read -r -a scenes <<< "${ICLOUD_NOTES_PREVIEW_SCENES:-$all}"
 parent_runtime=${XDG_RUNTIME_DIR:?preview: XDG_RUNTIME_DIR is required}
 parent_display=${WAYLAND_DISPLAY:?preview: run this from a Wayland desktop}
 parent_socket=$parent_runtime/$parent_display
 size=${ICLOUD_NOTES_PREVIEW_SIZE:-1100x700}
 [[ $size =~ ^[0-9]+x[0-9]+$ ]] || { echo "preview: ICLOUD_NOTES_PREVIEW_SIZE is <width>x<height>" >&2; exit 2; }
-width=${size%x*}
 
 # `action:<name>[=<string>]` activates the window's action <name> over the scratch session bus, as its menu or a
 # row would; `text:` types (an underscore is a space); the rest are keys, with modifiers named before them (ctrl+f).
 open="action:open-note=Notes/Groceries.md"
-if [[ -n $qt ]]; then
-  # The Qt window starts with the arrows on its folder list (or tree): to Notes, into it, and its newest note.
-  if (( width >= 1062 )); then open="Down Return Return"; else open="Down Right Right Return"; fi
-fi
 declare -A keys=(
   [notes]="$open"
   [search]="$open ctrl+f text:pan"
@@ -277,11 +268,7 @@ press() {
 shoot() {
   local scene=$1 picture=$2
   seed "$scene"
-  if [[ -n $qt ]]; then
-    QT_QPA_PLATFORM=wayland "$app" > "$root/app.log" 2>&1 &
-  else
-    GDK_BACKEND=wayland "$app" > "$root/app.log" 2>&1 &
-  fi
+  GDK_BACKEND=wayland "$app" > "$root/app.log" 2>&1 &
   app_pid=$!
   for _ in {1..100}; do
     on_output && break

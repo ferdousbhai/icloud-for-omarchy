@@ -129,7 +129,7 @@ class Packaging(unittest.TestCase):
         missing = subprocess.run(refuse + ["usr/bin/no-such-binary", "libadwaita-1"], cwd=ROOT, capture_output=True)
         self.assertEqual(missing.returncode, 1)
         recipe = (ROOT / "packaging/PKGBUILD").read_text()
-        for app in ["photos", "findmy", "reminders"]:
+        for app in ["photos", "findmy", "reminders", "notes"]:
             body = recipe.split(f"package_icloud-{app}() {{", 1)[1].split("\n}", 1)[0]
             self.assertIn(f"_refuse_link usr/bin/icloud-{app}-app libadwaita-1", body)
             # The Lucide icons omui compiles into the window are ISC (NOTICE).
@@ -366,7 +366,7 @@ for arch in ("x86_64", "aarch64"):
                         [[ $RUSTFLAGS == "$first" ]]
                         printf '%s\n' "$RUSTFLAGS"
                         install() {
-                          if [[ $1 == -Dm755 && $2 != build/icloud-notes ]]; then
+                          if [[ $1 == -Dm755 ]]; then
                             [[ $2 == "$CARGO_TARGET_DIR"/release/* ]]
                             printf '%s\n' "$2"
                           fi

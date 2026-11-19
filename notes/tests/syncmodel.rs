@@ -1,8 +1,8 @@
-//! fixtures/syncmodel.json holds calls of the C++ SyncModel and NoteTree,
-//! each with the result the C++ gave (tests/syncmodel_fixtures.cpp keeps the
-//! file true to it): the merge of unsaved edits, the editor's characters,
-//! the sidebar tree and the rest of the pure logic. This crate's port of
-//! them gives the same results, to the byte.
+//! fixtures/syncmodel.json holds calls of SyncModel and NoteTree, each with
+//! the result the Qt app's C++ gave, which this port was held to before the
+//! C++ went: the merge of unsaved edits, the editor's characters, the
+//! sidebar tree and the rest of the pure logic. The results stay as they
+//! were, to the byte.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -80,7 +80,7 @@ fn row_json(row: &Row<AnyNote>) -> Value {
     Value::Object(out)
 }
 
-/// One call, as tests/syncmodel_fixtures.cpp makes it.
+/// One call, as the fixtures name it.
 fn call(function: &str, a: &[Value]) -> Value {
     match function {
         "conflictBody" => json!(syncmodel::conflict_body(text(a, 0), text(a, 1), text(a, 2))),
