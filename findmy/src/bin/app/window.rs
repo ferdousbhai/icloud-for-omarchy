@@ -567,6 +567,9 @@ impl Window {
         fields.append(&phone_row.widget);
         fields.append(&message_row.widget);
         dialog.set_extra_child(Some(fields.upcast_ref()));
+        // As wide as the message field needs for the default message, which
+        // omui's 420-pixel width for a dialog with a heading would cut off.
+        dialog.set_content_size(374, -1);
         dialog.add_response("cancel", "_Cancel");
         dialog.add_response("lost", "_Turn On");
         dialog.set_response_appearance("lost", omui::Appearance::Destructive);
