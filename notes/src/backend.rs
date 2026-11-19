@@ -231,12 +231,19 @@ fn rename_file(from: &Path, to: &Path) -> bool {
     }
 }
 
-/// Copies a file with its permissions, never over another one.
+/// Copies a file with its permissions, never over another one: a file at
+/// `to` is not this copy's to replace or to remove (something else writing
+/// the folder may put one there at any moment). A copy that fails after it
+/// made the file leaves none.
 fn copy_file(from: &Path, to: &Path) -> io::Result<()> {
     let mut source = fs::File::open(from)?;
     let mut target = fs::File::options().write(true).create_new(true).open(to)?;
-    io::copy(&mut source, &mut target)?;
-    target.set_permissions(source.metadata()?.permissions())
+    let copied =
+        io::copy(&mut source, &mut target).and_then(|_| target.set_permissions(source.metadata()?.permissions()));
+    if copied.is_err() {
+        let _ = fs::remove_file(to);
+    }
+    copied
 }
 
 impl Backend {
@@ -935,10 +942,8 @@ impl Backend {
             n += 1;
         }
         let path = dir.join(&stored);
-        copy_file(source_path, &path).map_err(|e| {
-            let _ = fs::remove_file(&path);
-            io_refusal(&format!("could not copy {source} to {}", path.display()), &e)
-        })?;
+        copy_file(source_path, &path)
+            .map_err(|e| io_refusal(&format!("could not copy {source} to {}", path.display()), &e))?;
         if let Ok(copied) = fs::metadata(&path) {
             let _ = fs::set_permissions(&path, fs::Permissions::from_mode(copied.permissions().mode() | 0o600));
         }
@@ -1625,5 +1630,26 @@ impl Backend {
     pub(crate) fn open_note_changed(&self) -> bool {
         self.note_absolute_path()
             .is_some_and(|path| !path.exists() || read_text(&path, None) != self.note_content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_copy_never_replaces_or_removes_a_file_that_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("from"), dir.path().join("to"));
+        fs::write(&from, "new").unwrap();
+        fs::write(&to, "someone else's").unwrap();
+        assert_eq!(copy_file(&from, &to).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(&to).unwrap(), "someone else's");
+        // One that fails once its own file is made takes that file back.
+        let made = dir.path().join("made");
+        assert!(copy_file(dir.path(), &made).is_err());
+        assert!(!made.exists());
+        copy_file(&from, &made).unwrap();
+        assert_eq!(fs::read_to_string(&made).unwrap(), "new");
     }
 }

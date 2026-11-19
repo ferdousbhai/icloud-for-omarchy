@@ -30,7 +30,7 @@ fn main() {
     let args: Vec<String> = std::env::args_os().skip(1).map(|arg| cli::argument(&arg)).collect();
     let code = match args.first().map(String::as_str) {
         Some("--sync") => cli::run_background_sync(),
-        Some(first) if cli::is_cli_invocation(first) => match cli::run(&args, None) {
+        Some(first) if cli::is_cli_invocation(first) => match cli::run(&args) {
             Ran::Exit(code) => code,
             Ran::NeedsApp => {
                 let (app, why) = become_the_app();
@@ -39,10 +39,10 @@ fn main() {
         },
         _ => {
             let (app, why) = become_the_app();
-            eprintln!(
+            cli::say(&format!(
                 "icloud-notes: cannot open the app ({}: {why}); run `icloud-notes help` for the command line",
                 app.display()
-            );
+            ));
             1
         }
     };

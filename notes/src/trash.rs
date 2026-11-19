@@ -31,8 +31,13 @@ fn top_directory(path: &Path, device: u64) -> PathBuf {
 /// The trash directory for a file on `device`, and the directory the
 /// record's path is relative to (`None`: an absolute path, the home trash).
 fn trash_for(parent: &Path, device: u64, data_home: Option<&Path>) -> (PathBuf, Option<PathBuf>) {
+    // The home trash is made when first needed, and so may the data
+    // directory be: what is there of its path says which filesystem it is on.
     if let Some(home) = data_home
-        && fs::metadata(home).is_ok_and(|m| m.dev() == device)
+        && home
+            .ancestors()
+            .find_map(|dir| fs::metadata(dir).ok())
+            .is_some_and(|m| m.dev() == device)
     {
         return (home.join("Trash"), None);
     }
@@ -137,8 +142,8 @@ mod tests {
     fn a_trashed_file_keeps_its_name_or_gains_a_number_and_has_a_record() {
         let dir = tempfile::tempdir().unwrap();
         let data = dir.path().join("data");
+        // The data directory itself is not there yet: the home trash is still the one.
         fs::create_dir_all(dir.path().join("vault/Sp ace")).unwrap();
-        fs::create_dir(&data).unwrap();
         let note = dir.path().join("vault/Sp ace/dé.md");
         for _ in 0..2 {
             fs::write(&note, "text").unwrap();

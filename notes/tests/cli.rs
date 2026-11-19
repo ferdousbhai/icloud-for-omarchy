@@ -25,24 +25,30 @@ fn beside_an_app(args: &[&str]) -> (Output, String) {
     (out, fs::read_to_string(ran).unwrap_or_default())
 }
 
-/// Runs a binary with nothing of the owner's in reach: a scratch home, no
+/// A binary's run with nothing of the owner's in reach: a scratch home, no
 /// session bus, no engine, and a vault that is not there.
-fn run(binary: &Path, args: &[&str], scratch: &Path) -> Output {
+fn scratch(binary: &Path, args: &[&str], scratch: &Path) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .args(args)
+        .env_clear()
+        .env("PATH", scratch)
+        .env("HOME", scratch)
+        .env("XDG_RUNTIME_DIR", scratch)
+        .env("XDG_DATA_HOME", scratch)
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
+        .env("ICLOUD_NOTES_VAULT", scratch.join("no-vault"))
+        .env("ICLOUD_NOTES_SYNC_BIN", scratch.join("no-engine"))
+        .stdin(Stdio::null());
+    command
+}
+
+/// Runs it ([`scratch`]).
+fn run(binary: &Path, args: &[&str], scratch_dir: &Path) -> Output {
     // A test thread forking while a copy was open for writing holds its fd
     // until that child execs: "Text file busy" (ETXTBSY) for a moment.
     for _ in 0..50 {
-        let out = Command::new(binary)
-            .args(args)
-            .env_clear()
-            .env("PATH", scratch)
-            .env("HOME", scratch)
-            .env("XDG_RUNTIME_DIR", scratch)
-            .env("XDG_DATA_HOME", scratch)
-            .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
-            .env("ICLOUD_NOTES_VAULT", scratch.join("no-vault"))
-            .env("ICLOUD_NOTES_SYNC_BIN", scratch.join("no-engine"))
-            .stdin(Stdio::null())
-            .output();
+        let out = scratch(binary, args, scratch_dir).output();
         match out {
             Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
                 std::thread::sleep(std::time::Duration::from_millis(20));
@@ -119,6 +125,23 @@ fn export_pdf_is_laid_out_by_the_app_once_its_arguments_are_right() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("usage: icloud-notes export-pdf NOTE"));
     let (out, ran) = beside_an_app(&["export-pdf", "--help"]);
     assert_eq!((out.status.code(), ran.as_str()), (Some(0), ""), "{out:?}");
+}
+
+#[test]
+fn a_failure_keeps_its_exit_code_when_nobody_reads_stderr() {
+    // `icloud-notes … 2>&1 | head -1`, once head has gone.
+    let tmp = tempfile::tempdir().unwrap();
+    for (args, code) in [
+        (&["--styled", "list", "--nope"][..], 2),
+        (&["--styled", "read", "no such note"], 3),
+        (&["--ids-only", "status"], 0),
+    ] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let mut command = scratch(Path::new(CLI), args, tmp.path());
+        let status = command.stdout(Stdio::null()).stderr(writer).status().unwrap();
+        assert_eq!(status.code(), Some(code), "{args:?}");
+    }
 }
 
 #[test]

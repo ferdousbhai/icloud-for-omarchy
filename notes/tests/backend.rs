@@ -22,6 +22,11 @@ impl World {
     /// A cloned vault holding `Q.md` (tracked, with `body`), open in a
     /// backend whose engine tracks it and answers a pull with nothing new.
     fn new(body: &str) -> World {
+        World::titled("in-body", body)
+    }
+
+    /// [`World::new`] in a vault whose titles are `title_mode`'s.
+    fn titled(title_mode: &str, body: &str) -> World {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path().join("vault");
         fs::create_dir_all(vault.join(".icloud-notes")).unwrap();
@@ -29,7 +34,7 @@ impl World {
         fs::write(vault.join("Q.md"), format!("{ID}{body}")).unwrap();
         let engine = dir.path().join("engine");
         let info = format!(
-            r#"{{"titleMode":"in-body","defaultFolderDir":"","vault":"{}","notes":[{{"id":"id-q","file":"Q.md"}},{{"id":"id-r","file":"R.md","readOnlyReason":"is locked"}}]}}"#,
+            r#"{{"titleMode":"{title_mode}","defaultFolderDir":"","vault":"{}","notes":[{{"id":"id-q","file":"Q.md"}},{{"id":"id-r","file":"R.md","readOnlyReason":"is locked"}}]}}"#,
             vault.display()
         );
         let script = format!(
@@ -301,6 +306,39 @@ fn a_read_only_note_is_never_written() {
     assert_eq!(w.backend.rename_current_note("New").unwrap_err().code, "read_only");
     assert_eq!(w.backend.move_current_note("").unwrap_err().code, "read_only");
     assert_eq!(w.read("R.md"), "---\napple-note-id: id-r\n---\n# Locked\n");
+}
+
+#[test]
+fn a_pdf_is_laid_out_by_whoever_can_and_never_over_another() {
+    let mut w = World::new("# Q\ntext\n");
+    let laid_out = std::cell::RefCell::new(Vec::new());
+    let render = |markdown: &str, pdf: &Path| {
+        laid_out.borrow_mut().push(markdown.to_string());
+        fs::write(pdf, "pdf")
+    };
+    assert_eq!(w.backend.export_pdf(&render).unwrap(), w.path("Q.pdf"));
+    assert_eq!(*laid_out.borrow(), ["# Q\ntext\n"], "the body, without the id block");
+    let refused = w.backend.export_pdf(&render).unwrap_err();
+    assert_eq!(
+        (refused.code, refused.message.as_str()),
+        ("exists", "Already exists (not overwritten): Q.pdf")
+    );
+    assert_eq!((laid_out.borrow().len(), w.read("Q.pdf").as_str()), (1, "pdf"));
+    // A renderer that fails, or says it worked and wrote nothing.
+    fs::remove_file(w.path("Q.pdf")).unwrap();
+    let mut cannot = |render: &dyn Fn(&str, &Path) -> std::io::Result<()>| {
+        let refused = w.backend.export_pdf(render).unwrap_err();
+        assert_eq!(
+            (refused.code, refused.message.as_str()),
+            ("error", "Could not write the PDF.")
+        );
+    };
+    cannot(&|_, _| Err(std::io::Error::other("no printer")));
+    cannot(&|_, _| Ok(()));
+    // A note titled by its file's name gets the title as a heading.
+    let mut w = World::titled("filename", "text\n");
+    w.backend.export_pdf(&render).unwrap();
+    assert_eq!(laid_out.borrow().last().unwrap(), "# Q\n\ntext\n");
 }
 
 #[test]

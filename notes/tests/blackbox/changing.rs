@@ -829,6 +829,70 @@ fn detach_takes_the_link_out_and_leaves_the_file() {
     assert_eq!(names(&w.path("Work/attachments")), ["pic.png", "two.pdf"]);
 }
 
+// ---- a file that will not take a save ---------------------------------------------
+
+#[test]
+fn a_note_that_cannot_be_written_is_never_replaced() {
+    // A save replaces the file, which the folder alone would allow: the
+    // note's own permissions are what says no. An unreadable note reads as
+    // nothing, and is not to be saved as nothing and the change.
+    for mode in [0o444, 0o000] {
+        let Some(w) = World::seeded() else { return };
+        let note = w.path("Notes/Alpha.md");
+        let set = |mode: u32| fs::set_permissions(&note, fs::Permissions::from_mode(mode)).unwrap();
+        set(0o000);
+        if fs::read(&note).is_ok() {
+            return; // root, whom no permissions stop
+        }
+        set(mode);
+        let picture = w.scratch().join("picture.png");
+        fs::write(&picture, "png").unwrap();
+        let changes: [(&[&str], &str); 5] = [
+            (&["write", "--body", "# x\nnew"], "could not write Notes/Alpha.md"),
+            (
+                &["write", "--append", "--body", "more"],
+                "could not write Notes/Alpha.md",
+            ),
+            (&["rename", "Renamed"], "Could not write the note."),
+            (&["toggle", "2"], "could not write Notes/Alpha.md"),
+            (&["attach", picture.to_str().unwrap()], "could not write Notes/Alpha.md"),
+        ];
+        for (args, refusal) in changes {
+            if mode == 0o000 && args[0] == "toggle" {
+                continue; // no line of it can be read, so none is there to toggle
+            }
+            let mut command = vec![args[0], "Notes/Alpha.md"];
+            command.extend(&args[1..]);
+            let (message, _) = w.json(&command).fails(1, "error");
+            assert_eq!(message, refusal, "{mode:o} {command:?}");
+            set(0o644);
+            assert_eq!(w.read("Notes/Alpha.md"), ALPHA, "{mode:o} {command:?}");
+            set(mode);
+        }
+        // Nothing is left beside it: no temporary file, no attachment.
+        assert_eq!(names(&w.path("Notes")), ["Alpha.md", "Twin.md", "attachments"]);
+        assert_eq!(names(&w.path("Notes/attachments")), [""; 0]);
+        assert_eq!(fs::metadata(&note).unwrap().permissions().mode() & 0o777, mode);
+    }
+}
+
+#[test]
+fn a_note_with_a_very_long_name_is_saved() {
+    // A file's name is at most 255 bytes; the save's temporary file beside
+    // the note must not need a longer one than the note has.
+    let Some(w) = World::seeded() else { return };
+    let long = format!("Notes/{}.md", "n".repeat(245));
+    w.write(&long, "# Long\n- [ ] one\n");
+    w.json(["write", &long, "--append", "--body", "more"]).ok();
+    assert_eq!(w.json(["toggle", &long, "2"]).ok()["text"], "- [x] one");
+    assert_eq!(w.read(&long), "# Long\n- [x] one\nmore\n");
+    // A new note needs no room at all beside its name.
+    let title = "t".repeat(252);
+    assert_eq!(w.json(["new", &title]).ok()["file"], format!("{title}.md"));
+    assert_eq!(w.read(&format!("Notes/{title}.md")), format!("# {title}\n"));
+    assert_eq!(names(&w.path("Notes")).len(), 4, "no temporary file is left");
+}
+
 // ---- export-pdf -----------------------------------------------------------------
 
 #[test]

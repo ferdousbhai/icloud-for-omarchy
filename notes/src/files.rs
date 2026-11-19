@@ -1,9 +1,9 @@
 //! Reading and writing the vault's files the way the Qt app does, so that a
 //! note reads the same text in both and a save writes the same bytes.
 
-use std::ffi::OsStr;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::hash::{BuildHasher, Hasher, RandomState};
+use std::io::{ErrorKind, Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
@@ -119,27 +119,51 @@ pub fn read_text(path: &Path, limit: Option<usize>) -> String {
 /// Whole or not at all: the text goes to a temporary file that replaces the
 /// note only once every byte is written, so a full disk never truncates it.
 /// A note that is a symbolic link stays one: its target is replaced.
+///
+/// Replacing a file asks nothing of the file itself, only of its folder, so
+/// a note this user may not write is refused here: read-only is left as it
+/// is, and one that cannot be read was not read, so nothing known is saved.
 pub fn write_text(path: &Path, text: &str) -> bool {
     let target = if path.is_symlink() {
         fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
     } else {
         path.to_path_buf()
     };
-    let (Some(dir), Some(name)) = (target.parent(), target.file_name()) else {
+    let Some(dir) = target.parent() else {
         return false;
     };
-    let mut temporary_name = OsStr::new(".").to_os_string();
-    temporary_name.push(name);
-    temporary_name.push(format!(".{}.tmp", std::process::id()));
-    let temporary = dir.join(temporary_name);
+    let existing = fs::metadata(&target).ok();
+    if existing.is_some() && rustix::fs::access(&target, rustix::fs::Access::WRITE_OK).is_err() {
+        return false;
+    }
+    // A short name of its own, not the note's and more: a note whose name
+    // is as long as a name may be is saved too. Hidden, so one a killed run
+    // left is no note and is not synced; random, so it is in no later
+    // save's way.
+    let create = || {
+        let mut taken = None;
+        for _ in 0..16 {
+            let random = RandomState::new().build_hasher().finish() as u32;
+            let temporary = dir.join(format!(".note-{random:08x}.tmp"));
+            match File::options()
+                .write(true)
+                .create_new(true)
+                .mode(0o666)
+                .open(&temporary)
+            {
+                Ok(file) => return Ok((file, temporary)),
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => taken = Some(e),
+                Err(e) => return Err(e),
+            }
+        }
+        Err(taken.expect("sixteen names were taken"))
+    };
+    let Ok((mut file, temporary)) = create() else {
+        return false;
+    };
     let written = (|| {
-        let mut file = File::options()
-            .write(true)
-            .create_new(true)
-            .mode(0o666)
-            .open(&temporary)?;
         // The note keeps the permissions it had.
-        if let Ok(existing) = fs::metadata(&target) {
+        if let Some(existing) = existing {
             file.set_permissions(fs::Permissions::from_mode(existing.permissions().mode()))?;
         }
         file.write_all(text.as_bytes())?;
@@ -270,6 +294,16 @@ mod tests {
         assert_eq!(read_text(&note, Some(2)), "tw");
         assert_eq!(read_text(&dir.path().join("none.md"), None), "");
         assert!(!write_text(&dir.path().join("no/dir/a.md"), "x"));
+        // A note this user may not write stays as it is.
+        fs::set_permissions(&note, fs::Permissions::from_mode(0o400)).unwrap();
+        if File::options().write(true).open(&note).is_err() {
+            assert!(!write_text(&note, "three\n"));
+            assert_eq!(fs::read_to_string(&note).unwrap(), "two\n");
+        }
+        // A name as long as a name may be leaves no room for a longer one beside it.
+        let long = dir.path().join("n".repeat(255));
+        assert!(write_text(&long, "one\n") && write_text(&long, "two\n"));
+        fs::remove_file(long).unwrap();
         assert_eq!(
             fs::read_dir(dir.path()).unwrap().count(),
             1,

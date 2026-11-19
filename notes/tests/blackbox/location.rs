@@ -74,6 +74,41 @@ fn the_vault_is_notes_in_the_documents_folder() {
 }
 
 #[test]
+fn the_documents_folder_is_read_from_user_dirs_as_the_window_reads_it() {
+    // The window and the command line must open the same vault, so a file
+    // the desktop's own tools would read differently is still read one way.
+    let Some(d) = Documents::new() else { return };
+    let home = d.w.scratch().join("home");
+    let sibling = |name: &str| PathBuf::from(format!("{}{name}", home.display()));
+    for (file, documents) in [
+        ("XDG_DOCUMENTS_DIR=\"$HOME/Papers\"\n", home.join("Papers")),
+        ("XDG_DOCUMENTS_DIR=\"$HOME/Papers/\"\n", home.join("Papers")),
+        ("XDG_DOCUMENTS_DIR=$HOME/Bare\r\n", home.join("Bare")),
+        ("XDG_DOCUMENTS_DIR=\"$HOME\"\n", home.clone()),
+        ("XDG_DOCUMENTS_DIR=\"/somewhere/else\"\n", "/somewhere/else".into()),
+        // The last line that names it.
+        (
+            "XDG_DOCUMENTS_DIR=\"$HOME/First\"\nXDG_DESKTOP_DIR=\"$HOME/Desk\"\nXDG_DOCUMENTS_DIR=\"$HOME/Second\"\n",
+            home.join("Second"),
+        ),
+        // Only a line that starts with the name.
+        ("  XDG_DOCUMENTS_DIR=\"$HOME/Indented\"\n", home.join("Documents")),
+        ("#XDG_DOCUMENTS_DIR=\"$HOME/Off\"\n", home.join("Documents")),
+        ("XDG_DESKTOP_DIR=\"$HOME/Desk\"\n", home.join("Documents")),
+        // $HOME is replaced as text, whatever follows it.
+        ("XDG_DOCUMENTS_DIR=\"$HOMEX/Odd\"\n", sibling("X/Odd")),
+    ] {
+        fs::write(d.w.scratch().join("config/user-dirs.dirs"), file).unwrap();
+        let status = d.run(&["--json", "status"]);
+        assert_eq!(
+            (status.code, &status.data()["vault"]),
+            (0, &json!(documents.join("Notes"))),
+            "{file:?}"
+        );
+    }
+}
+
+#[test]
 fn the_folder_of_earlier_releases_moves_to_notes_once() {
     let Some(d) = Documents::new() else { return };
     d.vault(&d.old, "Old.md");

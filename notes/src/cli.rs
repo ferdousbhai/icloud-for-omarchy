@@ -59,10 +59,6 @@ const LOCK_POLL: Duration = Duration::from_millis(200);
 /// How often the background step syncs when nothing changed here.
 const BACKGROUND_EVERY_SECS: u32 = 900;
 
-/// Lays a note's Markdown out as the PDF at the given path: the one thing a
-/// command needs a toolkit for.
-pub type PdfRenderer<'a> = &'a dyn Fn(&str, &Path) -> io::Result<()>;
-
 /// How a run of the command line ended.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Ran {
@@ -269,6 +265,12 @@ fn out(text: &str) {
     let _ = stdout.flush();
 }
 
+/// Prints a line to stderr. `eprintln!` panics when nothing reads it any
+/// more, and the run would end with the panic's exit code, not its own.
+pub fn say(line: &str) {
+    let _ = writeln!(io::stderr().lock(), "{line}");
+}
+
 /// What a command produced: the result (`data`), a one-line summary (the
 /// text output when there is no `text`), and for the machine modes its ids
 /// and count; `exit` non-zero for a result that still failed (a sync).
@@ -323,7 +325,7 @@ fn print_result(d: &Done, mode: Mode) -> u8 {
                 out(&lines);
             }
             None => {
-                eprintln!("note: this command has no ids to list; printing its result instead");
+                say("note: this command has no ids to list; printing its result instead");
                 out(&format!("{}\n", layout::text(&d.json, 0)));
             }
         },
@@ -360,7 +362,7 @@ fn print_error_text(f: &CliError) {
     if let Some(hint) = &f.hint {
         text += &format!("\nhint: {hint}");
     }
-    eprintln!("{}", terminal_safe(&text));
+    say(&terminal_safe(&text));
 }
 
 /// The failure: in a machine mode `{"ok":false,"error":{"code","message",
@@ -1582,15 +1584,6 @@ fn recover(b: &mut Backend, a: &Args) -> Result<Done, CliError> {
     ))
 }
 
-fn export_pdf(b: &mut Backend, a: &Args, render: PdfRenderer) -> Result<Done, CliError> {
-    let note = resolve_and_open(b, &a.positional[0])?;
-    let pdf = b.export_pdf(render).map_err(refused)?;
-    Ok(Done::change(
-        json!({"action": "export-pdf", "path": note.path(), "pdf": pdf.display().to_string()}),
-        pdf.display().to_string(),
-    ))
-}
-
 fn new_folder(b: &mut Backend, a: &Args) -> Result<Done, CliError> {
     let parent = match a.value("--in") {
         Some(parent) => resolve_folder(b, parent)?,
@@ -1698,14 +1691,14 @@ fn sync_command(b: &mut Backend, a: &Args, what: &str) -> Result<u8, CliError> {
     Ok(print_result_with(&done, failure.as_ref(), a.mode))
 }
 
-fn run_command(a: &Args, spec: &Spec, render_pdf: Option<PdfRenderer>) -> Result<Ran, CliError> {
+fn run_command(a: &Args, spec: &Spec) -> Result<Ran, CliError> {
     let named = match a.value("--vault") {
         Some(vault) if vault.trim().is_empty() => return Err(usage_error("--vault needs a directory")),
         named => named,
     };
     let cmd = spec.name;
     // The page is laid out by the app's binary, which runs the whole command.
-    if cmd == "export-pdf" && render_pdf.is_none() {
+    if cmd == "export-pdf" {
         return Ok(Ran::NeedsApp);
     }
     let mut backend = Backend::new(Vault::locate(named), Role::Cli);
@@ -1781,11 +1774,8 @@ fn run_command(a: &Args, spec: &Spec, render_pdf: Option<PdfRenderer>) -> Result
         "new-folder" => new_folder(b, a),
         "rename-folder" => rename_folder(b, a),
         "delete-folder" => delete_folder(b, a),
-        other => match (other, render_pdf) {
-            ("export-pdf", Some(render)) => export_pdf(b, a, render),
-            // A command of the table that nothing above runs.
-            _ => Err(usage_error(format!("unknown command \"{other}\""))),
-        },
+        // A command of the table that nothing above runs.
+        other => Err(usage_error(format!("unknown command \"{other}\""))),
     };
     exit(finish(b, a, result))
 }
@@ -1808,9 +1798,9 @@ pub fn is_cli_invocation(arg: &str) -> bool {
             || help::find(arg).is_some())
 }
 
-/// Runs the command line on `argv` (without the program's name). With no
-/// `render_pdf`, `export-pdf` is not run here ([`Ran::NeedsApp`]).
-pub fn run(argv: &[String], render_pdf: Option<PdfRenderer>) -> Ran {
+/// Runs the command line on `argv` (without the program's name).
+/// `export-pdf` is not run here ([`Ran::NeedsApp`]).
+pub fn run(argv: &[String]) -> Ran {
     let a = match parse_args(argv) {
         Ok(a) => a,
         // The output mode, also for a usage error found before parsing ended.
@@ -1843,7 +1833,7 @@ pub fn run(argv: &[String], render_pdf: Option<PdfRenderer>) -> Ran {
         out(&format!("{}\n", help::command_help(spec)));
         return Ran::Exit(EXIT_OK);
     }
-    match check_args(spec, &a).and_then(|()| run_command(&a, spec, render_pdf)) {
+    match check_args(spec, &a).and_then(|()| run_command(&a, spec)) {
         Ok(ran) => ran,
         Err(f) => fail(f),
     }

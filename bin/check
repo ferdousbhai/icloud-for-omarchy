@@ -117,8 +117,10 @@ if ((${#pkgs[@]})); then
   fi
 fi
 
-# The Qt app runs the real notes engine, so either one changing runs its tests.
-if ((all || all_rust)) || touched '^(notes|notes-sync|session)/'; then
+# The Qt app runs the real notes engine, so either one changing runs its
+# tests; the Rust command line beside it links app/ too, and only there is
+# the black-box suite given a binary to drive.
+if ((all || all_rust)) || touched '^(notes|notes-sync|session|app)/'; then
   ICLOUD_DEEP=$deep notes/bin/test
 else
   echo "Notes app: unchanged, skipped" >&2

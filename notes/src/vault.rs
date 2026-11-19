@@ -4,8 +4,9 @@
 //! anything opens the vault, which makes it the one place a vault an earlier
 //! release left behind is moved.
 
+use std::ffi::OsString;
 use std::fs;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -30,25 +31,35 @@ fn home() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
 }
 
-/// The XDG Documents directory, read from `user-dirs.dirs`; `~/Documents`
-/// without one.
+/// The XDG Documents directory, read from `user-dirs.dirs` exactly as Qt
+/// reads it (QStandardPaths), odd files included: while the Qt app is the
+/// window, both must open the same vault. The last line that starts with
+/// the name counts, quotes around the whole value go, a leading `$HOME` is
+/// replaced as text and one final slash dropped. `~/Documents` without a
+/// file or a line, and where that reading gives no absolute path.
 fn documents() -> PathBuf {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| home().join(".config"));
-    fs::read_to_string(config.join("user-dirs.dirs"))
-        .ok()
-        .and_then(|text| {
-            text.lines().find_map(|line| {
-                let value = line.trim().strip_prefix("XDG_DOCUMENTS_DIR=")?.trim().trim_matches('"');
-                match value.strip_prefix("$HOME") {
-                    Some(rest) => Some(home().join(rest.trim_start_matches('/'))),
-                    None => Some(PathBuf::from(value)).filter(|p| p.is_absolute()),
-                }
-            })
-        })
-        .unwrap_or_else(|| home().join("Documents"))
+    let named = fs::read_to_string(config.join("user-dirs.dirs")).ok().and_then(|text| {
+        let value = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("XDG_DOCUMENTS_DIR="))
+            .next_back()?;
+        let value = match value.strip_prefix('"').and_then(|rest| rest.strip_suffix('"')) {
+            Some(unquoted) if !unquoted.is_empty() => unquoted,
+            _ => value,
+        };
+        let (mut path, rest) = match value.strip_prefix("$HOME") {
+            Some(rest) => (home().into_os_string(), rest),
+            None => (OsString::new(), value),
+        };
+        let whole = path.len() + rest.len();
+        path.push(rest.strip_suffix('/').filter(|_| whole > 1).unwrap_or(rest));
+        Some(PathBuf::from(path)).filter(|p| p.is_absolute())
+    });
+    named.unwrap_or_else(|| home().join("Documents"))
 }
 
 /// Says where the vault is, or why it did not move, to whoever is there to
@@ -64,7 +75,8 @@ fn notice(text: &str) {
         Some(device.parse() == Ok(stat.st_dev) && inode.parse() == Ok(stat.st_ino))
     };
     if stderr.is_terminal() || journal() == Some(true) {
-        eprintln!("icloud-notes: {text}");
+        // Not eprintln!, which panics when the reader has gone.
+        let _ = writeln!(stderr.lock(), "icloud-notes: {text}");
     }
 }
 
