@@ -7,16 +7,24 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+default-run = "icloud-notes"
+
 # The Qt app beside this file (icloud-notes.pro, src/*.cpp, qml/) is still
 # the one installed. This crate is its non-UI half in Rust, with no toolkit
 # in it: the vault, the note list and tree, the lock, saving and its
-# guardrails, and the merge of unsaved edits. The sync engine stays
-# icloud-notes-sync, run as a separate process.
+# guardrails, the merge of unsaved edits, and the command line. The sync
+# engine stays icloud-notes-sync, run as a separate process.
 [lib]
 name = "icloud_notes"
 
+# The command line and `--sync`. Started as the app (no command), it runs
+# icloud-notes-app from its own directory in its place.
+[[bin]]
+name = "icloud-notes"
+path = "src/main.rs"
+
 # tests/blackbox/ drives whichever icloud-notes binary ICLOUD_NOTES_BIN names,
-# so the same suite holds the Qt binary and a port of its command line.
+# so the same suite holds the Qt binary and this one.
 [[test]]
 name = "blackbox"
 path = "tests/blackbox/main.rs"

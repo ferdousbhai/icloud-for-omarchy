@@ -65,6 +65,12 @@ pub fn is_digit(c: char) -> bool {
     (c as u32) <= 0xffff && CodePointMapData::<GeneralCategory>::new().get(c) == GeneralCategory::DecimalNumber
 }
 
+/// A whole number as the app reads one from an argument: spaces around it
+/// and a sign are fine, anything else is not a number.
+pub fn to_int(s: &str) -> Option<i32> {
+    s.trim().parse().ok()
+}
+
 /// The path's last component and what is before it ("" for a bare name).
 pub fn split_path(path: &str) -> (&str, &str) {
     match path.rfind('/') {
@@ -108,8 +114,12 @@ mod tests {
     }
 
     #[test]
-    fn a_digit_is_any_decimal_digit() {
+    fn digits_and_whole_numbers() {
         assert!(is_digit('7') && is_digit('٣') && !is_digit('x') && !is_digit('½'));
+        assert_eq!(to_int(" +12 "), Some(12));
+        assert_eq!(to_int("-3"), Some(-3));
+        assert_eq!(to_int("1.5"), None);
+        assert_eq!(to_int(""), None);
     }
 
     #[test]

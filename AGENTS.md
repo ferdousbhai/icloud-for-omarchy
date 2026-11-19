@@ -22,14 +22,25 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   (`cloudkit/`), Markdown (`md/`), vault (`vault/`), commands (`cmd/`). Recorded scenarios and
   golden corpora live in `tests/`; regenerate with `ICLOUD_NOTES_SYNC_REGEN=1 cargo test -p
   icloud-notes-sync`. Ships inside the icloud-notes package, not on its own.
-- `notes/` — `icloud-notes`, the Qt6/QML app and CLI (C++ in `src/`, QML in `qml/`,
-  `notes/bin/build`, `notes/bin/test`). Its cargo crate has no Rust target yet, only
-  `tests/blackbox/`: the command line driven as a separate process, whichever binary
-  `ICLOUD_NOTES_BIN` names (`notes/bin/test` builds the Qt one and runs it; without the variable
-  the tests run nothing), so a port must pass the same suite. `tests/fixtures/syncmodel.json`
-  pins what no command reaches (the merge of unsaved edits, the sidebar tree) as calls and the
-  C++'s answers, which `notes/bin/test` holds to the code (`tests/syncmodel_fixtures.cpp`; run
-  with `--write`, it refills the results from the C++).
+- `notes/` — `icloud-notes`, twice over while it moves off Qt. The Qt6/QML app and CLI (C++ in
+  `src/*.cpp`, QML in `qml/`, `notes/bin/build`, `notes/bin/test`) is the one installed. Beside it,
+  the cargo crate `icloud-notes` (`src/*.rs`) is its non-UI half in Rust, with no toolkit in it and
+  not packaged yet: the vault and its notes (`backend.rs`, with the save path and its guardrails),
+  the pure rules behind safe sync and the merge of unsaved edits (`syncmodel.rs`), the sidebar tree
+  (`notetree.rs`), the vault's lock (`lock.rs`), runs of the engine as a separate process
+  (`engine.rs`, `sync.rs`), and the command line and the timer's `--sync` (`cli.rs`, `main.rs`),
+  which print the Qt app's bytes (`json.rs` is QJsonDocument's layout, `files.rs` its text
+  decoding). It has no window: started as the app, and for `export-pdf` (which lays out a page),
+  its binary runs `icloud-notes-app` beside it. Change a rule in both the C++ and the Rust until
+  the Qt app is gone. `tests/blackbox/` holds both to the same behaviour: the command line driven
+  as a separate process, whichever binary `ICLOUD_NOTES_BIN` names (`notes/bin/test` builds the Qt
+  app and the Rust binary, with the Qt app as its `icloud-notes-app`, and runs the suite on each;
+  without the variable the tests run nothing). `tests/fixtures/syncmodel.json` pins what no
+  command reaches (the merge of unsaved edits, the sidebar tree) as calls and the C++'s answers,
+  which `notes/bin/test` holds to the C++ (`tests/syncmodel_fixtures.cpp`; run with `--write`, it
+  refills the results from the C++) and `cargo test -p icloud-notes` to the Rust
+  (`tests/syncmodel.rs`); `tests/backend.rs` holds the window's save path, `tests/cli.rs` what
+  the binary links and hands to the app.
 - `app/` — `icloud-app`, what the GTK apps share (Photos, Find My, Reminders, and Cloud Contacts by git), with no GTK in it: the command lines'
   helpers on top of `icloud_session::output` (`cli.rs`: confirm, the "or Sign In in the app" hint,
   `session_failure`, warnings, name folding, the launcher that turns `icloud-<app>` with no command

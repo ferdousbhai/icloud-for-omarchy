@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build and run the Qt app's tests (console asserts, no framework), then the
 # black-box suite (tests/blackbox/, a cargo test) on the app built from this
-# checkout. The installer and Rust suites run from the root bin/check.
+# checkout and on the Rust command line that is to replace its non-UI half.
+# The installer and Rust suites run from the root bin/check.
 set -euo pipefail
 cd "$(dirname "$0")/../tests"
 # Everything runs on a private D-Bus session bus, so the tests' fake
@@ -30,4 +31,14 @@ done
 mkdir -p build-app
 (cd build-app && qmake6 ../../icloud-notes.pro && make -j"$(nproc)")
 ICLOUD_NOTES_BIN="$PWD/build-app/icloud-notes" \
+  cargo test --locked -p icloud-notes --test blackbox --manifest-path "$PWD/../../Cargo.toml"
+# The same suite on the Rust command line (the cargo crate beside the Qt
+# sources), which must answer as the Qt app does. It has no window of its
+# own yet: what is not a command, and export-pdf's page, it hands to
+# icloud-notes-app beside it, which here is the Qt app.
+cargo build --quiet --locked -p icloud-notes --bin icloud-notes --manifest-path "$PWD/../../Cargo.toml"
+mkdir -p build-rust
+cp -f "${CARGO_TARGET_DIR:-$PWD/../../target}/debug/icloud-notes" build-rust/icloud-notes
+ln -sf "$PWD/build-app/icloud-notes" build-rust/icloud-notes-app
+ICLOUD_NOTES_BIN="$PWD/build-rust/icloud-notes" \
   cargo test --locked -p icloud-notes --test blackbox --manifest-path "$PWD/../../Cargo.toml"
