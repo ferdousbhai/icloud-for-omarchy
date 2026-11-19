@@ -14,7 +14,7 @@ use crate::engine::{self, Finished, Running, TOOL};
 use crate::lock::Taken;
 use crate::session;
 
-const NOT_INSTALLED: &str = "The sync engine (icloud-notes-sync) is missing. Reinstall icloud-notes to sync.";
+pub const NOT_INSTALLED: &str = "The sync engine (icloud-notes-sync) is missing. Reinstall icloud-notes to sync.";
 /// The log is a readout, not history: its last so many characters are kept.
 const LOG_LIMIT: usize = 200_000;
 /// How often a run that waits for the lock looks again.
@@ -253,6 +253,11 @@ impl Backend {
             let kept: Vec<u16> = log.encode_utf16().skip(units - LOG_LIMIT).collect();
             *log = String::from_utf16_lossy(&kept);
         }
+    }
+
+    /// Adds the window's own `line` to the log (a lock it waits for).
+    pub fn log(&mut self, line: &str) {
+        self.append_log(line);
     }
 
     /// What the runs since [`Backend::clear_log`] did, a line or more each.

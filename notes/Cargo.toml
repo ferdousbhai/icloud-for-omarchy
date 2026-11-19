@@ -10,10 +10,11 @@ publish = false
 default-run = "icloud-notes"
 
 # The Qt app beside this file (icloud-notes.pro, src/*.cpp, qml/) is still
-# the one installed. This crate is its non-UI half in Rust, with no toolkit
+# the one installed. The library is its non-UI half in Rust, with no toolkit
 # in it: the vault, the note list and tree, the lock, saving and its
 # guardrails, the merge of unsaved edits, and the command line. The sync
-# engine stays icloud-notes-sync, run as a separate process.
+# engine stays icloud-notes-sync, run as a separate process. The window
+# that replaces the Qt one is the binary icloud-notes-app, not installed yet.
 [lib]
 name = "icloud_notes"
 
@@ -22,6 +23,17 @@ name = "icloud_notes"
 [[bin]]
 name = "icloud-notes"
 path = "src/main.rs"
+
+# The window (GTK 4 with omui's look, theme and widgets), in src/bin/app/:
+# only it links GTK.
+[[bin]]
+name = "icloud-notes-app"
+path = "src/bin/app/main.rs"
+required-features = ["ui"]
+
+[features]
+default = ["ui"]
+ui = ["dep:gtk", "dep:omui"]
 
 # tests/blackbox/ drives whichever icloud-notes binary ICLOUD_NOTES_BIN names,
 # so the same suite holds the Qt binary and this one.
@@ -46,6 +58,8 @@ rustix = { version = "1", features = ["fs", "process"] }
 serde_json.workspace = true
 # ReportSignInRequired, which icloud-session's API keeps to itself.
 zbus.workspace = true
+gtk = { workspace = true, optional = true }
+omui = { workspace = true, optional = true }
 
 [dev-dependencies]
 icloud-app = { workspace = true, features = ["testing"] }

@@ -957,12 +957,14 @@ dependencies = [
 name = "icloud-notes"
 version = "0.13.0"
 dependencies = [
+ "gtk4",
  "icloud-app",
  "icloud-session",
  "icu_collator",
  "icu_locale_core",
  "icu_properties",
  "jiff",
+ "omui",
  "rustix",
  "serde_json",
  "tempfile",
