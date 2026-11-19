@@ -24,6 +24,7 @@ use omui::icons::name;
 
 use crate::actions;
 use crate::banners::Banners;
+use crate::conflicts::Conflicts;
 use crate::editor::Editor;
 use crate::icons;
 use crate::lists::{self, Handlers, Item, Lists};
@@ -63,6 +64,15 @@ button.chevron image { -gtk-icon-size: 12px; color: @om_dim_text; }
 .drag-note { background: @om_surface; border: 1px solid @om_accent; border-radius: 6px; padding: 4px 10px; }
 entry.note-title { font-size: 1.6em; font-weight: 700; background: none; border-color: transparent; }
 entry.note-title:focus-within { border-color: alpha(@om_border, 0.6); }
+.conflict-card { padding: 12px; border-radius: 10px; }
+.warning-card { background: alpha(@om_warning, 0.12); }
+.warning-card image.warning { color: @om_warning; -gtk-icon-size: 18px; }
+button.version-card { padding: 12px; border-radius: 10px; background: @om_bg; border: 1px solid alpha(@om_border, 0.6); }
+button.version-card:hover { background: alpha(@om_text, 0.04); }
+button.version-card.picked { border: 2px solid @om_accent; background: alpha(@om_accent, 0.08); }
+image.unpicked { opacity: 0.3; }
+.conflict-line { padding: 2px 6px; border-radius: 3px; }
+.changed-line { background: alpha(@om_accent, 0.14); box-shadow: inset 2px 0 @om_accent; }
 .status-bar { border-top: 1px solid alpha(@om_border, 0.6); padding: 3px 14px; border-spacing: 8px; }
 .status-bar label { font-size: 0.85em; }
 .notice { color: @om_accent; }
@@ -86,9 +96,15 @@ pub struct Ui {
     pub handlers: Rc<Handlers>,
     pub folder_title: gtk::Label,
     pub list_summary: gtk::Label,
+    tree_summary: gtk::Label,
     /// The tree's open folders ("" is All Notes).
     pub expanded: RefCell<Vec<String>>,
     pub editor: Editor,
+    pub conflicts: Conflicts,
+    /// What the search boxes hold (both layouts' share it), and what it found.
+    pub query: RefCell<String>,
+    pub hits: RefCell<Option<Vec<lists::Hit>>>,
+    search_boxes: [gtk::SearchEntry; 2],
     autosave: RefCell<Option<glib::SourceId>>,
     /// The editor's font zoom (Ctrl++, Ctrl+-, Ctrl+0), and the style that sets it.
     pub zoom: Cell<f64>,
@@ -196,6 +212,16 @@ impl Window {
         let ui = Rc::new_cyclic(|weak: &Weak<Ui>| {
             let handlers = Rc::new(handlers(weak));
             let lists = Lists::new(handlers.clone());
+            let search_box = || {
+                gtk::SearchEntry::builder()
+                    .placeholder_text("Search notes")
+                    .margin_start(12)
+                    .margin_end(12)
+                    .margin_top(8)
+                    .margin_bottom(6)
+                    .build()
+            };
+            let search_boxes = [search_box(), search_box()];
 
             // ---- the panes
             let folder_pane = pane("sidebar", FOLDER_PANE);
@@ -214,12 +240,20 @@ impl Window {
                 .css_classes(["caption", "dim-label", "list-summary"])
                 .build();
             note_pane.append(&folder_title);
+            note_pane.append(&search_boxes[0]);
             note_pane.append(&list_summary);
             note_pane.append(&lists.note_pane);
             let panes = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             panes.append(&folder_pane);
             panes.append(&note_pane);
             let tree_pane = pane("sidebar", TREE_LEAST);
+            tree_pane.append(&search_boxes[1]);
+            let tree_summary = gtk::Label::builder()
+                .xalign(0.0)
+                .css_classes(["caption", "dim-label", "list-summary"])
+                .visible(false)
+                .build();
+            tree_pane.append(&tree_summary);
             tree_pane.append(&lists.tree_pane);
             let sidebar = gtk::Stack::builder().hhomogeneous(false).build();
             sidebar.add_named(&panes, Some("panes"));
@@ -227,6 +261,11 @@ impl Window {
 
             let editor = Editor::new();
             editor.widget.set_width_request(EDITOR_LEAST);
+            let conflicts = Conflicts::new();
+            editor
+                .page
+                .insert_child_after(&conflicts.unreadable, Some(&editor.read_only));
+            editor.page.append(&conflicts.picker);
 
             // The sidebar's width is the most of the split's limits and what
             // the sidebar itself needs: the two lists' widths, or the tree's.
@@ -282,6 +321,11 @@ impl Window {
                 list_summary,
                 expanded: RefCell::default(),
                 editor,
+                conflicts,
+                query: RefCell::default(),
+                hits: RefCell::default(),
+                search_boxes,
+                tree_summary,
                 autosave: RefCell::default(),
                 zoom: Cell::new(1.0),
                 zoom_style: gtk::CssProvider::new(),
@@ -343,6 +387,41 @@ impl Window {
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
         );
         actions::add(&ui);
+        for (at, entry) in ui.search_boxes.iter().enumerate() {
+            let weak = Rc::downgrade(&ui);
+            entry.connect_search_changed(move |entry| {
+                if let Some(ui) = weak.upgrade() {
+                    ui.search(&entry.text(), at);
+                }
+            });
+            // Escape clears the search and goes back to the note.
+            let weak = Rc::downgrade(&ui);
+            entry.connect_stop_search(move |_| {
+                if let Some(ui) = weak.upgrade() {
+                    ui.search("", 2);
+                    ui.editor.view.grab_focus();
+                }
+            });
+            // Down goes on to the results.
+            let keys = gtk::EventControllerKey::new();
+            let weak = Rc::downgrade(&ui);
+            keys.connect_key_pressed(move |_, key, _, _| {
+                let Some(ui) = weak.upgrade() else {
+                    return glib::Propagation::Proceed;
+                };
+                if key != gtk::gdk::Key::Down {
+                    return glib::Propagation::Proceed;
+                }
+                let list = if ui.narrow.get() {
+                    &ui.lists.tree
+                } else {
+                    &ui.lists.notes
+                };
+                list.child_focus(gtk::DirectionType::TabForward);
+                glib::Propagation::Stop
+            });
+            entry.add_controller(keys);
+        }
         ui.start();
         ui.show_banners();
         ui.start_syncing();
@@ -570,8 +649,22 @@ impl Ui {
                     ui.toggle_folder(folder);
                 }
             });
+            let hits = self.hits.borrow();
             let mut b = self.backend.borrow_mut();
-            lists::fill_tree(&self.lists.tree, &mut b, &expanded, None, toggle, &self.handlers);
+            lists::fill_tree(
+                &self.lists.tree,
+                &mut b,
+                &expanded,
+                hits.as_deref(),
+                toggle,
+                &self.handlers,
+            );
+            self.tree_summary.set_visible(hits.is_some());
+            self.tree_summary.set_label(&match hits.as_deref() {
+                Some([]) => "No matching notes".to_string(),
+                Some(found) => summary(found),
+                None => String::new(),
+            });
         } else {
             let b = self.backend.borrow();
             lists::fill_folders(&self.lists.folders, &b, &self.handlers);
@@ -582,11 +675,14 @@ impl Ui {
                 Some("conflict") => vec![("remote changed", "warning")],
                 _ => Vec::new(),
             };
-            lists::fill_notes(&self.lists.notes, &b, None, &pushed);
+            let hits = self.hits.borrow();
+            lists::fill_notes(&self.lists.notes, &b, hits.as_deref(), &pushed);
             self.folder_title.set_label(lists::folder_label(b.current_folder()));
             let n = b.notes().len();
-            self.list_summary
-                .set_label(&format!("{n} note{}", if n == 1 { "" } else { "s" }));
+            self.list_summary.set_label(&match hits.as_deref() {
+                Some(found) => summary(found),
+                None => format!("{n} note{}", if n == 1 { "" } else { "s" }),
+            });
         }
     }
 
@@ -628,6 +724,14 @@ impl Ui {
         self.editor
             .conflict_copy
             .set_visible(b.note_flags(&file).contains(&"conflict-copy"));
+        drop(b);
+        if let Some(ui) = self.me.upgrade() {
+            let resolving = ui.show_conflicts();
+            self.editor.scroller.set_visible(!resolving);
+            if self.conflicts.unreadable.is_visible() {
+                self.editor.view.set_editable(false);
+            }
+        }
     }
 
     /// Loads the open note into the editor.
@@ -647,6 +751,50 @@ impl Ui {
         self.notice.set_label(text);
         self.notice.set_tooltip_text(Some(text).filter(|t| !t.is_empty()));
         self.notice.set_visible(!text.is_empty());
+    }
+
+    /// The search boxes' query, typed into box `from` (2: neither): both
+    /// boxes hold it, and the lists show what it finds.
+    fn search(&self, query: &str, from: usize) {
+        for (at, entry) in self.search_boxes.iter().enumerate() {
+            if at != from && entry.text() != query {
+                entry.set_text(query);
+            }
+        }
+        if *self.query.borrow() == query {
+            return;
+        }
+        self.query.replace(query.to_string());
+        self.refresh_search();
+        self.show_lists();
+    }
+
+    /// Searches again (the vault changed): text matches, at least two characters.
+    pub fn refresh_search(&self) {
+        let query = self.query.borrow().trim().to_string();
+        let hits = (query.chars().count() >= 2).then(|| {
+            let found = self.backend.borrow_mut().search_vault(&query);
+            found
+                .into_iter()
+                .map(|hit| lists::Hit {
+                    folder: hit.folder,
+                    file: hit.file,
+                    title: hit.title,
+                    snippet: hit.snippet,
+                    related: false,
+                })
+                .collect()
+        });
+        self.hits.replace(hits);
+    }
+
+    /// Ctrl+F: the sidebar shown, and its search box focused.
+    pub fn focus_search(&self) {
+        if !self.sidebar_shown() {
+            self.toggle_sidebar();
+        }
+        let entry = &self.search_boxes[usize::from(self.narrow.get())];
+        entry.grab_focus();
     }
 
     /// The window, for a handler that must not keep it alive.
@@ -723,10 +871,14 @@ impl Ui {
             return false;
         }
         self.set_notice("");
+        let before = self.backend.borrow().current_path();
         {
             let mut b = self.backend.borrow_mut();
             b.set_current_folder(folder);
             b.open_note(file);
+        }
+        if self.backend.borrow().current_path() != before {
+            self.conflicts.as_text.set(false);
         }
         if self.narrow.get() {
             self.reveal_current();
@@ -896,6 +1048,17 @@ impl Ui {
         });
         self.reread.replace(Some(source));
     }
+}
+
+/// The line under a search box: what it found.
+fn summary(hits: &[lists::Hit]) -> String {
+    let related = hits.iter().filter(|hit| hit.related).count();
+    let matches = hits.len() - related;
+    let mut line = format!("{matches} result{}", if matches == 1 { "" } else { "s" });
+    if related > 0 {
+        line.push_str(&format!(" · {related} related"));
+    }
+    line
 }
 
 fn icloud_notes_path(folder: &str, file: &str) -> String {

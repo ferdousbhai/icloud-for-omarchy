@@ -9,6 +9,7 @@
 
 mod actions;
 mod banners;
+mod conflicts;
 mod dialogs;
 mod editor;
 mod highlight;

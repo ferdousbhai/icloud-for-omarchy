@@ -58,6 +58,44 @@ pub fn add(ui: &Rc<Ui>) {
     action("rename-folder", None, Box::new(|ui, _| rename_folder(ui)));
     action("delete-folder", None, Box::new(|ui, _| delete_folder(ui)));
     action("save", None, Box::new(|ui, _| save(ui)));
+    action("find", None, Box::new(|ui, _| ui.focus_search()));
+    action(
+        "conflict-as-text",
+        None,
+        Box::new(|ui, _| {
+            ui.conflicts.as_text.set(true);
+            ui.show_vault();
+        }),
+    );
+    action(
+        "recover-conflict",
+        Some(glib::VariantTy::STRING),
+        Box::new(move |ui, parameter| {
+            let how = text(parameter);
+            let result = ui.backend.borrow_mut().recover_conflicted_note(&how);
+            match result {
+                Ok(recovered) => {
+                    ui.set_notice(&recovered.message);
+                    ui.load_editor();
+                    ui.show_vault();
+                }
+                Err(refusal) => ui.set_notice(&refusal.message),
+            }
+        }),
+    );
+    action(
+        "resolve-conflicts",
+        None,
+        Box::new(|ui, _| {
+            let choices = ui.conflicts.choices();
+            let result = ui.backend.borrow_mut().resolve_conflicts(&choices);
+            if result.is_ok() {
+                ui.set_notice("");
+                ui.load_editor();
+            }
+            shown(ui, result);
+        }),
+    );
     action("sync-status", None, Box::new(|ui, _| crate::dialogs::sync_status(ui)));
     action("sync-log", None, Box::new(|ui, _| crate::dialogs::sync_log(ui)));
     action("history", None, Box::new(|ui, _| crate::dialogs::history(ui)));
@@ -73,6 +111,7 @@ pub fn add(ui: &Rc<Ui>) {
     for (name, keys) in [
         ("win.new-note", &["<Ctrl>n"][..]),
         ("win.save", &["<Ctrl>s"]),
+        ("win.find", &["<Ctrl>f"]),
         ("win.bold", &["<Ctrl>b"]),
         ("win.italic", &["<Ctrl>i"]),
         ("win.link", &["<Ctrl>k"]),
@@ -121,7 +160,8 @@ pub fn update(ui: &Ui) {
     let unlocked = note && b.read_only_reason().is_empty();
     let syncing = b.sync_running();
     let folder = !b.current_folder().is_empty();
-    let formatting = unlocked && ui.editor.view.is_editable();
+    // Not while conflict blocks are being picked from.
+    let formatting = unlocked && ui.editor.view.is_editable() && !ui.conflicts.picker.is_visible();
     let has_targets = !move_targets(b.folders(), b.current_folder()).is_empty();
     let cloned = b.vault().cloned();
     for (name, on) in [

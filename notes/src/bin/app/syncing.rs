@@ -346,6 +346,7 @@ impl Ui {
     /// them rather than written over it.
     pub fn after_reload(self: &Rc<Self>) {
         self.handle_events();
+        self.refresh_search();
         let on_disk = syncmodel::editor_form(self.backend.borrow().note_body());
         if on_disk != self.editor.saved() {
             if !self.editor.dirty() {

@@ -21,6 +21,9 @@ pub struct Editor {
     pub read_only: gtk::Label,
     pub view: gtk::TextView,
     pub buffer: gtk::TextBuffer,
+    /// The note's page, and where its text scrolls.
+    pub page: gtk::Box,
+    pub scroller: gtk::ScrolledWindow,
     /// What the editor was last loaded from or saved as; edits diverge from it.
     saved: RefCell<String>,
 }
@@ -96,6 +99,8 @@ impl Editor {
             read_only,
             view,
             buffer,
+            page,
+            scroller,
             saved: RefCell::default(),
         }
     }
