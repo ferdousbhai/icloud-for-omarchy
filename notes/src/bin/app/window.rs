@@ -78,6 +78,8 @@ image.unpicked { opacity: 0.3; }
 .status-bar { border-top: 1px solid alpha(@om_border, 0.6); padding: 3px 14px; border-spacing: 8px; }
 .status-bar label { font-size: 0.85em; }
 .notice { color: @om_accent; }
+/* The toolbar's own icons are pictures in the text colour: GTK cannot grey them. */
+button.header-action:disabled > image { opacity: 0.4; }
 .unsaved { color: @om_warning; }
 ";
 
