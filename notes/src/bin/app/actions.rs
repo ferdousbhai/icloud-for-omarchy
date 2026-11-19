@@ -60,6 +60,23 @@ pub fn add(ui: &Rc<Ui>) {
     action("save", None, Box::new(|ui, _| save(ui)));
     action("find", None, Box::new(|ui, _| ui.focus_search()));
     action(
+        "export-pdf",
+        None,
+        Box::new(|ui, _| {
+            if !ui.flush_edits() {
+                return;
+            }
+            let result = ui.backend.borrow_mut().export_pdf(&crate::pdf::render);
+            match result {
+                Ok(pdf) => {
+                    let name = pdf.file_name().unwrap_or_default().to_string_lossy();
+                    ui.set_status(&format!("Exported {name} next to the note."));
+                }
+                Err(refusal) => ui.set_notice(&refusal.message),
+            }
+        }),
+    );
+    action(
         "conflict-as-text",
         None,
         Box::new(|ui, _| {
@@ -173,11 +190,13 @@ pub fn update(ui: &Ui) {
         ("rename-folder", folder),
         ("sync-status", cloned && !syncing),
         ("history", note && cloned && !syncing),
+        ("export-pdf", note),
         ("delete-folder", folder),
         ("checklist", formatting),
         ("bold", formatting),
         ("italic", formatting),
         ("link", formatting),
+        ("attach", formatting),
     ] {
         if let Some(action) = ui.window.lookup_action(name).and_downcast::<gio::SimpleAction>() {
             action.set_enabled(on);

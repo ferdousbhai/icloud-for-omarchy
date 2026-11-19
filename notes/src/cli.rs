@@ -1584,6 +1584,13 @@ fn recover(b: &mut Backend, a: &Args) -> Result<Done, CliError> {
     ))
 }
 
+fn export_pdf(b: &mut Backend, a: &Args, render: Render) -> Result<Done, CliError> {
+    let note = resolve_and_open(b, &a.positional[0])?;
+    let pdf = b.export_pdf(render).map_err(refused)?.display().to_string();
+    let data = json!({"action": "export-pdf", "path": note.path(), "pdf": pdf});
+    Ok(Done::new(data, pdf.clone(), pdf))
+}
+
 fn new_folder(b: &mut Backend, a: &Args) -> Result<Done, CliError> {
     let parent = match a.value("--in") {
         Some(parent) => resolve_folder(b, parent)?,
@@ -1691,16 +1698,32 @@ fn sync_command(b: &mut Backend, a: &Args, what: &str) -> Result<u8, CliError> {
     Ok(print_result_with(&done, failure.as_ref(), a.mode))
 }
 
-fn run_command(a: &Args, spec: &Spec) -> Result<Ran, CliError> {
+/// What lays out a PDF (the app's binary has one): the note's Markdown, and
+/// the file to write.
+pub type Render<'a> = &'a dyn Fn(&str, &Path) -> io::Result<()>;
+
+fn run_command(a: &Args, spec: &Spec, render: Option<Render>) -> Result<Ran, CliError> {
     let named = match a.value("--vault") {
         Some(vault) if vault.trim().is_empty() => return Err(usage_error("--vault needs a directory")),
         named => named,
     };
     let cmd = spec.name;
     // The page is laid out by the app's binary, which runs the whole command.
-    if cmd == "export-pdf" {
-        return Ok(Ran::NeedsApp);
-    }
+    let render = match render {
+        Some(render) => render,
+        None if cmd == "export-pdf" => return Ok(Ran::NeedsApp),
+        None => &no_page,
+    };
+    run_vault_command(a, cmd, named, render)
+}
+
+/// What no command but `export-pdf` calls.
+fn no_page(_: &str, _: &Path) -> io::Result<()> {
+    Err(io::Error::other("no page to lay out"))
+}
+
+/// The command `cmd`, on the vault `named` (else the default one).
+fn run_vault_command(a: &Args, cmd: &str, named: Option<&str>, render: Render) -> Result<Ran, CliError> {
     let mut backend = Backend::new(Vault::locate(named), Role::Cli);
     let b = &mut backend;
     let exit = |code: u8| Ok(Ran::Exit(code));
@@ -1774,6 +1797,7 @@ fn run_command(a: &Args, spec: &Spec) -> Result<Ran, CliError> {
         "new-folder" => new_folder(b, a),
         "rename-folder" => rename_folder(b, a),
         "delete-folder" => delete_folder(b, a),
+        "export-pdf" => export_pdf(b, a, render),
         // A command of the table that nothing above runs.
         other => Err(usage_error(format!("unknown command \"{other}\""))),
     };
@@ -1801,6 +1825,19 @@ pub fn is_cli_invocation(arg: &str) -> bool {
 /// Runs the command line on `argv` (without the program's name).
 /// `export-pdf` is not run here ([`Ran::NeedsApp`]).
 pub fn run(argv: &[String]) -> Ran {
+    run_with(argv, None)
+}
+
+/// The command line as the app's binary runs it, `export-pdf` included:
+/// `render` lays out its page.
+pub fn run_in_app(argv: &[String], render: Render) -> u8 {
+    match run_with(argv, Some(render)) {
+        Ran::Exit(code) => code,
+        Ran::NeedsApp => EXIT_ERROR,
+    }
+}
+
+fn run_with(argv: &[String], render: Option<Render>) -> Ran {
     let a = match parse_args(argv) {
         Ok(a) => a,
         // The output mode, also for a usage error found before parsing ended.
@@ -1833,7 +1870,7 @@ pub fn run(argv: &[String]) -> Ran {
         out(&format!("{}\n", help::command_help(spec)));
         return Ran::Exit(EXIT_OK);
     }
-    match check_args(spec, &a).and_then(|()| run_command(&a, spec)) {
+    match check_args(spec, &a).and_then(|()| run_command(&a, spec, render)) {
         Ok(ran) => ran,
         Err(f) => fail(f),
     }

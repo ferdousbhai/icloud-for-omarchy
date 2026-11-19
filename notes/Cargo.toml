@@ -33,7 +33,7 @@ required-features = ["ui"]
 
 [features]
 default = ["ui"]
-ui = ["dep:gtk", "dep:omui", "dep:async-channel"]
+ui = ["dep:gtk", "dep:omui", "dep:async-channel", "dep:cairo-rs", "dep:pangocairo"]
 
 # tests/blackbox/ drives whichever icloud-notes binary ICLOUD_NOTES_BIN names,
 # so the same suite holds the Qt binary and this one.
@@ -61,6 +61,9 @@ zbus.workspace = true
 gtk = { workspace = true, optional = true }
 omui = { workspace = true, optional = true }
 async-channel = { workspace = true, optional = true }
+# export-pdf: a note laid out on PDF pages, with no display.
+cairo-rs = { version = "0.22", features = ["pdf"], optional = true }
+pangocairo = { version = "0.22", optional = true }
 
 [dev-dependencies]
 icloud-app = { workspace = true, features = ["testing"] }

@@ -23,6 +23,7 @@ use icloud_notes::vault::Vault;
 use omui::icons::name;
 
 use crate::actions;
+use crate::attach::Strip;
 use crate::banners::Banners;
 use crate::conflicts::Conflicts;
 use crate::editor::Editor;
@@ -101,6 +102,9 @@ pub struct Ui {
     pub expanded: RefCell<Vec<String>>,
     pub editor: Editor,
     pub conflicts: Conflicts,
+    pub strip: Strip,
+    /// Closing was stopped once for edits that cannot be saved: the next close discards them.
+    close_warned: Cell<bool>,
     /// What the search boxes hold (both layouts' share it), and what it found.
     pub query: RefCell<String>,
     pub hits: RefCell<Option<Vec<lists::Hit>>>,
@@ -262,9 +266,11 @@ impl Window {
             let editor = Editor::new();
             editor.widget.set_width_request(EDITOR_LEAST);
             let conflicts = Conflicts::new();
+            let strip = Strip::new();
+            editor.page.insert_child_after(&strip.widget, Some(&editor.read_only));
             editor
                 .page
-                .insert_child_after(&conflicts.unreadable, Some(&editor.read_only));
+                .insert_child_after(&conflicts.unreadable, Some(&strip.widget));
             editor.page.append(&conflicts.picker);
 
             // The sidebar's width is the most of the split's limits and what
@@ -322,6 +328,8 @@ impl Window {
                 expanded: RefCell::default(),
                 editor,
                 conflicts,
+                strip,
+                close_warned: Cell::new(false),
                 query: RefCell::default(),
                 hits: RefCell::default(),
                 search_boxes,
@@ -387,6 +395,38 @@ impl Window {
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
         );
         actions::add(&ui);
+        crate::attach::connect(&ui);
+        let weak = Rc::downgrade(&ui);
+        window.connect_close_request(move |_| match weak.upgrade() {
+            Some(ui) if !ui.may_close() => glib::Propagation::Stop,
+            _ => glib::Propagation::Proceed,
+        });
+        // Editing the latest copy: focusing the editor, or the first key typed
+        // into an untouched note, pulls first when the last pull is a minute
+        // old; that key is dropped rather than typed into a copy about to change.
+        let focus = gtk::EventControllerFocus::new();
+        let weak = Rc::downgrade(&ui);
+        focus.connect_enter(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                ui.pull_if_stale();
+            }
+        });
+        ui.editor.view.add_controller(focus);
+        let keys = gtk::EventControllerKey::new();
+        let weak = Rc::downgrade(&ui);
+        keys.connect_key_pressed(move |_, key, _, modifiers| {
+            let Some(ui) = weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            let types = key.to_unicode().is_some_and(|c| !c.is_control())
+                && !modifiers.intersects(gtk::gdk::ModifierType::CONTROL_MASK | gtk::gdk::ModifierType::ALT_MASK);
+            let edits = types || matches!(key, gtk::gdk::Key::BackSpace | gtk::gdk::Key::Delete);
+            if edits && !ui.editor.dirty() && ui.pull_if_stale() {
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        ui.editor.view.add_controller(keys);
         for (at, entry) in ui.search_boxes.iter().enumerate() {
             let weak = Rc::downgrade(&ui);
             entry.connect_search_changed(move |entry| {
@@ -732,6 +772,7 @@ impl Ui {
                 self.editor.view.set_editable(false);
             }
         }
+        self.show_attachments();
     }
 
     /// Loads the open note into the editor.
@@ -891,6 +932,7 @@ impl Ui {
     // ---- saving --------------------------------------------------------------------
 
     fn text_changed(&self) {
+        self.close_warned.set(false);
         self.unsaved.set_visible(self.editor.dirty());
         if let Some(source) = self.autosave.take() {
             source.remove();
@@ -936,6 +978,26 @@ impl Ui {
         self.unsaved.set_visible(self.editor.dirty());
         self.handle_events();
         saved
+    }
+
+    /// Closing saves what autosave has not written yet. Edits a guardrail
+    /// holds back, or that wait behind a running sync, stop the first close
+    /// so they are not dropped unseen; closing again discards them.
+    fn may_close(&self) -> bool {
+        if !self.editor.dirty() || self.close_warned.get() {
+            return true;
+        }
+        let held = !self.backend.borrow().save_warning(&self.editor.text()).is_empty();
+        if !held && (self.save() || !self.editor.dirty()) {
+            return true;
+        }
+        self.close_warned.set(true);
+        self.set_notice(if !held && self.backend.borrow().sync_running() {
+            "Your edits are not saved yet: another sync has the notes. Wait for it, or close again to discard them."
+        } else {
+            "Your edits are not saved (Ctrl+S shows why). Close again to discard them."
+        });
+        false
     }
 
     /// Saves before leaving the open note. Edits that fail the guardrails are

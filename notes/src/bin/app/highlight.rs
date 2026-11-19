@@ -206,6 +206,63 @@ fn spans(text: &[char]) -> Vec<Span> {
     out
 }
 
+/// One line as Pango markup, for a page (export-pdf): styled as in the
+/// editor off the cursor's line, its marks left out.
+pub fn markup(line: &str) -> String {
+    let text: Vec<char> = line.chars().collect();
+    let n = text.len();
+    let mut styles: Vec<Vec<&str>> = vec![Vec::new(); n];
+    let mut hidden = vec![false; n];
+    for span in spans(&text) {
+        match span {
+            Span::Mark(a, b) => hidden[a.min(n)..b.min(n)].iter_mut().for_each(|h| *h = true),
+            Span::Style(name, a, b) => {
+                for style in &mut styles[a.min(n)..b.min(n)] {
+                    style.push(name);
+                }
+            }
+        }
+    }
+    let mut out = String::new();
+    let mut i = 0;
+    while i < n {
+        if hidden[i] {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < n && !hidden[j] && styles[j] == styles[i] {
+            j += 1;
+        }
+        let run: String = text[i..j].iter().collect();
+        let run = gtk::glib::markup_escape_text(&run);
+        let attributes: String = styles[i]
+            .iter()
+            .map(|style| match *style {
+                "h1" => r#" size="160%" weight="bold""#,
+                "h2" => r#" size="125%" weight="bold""#,
+                "h3" => r#" size="108%" weight="bold""#,
+                "bold" => r#" weight="bold""#,
+                "italic" => r#" style="italic""#,
+                "quote" => r##" style="italic" foreground="#555555""##,
+                "strike" => r#" strikethrough="true""#,
+                "done" => r##" strikethrough="true" foreground="#777777""##,
+                "rule" | "muted" => r##" foreground="#777777""##,
+                "code" => r##" font_family="monospace" background="#eeeeee""##,
+                "link" => r##" underline="single" foreground="#1a5fb4""##,
+                _ => "",
+            })
+            .collect();
+        if attributes.is_empty() {
+            out.push_str(&run);
+        } else {
+            out.push_str(&format!("<span{attributes}>{run}</span>"));
+        }
+        i = j;
+    }
+    out
+}
+
 type Range = (usize, usize);
 
 /// `---`, `***` or `___`, spaces allowed between.
@@ -382,6 +439,15 @@ mod tests {
             of("[the bakery](https://x)"),
             [Span::Mark(0, 1), Span::Style("link", 1, 11), Span::Mark(11, 23)]
         );
+    }
+
+    #[test]
+    fn a_page_shows_the_styles_without_the_marks() {
+        assert_eq!(
+            markup("## Weekend"),
+            r#"<span size="125%" weight="bold">Weekend</span>"#
+        );
+        assert_eq!(markup("a **b** <c>"), r#"a <span weight="bold">b</span> &lt;c&gt;"#);
     }
 
     #[test]
