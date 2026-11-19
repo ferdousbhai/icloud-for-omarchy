@@ -8,7 +8,9 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use base64::Engine;
 use serde_json::{Value, json};
@@ -78,6 +80,8 @@ pub struct FakeServer {
     pub url: String,
     server: Arc<tiny_http::Server>,
     state: Arc<Mutex<State>>,
+    /// Seconds each uploaded file's bytes take to arrive.
+    upload_hold: Arc<AtomicU64>,
 }
 
 impl Drop for FakeServer {
@@ -96,10 +100,15 @@ impl FakeServer {
         let addr = server.server_addr().to_ip().expect("ip address");
         let url = format!("http://{addr}");
         let state = Arc::new(Mutex::new(State::new(&url, count)));
+        let upload_hold = Arc::new(AtomicU64::new(0));
         for _ in 0..4 {
-            let (server, state) = (server.clone(), state.clone());
+            let (server, state, hold) = (server.clone(), state.clone(), upload_hold.clone());
             std::thread::spawn(move || {
                 while let Ok(mut req) = server.recv() {
+                    // Outside the state's lock, so the rest of the fake answers meanwhile.
+                    if req.url().starts_with("/content-upload/") {
+                        std::thread::sleep(Duration::from_secs(hold.load(Ordering::Relaxed)));
+                    }
                     let mut body = Vec::new();
                     let _ = req.as_reader().read_to_end(&mut body);
                     let (status, ctype, bytes) = handle(&state, req.method().as_str(), req.url(), &body);
@@ -112,7 +121,17 @@ impl FakeServer {
                 }
             });
         }
-        FakeServer { url, server, state }
+        FakeServer {
+            url,
+            server,
+            state,
+            upload_hold,
+        }
+    }
+
+    /// Take `seconds` over each uploaded file, so an upload can be seen in progress.
+    pub fn hold_uploads(&self, seconds: u64) {
+        self.upload_hold.store(seconds, Ordering::Relaxed);
     }
 
     /// Answer 421 to every Apple call until `/mock/reauthenticate`.
