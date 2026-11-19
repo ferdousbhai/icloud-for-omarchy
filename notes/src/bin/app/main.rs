@@ -37,10 +37,31 @@ fn main() -> gtk::glib::ExitCode {
     {
         std::process::exit(icloud_notes::cli::run_in_app(&args, &pdf::render).into());
     }
-    let app = omui::application(APP_ID, "icloud-notes", "Notes", window::CSS, |app| {
+    let app = omui::application(&application_id(), "icloud-notes", "Notes", window::CSS, |app| {
         window::Window::new(app).present();
     });
     // A word that is no command opens the window as no word does
     // (`icloud-notes bogus`): the arguments are not GApplication's.
     app.run_with_args::<&str>(&[])
+}
+
+/// One window per vault, as the vault has one lock: a second launch on the
+/// same vault shows the first window and ends. The usual vault is the app's
+/// own id (the desktop entry's, which the window is known by); one named by
+/// `ICLOUD_NOTES_VAULT` gets an id of its own.
+fn application_id() -> String {
+    match std::env::var_os("ICLOUD_NOTES_VAULT").filter(|dir| !dir.is_empty()) {
+        None => APP_ID.to_string(),
+        Some(dir) => {
+            let root = icloud_notes::vault::Vault::at(dir.to_string_lossy()).absolute();
+            let hash = root
+                .as_os_str()
+                .as_encoded_bytes()
+                .iter()
+                .fold(0xcbf2_9ce4_8422_2325u64, |hash, &b| {
+                    (hash ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+                });
+            format!("{APP_ID}.Vault{hash:016x}")
+        }
+    }
 }

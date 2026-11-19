@@ -82,6 +82,8 @@ pub struct World {
     bin: PathBuf,
     bus: Child,
     address: String,
+    /// The display a window started here draws on, once one is started.
+    display: std::sync::OnceLock<Child>,
     pub session: FakeSession,
     pub vault: PathBuf,
 }
@@ -91,6 +93,10 @@ impl Drop for World {
         // The bus this world started, by the handle it was started with.
         let _ = self.bus.kill();
         let _ = self.bus.wait();
+        if let Some(display) = self.display.get_mut() {
+            let _ = display.kill();
+            let _ = display.wait();
+        }
     }
 }
 
@@ -141,6 +147,7 @@ impl World {
             bin,
             bus,
             address,
+            display: std::sync::OnceLock::new(),
             session,
             vault,
         })
@@ -392,8 +399,10 @@ impl World {
             // Where the vault's lock file goes.
             ("XDG_RUNTIME_DIR", dir("run")),
             ("DBUS_SESSION_BUS_ADDRESS", self.address.clone().into()),
-            // Should a window ever start, it draws nowhere.
-            ("QT_QPA_PLATFORM", "offscreen".into()),
+            // A window draws on this world's own Broadway display (`display`),
+            // which no one sees.
+            ("GDK_BACKEND", "broadway".into()),
+            ("BROADWAY_DISPLAY", ":0".into()),
             ("NO_AT_BRIDGE", "1".into()),
             ("ICLOUD_NOTES_VAULT", self.vault.clone().into_os_string()),
             ("ICLOUD_NOTES_SYNC_BIN", stub_engine().into_os_string()),
@@ -425,6 +434,38 @@ impl World {
         line
     }
 
+    /// Starts GTK's Broadway display server, which draws into a web page
+    /// that nothing here opens: a window started in this world is real but
+    /// seen by no one. It listens in this world's runtime directory, and
+    /// serves its page on a socket there too rather than on a port.
+    fn display(&self) {
+        self.display.get_or_init(|| {
+            let run = self.scratch().join("run");
+            let display = Command::new("gtk4-broadwayd")
+                .arg(format!("--unixsocket={}", run.join("broadway-page").display()))
+                .arg(":0")
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("XDG_RUNTIME_DIR", &run)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("gtk4-broadwayd (gtk4) runs");
+            let socket = run.join("broadway1.socket");
+            let begun = Instant::now();
+            while !socket.exists() {
+                assert!(
+                    begun.elapsed() < Duration::from_secs(10),
+                    "gtk4-broadwayd made no {}",
+                    socket.display()
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            display
+        });
+    }
+
     /// Starts the binary and leaves it running (the window, which never
     /// exits by itself) until what is returned is dropped.
     pub fn spawn<I, S>(&self, args: I) -> Started
@@ -432,6 +473,7 @@ impl World {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        self.display();
         let child = self
             .command()
             .args(args)

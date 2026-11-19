@@ -1,7 +1,7 @@
 //! Which first arguments are not the command line's: with none, or one that
 //! is no command and no global flag, the binary is the app. Started here
-//! with nowhere to draw (the offscreen platform, in the scratch world), it
-//! is known by the vault's lock, which the window holds while it is open.
+//! on a display no one sees (the scratch world's Broadway server), it is
+//! known by the vault's lock, which the window holds while it is open.
 
 use std::thread;
 use std::time::{Duration, Instant};
