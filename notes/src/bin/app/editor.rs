@@ -4,9 +4,12 @@
 //! typing pauses (the window's autosave).
 
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use gtk::prelude::*;
 use omui::icons::name;
+
+use crate::highlight::Highlighter;
 
 pub struct Editor {
     pub widget: gtk::Stack,
@@ -83,6 +86,8 @@ impl Editor {
         let widget = gtk::Stack::builder().hexpand(true).vexpand(true).build();
         widget.add_named(&empty.widget, Some("empty"));
         widget.add_named(&page, Some("note"));
+        let highlight = Rc::new(Highlighter::new(&buffer));
+        follow_cursor(&view, &highlight);
         Editor {
             widget,
             date,
@@ -97,7 +102,7 @@ impl Editor {
 
     pub fn text(&self) -> String {
         self.buffer
-            .text(&self.buffer.start_iter(), &self.buffer.end_iter(), false)
+            .text(&self.buffer.start_iter(), &self.buffer.end_iter(), true)
             .into()
     }
 
@@ -131,5 +136,42 @@ impl Editor {
         self.buffer.set_text("");
         self.set_saved("");
         self.widget.set_visible_child_name("empty");
+    }
+}
+
+/// Styles the text as it changes, shows the marks of the line the cursor is
+/// on while the editor has the keyboard, and follows the theme.
+fn follow_cursor(view: &gtk::TextView, highlight: &Rc<Highlighter>) {
+    let buffer = view.buffer();
+    let h = highlight.clone();
+    buffer.connect_changed(move |_| h.all());
+    let cursor_line = |view: &gtk::TextView| {
+        let buffer = view.buffer();
+        view.has_focus()
+            .then(|| buffer.iter_at_offset(buffer.cursor_position()).line())
+    };
+    let (h, v) = (highlight.clone(), view.downgrade());
+    buffer.connect_cursor_position_notify(move |_| {
+        if let Some(view) = v.upgrade() {
+            h.set_active_line(cursor_line(&view));
+        }
+    });
+    let focus = gtk::EventControllerFocus::new();
+    let (h, v) = (highlight.clone(), view.downgrade());
+    focus.connect_enter(move |_| {
+        if let Some(view) = v.upgrade() {
+            h.set_active_line(cursor_line(&view));
+        }
+    });
+    let h = highlight.clone();
+    focus.connect_leave(move |_| h.set_active_line(None));
+    view.add_controller(focus);
+    if let Some(theme) = omui::Theme::get() {
+        let h = Rc::downgrade(highlight);
+        theme.on_change(view, move |tokens| {
+            if let Some(h) = h.upgrade() {
+                h.set_colours(tokens);
+            }
+        });
     }
 }

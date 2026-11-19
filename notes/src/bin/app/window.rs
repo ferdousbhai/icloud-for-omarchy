@@ -371,7 +371,9 @@ fn add_actions(ui: &Rc<Ui>) {
         Box::new(|ui, parameter| {
             let path: String = parameter.and_then(|p| p.get()).unwrap_or_default();
             let (folder, file) = path.rsplit_once('/').unwrap_or(("", &path));
-            ui.open_note(folder, file);
+            if ui.open_note(folder, file) && ui.split.is_collapsed() {
+                ui.split.set_show_content(true);
+            }
         }),
     );
     action(
@@ -635,6 +637,9 @@ impl Ui {
             return;
         }
         self.backend.borrow_mut().set_current_folder(folder);
+        if self.narrow.get() {
+            self.reveal_current();
+        }
         self.show_vault();
     }
 
@@ -649,6 +654,9 @@ impl Ui {
             let mut b = self.backend.borrow_mut();
             b.set_current_folder(folder);
             b.open_note(file);
+        }
+        if self.narrow.get() {
+            self.reveal_current();
         }
         self.load_editor();
         self.show_vault();

@@ -8,6 +8,7 @@
 //! reach them.
 
 mod editor;
+mod highlight;
 mod icons;
 mod lists;
 mod window;
