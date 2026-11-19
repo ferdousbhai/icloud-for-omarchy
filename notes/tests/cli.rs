@@ -75,6 +75,7 @@ fn the_command_line_binary_does_not_link_gtk() {
             "libpango",
             "libcairo",
         ],
+        &[],
     );
 }
 
