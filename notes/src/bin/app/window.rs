@@ -11,8 +11,9 @@
 //! toolbar's sidebar button switches between them.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::{Rc, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gtk::{gio, glib, prelude::*};
 use icloud_notes::backend::{Backend, Event, Role};
@@ -22,6 +23,7 @@ use icloud_notes::vault::Vault;
 use omui::icons::name;
 
 use crate::actions;
+use crate::banners::Banners;
 use crate::editor::Editor;
 use crate::icons;
 use crate::lists::{self, Handlers, Item, Lists};
@@ -95,6 +97,30 @@ pub struct Ui {
     pub notice: gtk::Label,
     pub unsaved: gtk::Label,
     pub spinner: gtk::Spinner,
+    pub banners: Banners,
+    // ---- syncing (syncing.rs)
+    /// The first sync has been started (or decided against).
+    pub started: Cell<bool>,
+    /// icloud-session's sign-in window is open, or was asked for.
+    pub signing_in: Cell<bool>,
+    /// A clone waits for the sign-in it asked for.
+    pub clone_wanted: Cell<bool>,
+    /// Failed pulls in a row (at most 4), which slow the step down.
+    pub poll_failures: Cell<u32>,
+    /// When the window last synced or asked the engine to.
+    pub last_sync: Cell<Option<Instant>>,
+    /// The editor waits, read-only, for a pull to bring the latest copy.
+    pub freshening: Cell<bool>,
+    pub soon: RefCell<Option<glib::SourceId>>,
+    /// The engine's message when it refused a push that would delete most of
+    /// the vault; empty once a push goes through.
+    pub deletions_refused: RefCell<String>,
+    /// The last Sync status's notes it would not simply push, by
+    /// vault-relative file: their resolution.
+    pub statuses: RefCell<HashMap<String, String>>,
+    /// What the vault is watched by, and for which folders and note.
+    watching: RefCell<(String, Vec<gio::FileMonitor>)>,
+    reread: RefCell<Option<glib::SourceId>>,
 }
 
 pub struct Window;
@@ -233,7 +259,9 @@ impl Window {
             status_bar.append(&notice);
             status_bar.append(&unsaved);
 
+            let banners = Banners::new();
             let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            content.append(&banners.widget);
             content.append(&split.widget);
             content.append(&status_bar);
             let shell = omui::Shell::new(&window, &content);
@@ -261,8 +289,21 @@ impl Window {
                 notice,
                 unsaved,
                 spinner,
+                banners,
+                started: Cell::new(false),
+                signing_in: Cell::new(false),
+                clone_wanted: Cell::new(false),
+                poll_failures: Cell::new(0),
+                last_sync: Cell::new(None),
+                freshening: Cell::new(false),
+                soon: RefCell::default(),
+                deletions_refused: RefCell::default(),
+                statuses: RefCell::default(),
+                watching: RefCell::default(),
+                reread: RefCell::default(),
             }
         });
+        ui.banners.connect(&ui);
 
         // ---- the layouts
         let weak = Rc::downgrade(&ui);
@@ -303,6 +344,8 @@ impl Window {
         );
         actions::add(&ui);
         ui.start();
+        ui.show_banners();
+        ui.start_syncing();
         // Everything else holds the state weakly: the window keeps it for as
         // long as it is open.
         let keep = ui.clone();
@@ -494,6 +537,7 @@ impl Ui {
         self.window.set_title(Some(&title));
         drop(b);
         actions::update(self);
+        self.watch_vault();
     }
 
     /// The open note's title, as its list row shows it.
@@ -531,7 +575,14 @@ impl Ui {
         } else {
             let b = self.backend.borrow();
             lists::fill_folders(&self.lists.folders, &b, &self.handlers);
-            lists::fill_notes(&self.lists.notes, &b, None, &|_| Vec::new());
+            let statuses = self.statuses.borrow();
+            let folder = b.current_folder().to_string();
+            let pushed = |file: &str| match statuses.get(&icloud_notes_path(&folder, file)).map(String::as_str) {
+                Some("refused") => vec![("push refused", "error")],
+                Some("conflict") => vec![("remote changed", "warning")],
+                _ => Vec::new(),
+            };
+            lists::fill_notes(&self.lists.notes, &b, None, &pushed);
             self.folder_title.set_label(lists::folder_label(b.current_folder()));
             let n = b.notes().len();
             self.list_summary
@@ -541,7 +592,7 @@ impl Ui {
 
     /// The editor's header: the date, the title of a file-titled note, and
     /// why it cannot be edited.
-    fn show_note_header(&self) {
+    pub fn show_note_header(&self) {
         let mut b = self.backend.borrow_mut();
         let file = b.current_note().to_string();
         if file.is_empty() {
@@ -550,7 +601,11 @@ impl Ui {
         }
         self.editor.widget.set_visible_child_name("note");
         let details = b.note_details(&file);
-        self.editor.date.set_label(&long_date(details.modified_ms));
+        self.editor.date.set_label(&if self.freshening.get() {
+            "Getting the latest from iCloud…".to_string()
+        } else {
+            long_date(details.modified_ms)
+        });
         let by_file_name = b.vault_title_mode() == "filename";
         self.editor.title.set_visible(by_file_name);
         if by_file_name {
@@ -567,7 +622,9 @@ impl Ui {
             "Read-only here: this note {reason}. Edit it in Apple Notes, and the changes still sync here."
         ));
         self.editor.title.set_editable(reason.is_empty());
-        self.editor.view.set_editable(reason.is_empty());
+        self.editor
+            .view
+            .set_editable(reason.is_empty() && !self.freshening.get());
         self.editor
             .conflict_copy
             .set_visible(b.note_flags(&file).contains(&"conflict-copy"));
@@ -600,7 +657,7 @@ impl Ui {
     // ---- choosing ------------------------------------------------------------------
 
     /// A row chosen, by a click or by the arrows passing it.
-    fn choose(&self, item: &Item) {
+    fn choose(self: &Rc<Self>, item: &Item) {
         match item {
             Item::Folder(folder) => self.open_folder(folder),
             Item::Note { folder, file } => {
@@ -650,8 +707,12 @@ impl Ui {
 
     /// Makes `file` of `folder` the open note, to edit it. False when edits
     /// that cannot be saved yet keep the open one.
-    pub fn open_note(&self, folder: &str, file: &str) -> bool {
-        self.select_note(folder, file)
+    pub fn open_note(self: &Rc<Self>, folder: &str, file: &str) -> bool {
+        let opened = self.select_note(folder, file);
+        if opened {
+            self.pull_if_stale();
+        }
+        opened
     }
 
     /// Makes it the open note, for acting on it (its menu, a drag) rather
@@ -738,12 +799,110 @@ impl Ui {
         self.save()
     }
 
-    /// What the backend says happened.
+    /// What the backend says happened: a change worth a sync soon, the open
+    /// note changed on disk under a save (its edits are merged once no sync
+    /// runs), edits kept as a new note, a save that waited for the sync
+    /// written.
     pub fn handle_events(&self) {
+        let Some(ui) = self.me.upgrade() else { return };
         let events = self.backend.borrow_mut().take_events();
-        if events.contains(&Event::VaultChanged) {
-            self.show_lists();
+        for event in events {
+            match event {
+                Event::VaultChanged => {
+                    self.show_lists();
+                    ui.sync_soon();
+                }
+                Event::NoteChangedOnDisk => {
+                    if !self.backend.borrow().sync_running() {
+                        let base = self.editor.saved();
+                        self.backend.borrow_mut().refresh();
+                        ui.merge_edits(&base);
+                        self.show_vault();
+                    }
+                }
+                Event::EditsKeptAsNote(message) => self.set_notice(&message),
+                Event::QueuedSaveWritten(body) => {
+                    if self.editor.text() == body {
+                        self.load_editor();
+                        self.set_notice("");
+                    } else {
+                        // Typing went on: the edits now start from what was
+                        // queued, merged with what the sync changed.
+                        ui.merge_edits(&body);
+                        if self.editor.dirty() {
+                            self.editor.set_saved(&body);
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    /// Watches the vault, its folders and the open note for changes made by
+    /// other programs (a pull in a terminal, a file manager): the lists are
+    /// read again, and the open note's unsaved edits kept apart from the change.
+    fn watch_vault(&self) {
+        let (root, folders, note) = {
+            let b = self.backend.borrow();
+            let note =
+                (!b.current_note().is_empty()).then(|| b.vault().folder(b.current_folder()).join(b.current_note()));
+            (b.vault().absolute(), b.folders().to_vec(), note)
+        };
+        let key = format!("{folders:?}{note:?}");
+        if self.watching.borrow().0 == key {
+            return;
+        }
+        let mut monitors = Vec::new();
+        let paths = folders.iter().map(|folder| root.join(folder)).chain(note.clone());
+        for path in paths {
+            let file = gio::File::for_path(&path);
+            let monitor = if Some(&path) == note.as_ref() {
+                file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+            } else {
+                file.monitor_directory(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+            };
+            let Ok(monitor) = monitor else { continue };
+            let weak = self.weak();
+            monitor.connect_changed(move |_, _, _, _| {
+                if let Some(ui) = weak.upgrade() {
+                    ui.vault_changed();
+                }
+            });
+            monitors.push(monitor);
+        }
+        self.watching.replace((key, monitors));
+    }
+
+    /// Something changed in the vault: read again once it settles. A sync
+    /// reads the vault itself once it is done.
+    fn vault_changed(self: &Rc<Self>) {
+        if self.reread.borrow().is_some() {
+            return;
+        }
+        let weak = self.weak();
+        let source = glib::timeout_add_local_once(Duration::from_millis(300), move || {
+            let Some(ui) = weak.upgrade() else { return };
+            ui.reread.take();
+            if ui.backend.borrow().sync_running() {
+                return;
+            }
+            let before = ui.backend.borrow().note_content().to_string();
+            ui.backend.borrow_mut().refresh();
+            let changed = ui.backend.borrow().note_content() != before;
+            ui.after_reload();
+            if changed || !ui.editor.dirty() {
+                ui.sync_soon();
+            }
+        });
+        self.reread.replace(Some(source));
+    }
+}
+
+fn icloud_notes_path(folder: &str, file: &str) -> String {
+    if folder.is_empty() {
+        file.to_string()
+    } else {
+        format!("{folder}/{file}")
     }
 }
 

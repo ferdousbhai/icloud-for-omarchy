@@ -33,7 +33,7 @@ required-features = ["ui"]
 
 [features]
 default = ["ui"]
-ui = ["dep:gtk", "dep:omui"]
+ui = ["dep:gtk", "dep:omui", "dep:async-channel"]
 
 # tests/blackbox/ drives whichever icloud-notes binary ICLOUD_NOTES_BIN names,
 # so the same suite holds the Qt binary and this one.
@@ -60,6 +60,7 @@ serde_json.workspace = true
 zbus.workspace = true
 gtk = { workspace = true, optional = true }
 omui = { workspace = true, optional = true }
+async-channel = { workspace = true, optional = true }
 
 [dev-dependencies]
 icloud-app = { workspace = true, features = ["testing"] }

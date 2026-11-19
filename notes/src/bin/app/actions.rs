@@ -58,6 +58,9 @@ pub fn add(ui: &Rc<Ui>) {
     action("rename-folder", None, Box::new(|ui, _| rename_folder(ui)));
     action("delete-folder", None, Box::new(|ui, _| delete_folder(ui)));
     action("save", None, Box::new(|ui, _| save(ui)));
+    action("sync-status", None, Box::new(|ui, _| crate::dialogs::sync_status(ui)));
+    action("sync-log", None, Box::new(|ui, _| crate::dialogs::sync_log(ui)));
+    action("history", None, Box::new(|ui, _| crate::dialogs::history(ui)));
     action("checklist", None, Box::new(|ui, _| toggle_task(ui)));
     action("bold", None, Box::new(|ui, _| wrap_selection(ui, "**", "**")));
     action("italic", None, Box::new(|ui, _| wrap_selection(ui, "*", "*")));
@@ -120,6 +123,7 @@ pub fn update(ui: &Ui) {
     let folder = !b.current_folder().is_empty();
     let formatting = unlocked && ui.editor.view.is_editable();
     let has_targets = !move_targets(b.folders(), b.current_folder()).is_empty();
+    let cloned = b.vault().cloned();
     for (name, on) in [
         ("new-note", !syncing),
         ("new-folder", !syncing),
@@ -127,6 +131,8 @@ pub fn update(ui: &Ui) {
         ("rename-note", unlocked && !syncing),
         ("move-note", unlocked && !syncing && has_targets),
         ("rename-folder", folder),
+        ("sync-status", cloned && !syncing),
+        ("history", note && cloned && !syncing),
         ("delete-folder", folder),
         ("checklist", formatting),
         ("bold", formatting),

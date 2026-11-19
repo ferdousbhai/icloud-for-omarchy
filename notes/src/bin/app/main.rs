@@ -8,10 +8,13 @@
 //! reach them.
 
 mod actions;
+mod banners;
+mod dialogs;
 mod editor;
 mod highlight;
 mod icons;
 mod lists;
+mod syncing;
 mod window;
 
 use gtk::prelude::*;

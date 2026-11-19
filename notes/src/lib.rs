@@ -17,7 +17,7 @@ mod help;
 mod json;
 pub mod lock;
 pub mod notetree;
-mod session;
+pub mod session;
 pub mod sync;
 pub mod syncmodel;
 mod text;

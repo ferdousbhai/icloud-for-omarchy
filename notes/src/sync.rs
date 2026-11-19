@@ -273,10 +273,20 @@ impl Backend {
 
     /// Asks icloud-session who is signed in, and waits for its answer.
     pub fn read_sign_in(&mut self) {
-        self.sync.sign_in = session::read();
-        // Signed out pauses syncing without trying first.
+        self.adopt_sign_in(session::read());
+    }
+
+    /// Takes `status` (icloud-session's answer, `None` when it gave none) as
+    /// who is signed in: a window reads it off its main loop, and hears of
+    /// changes. Signed out pauses syncing without trying first; a sign-in
+    /// that was not there before resumes it.
+    pub fn adopt_sign_in(&mut self, status: Option<Status>) {
+        let was_signed_in = self.signed_in();
+        self.sync.sign_in = status;
         if self.sync.sign_in.as_ref().is_some_and(|status| !status.signed_in) && self.vault.cloned() {
             self.sync.auth_expired = true;
+        } else if self.signed_in() && !was_signed_in {
+            self.sync.auth_expired = false;
         }
     }
 
@@ -340,29 +350,43 @@ impl Backend {
         while let Some(kind) = next.take() {
             let Some(runs) = self.run_once(kind) else { break };
             all.push(runs);
-            for _ in 0..std::mem::take(&mut self.sync.reports) {
-                match session::report_sign_in_required() {
-                    Ok(still_good) => {
-                        if still_good && !self.sync.retried_after_report {
-                            self.sync.retried_after_report = true;
-                            self.sync.auth_expired = false;
-                            if self.vault.cloned() {
-                                next = Some(Kind::Sync { delete_missing: false });
-                            }
-                        }
-                    }
-                    Err(why) => {
-                        self.append_log(&why);
-                        // Nobody could say whether the sign-in still works:
-                        // unknown, which never pauses; the next sync finds out again.
-                        if !(self.sign_in_known() && !self.signed_in()) {
-                            self.sync.auth_expired = false;
-                        }
-                    }
-                }
+            for _ in 0..self.take_reports() {
+                next = self.reported(session::report_sign_in_required()).or(next);
             }
         }
         all
+    }
+
+    /// How many refused sign-ins the last run left to report to
+    /// icloud-session ([`session::report_sign_in_required`]), each answer
+    /// going to [`Backend::reported`]. A window asks off its main loop.
+    pub fn take_reports(&mut self) -> usize {
+        std::mem::take(&mut self.sync.reports)
+    }
+
+    /// icloud-session's answer to a report: the sync to try once more when
+    /// it vouched for the sign-in (it refreshed the engine's copy).
+    pub fn reported(&mut self, answer: Result<bool, String>) -> Option<Kind> {
+        match answer {
+            Ok(still_good) => {
+                if still_good && !self.sync.retried_after_report {
+                    self.sync.retried_after_report = true;
+                    self.sync.auth_expired = false;
+                    if self.vault.cloned() {
+                        return Some(Kind::Sync { delete_missing: false });
+                    }
+                }
+            }
+            Err(why) => {
+                self.append_log(&why);
+                // Nobody could say whether the sign-in still works:
+                // unknown, which never pauses; the next sync finds out again.
+                if !(self.sign_in_known() && !self.signed_in()) {
+                    self.sync.auth_expired = false;
+                }
+            }
+        }
+        None
     }
 
     /// One engine run, from its start to its last consequence here.
@@ -476,6 +500,32 @@ impl Backend {
                 }))
             }
         }
+    }
+
+    /// Starts `icloud-notes-sync <args>` for what a window reads and shows
+    /// (`--quiet status`, `--quiet history`, `--json diff`), with the lock this
+    /// process holds, and logs its command line as every run's is. Its output
+    /// is the caller's to read once it ends; no save waits for it. `Err` says
+    /// why it could not start.
+    pub fn start_read(&mut self, args: &[&str]) -> Result<Running, String> {
+        let Some(tool) = self.engine.clone() else {
+            return Err(NOT_INSTALLED.into());
+        };
+        let Some(fd) = self.lock.fd() else {
+            return Err(format!(
+                "{} has the notes; try again once it is done.",
+                self.lock_holder()
+            ));
+        };
+        self.append_log(&format!("$ {TOOL} {}", args.join(" ")));
+        let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        engine::start(&tool, &args, self.vault.path(), fd)
+            .map_err(|e| format!("Failed to start {TOOL}: {}", crate::files::os_error_text(&e)))
+    }
+
+    /// Whether this process holds the vault's lock.
+    pub fn holds_lock(&self) -> bool {
+        self.lock.is_held()
     }
 
     /// The run ended: logs what it wrote and how it exited, reads its

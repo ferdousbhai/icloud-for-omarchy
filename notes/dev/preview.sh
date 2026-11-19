@@ -15,6 +15,11 @@ set -Eeuo pipefail
 #   unreadable  Groceries with nested conflict markers the picker cannot read
 #   attach      Groceries with a picture and a PDF attached
 #   bare        an empty vault, not linked to iCloud: the banner and the onboarding dialog
+#   delete      Delete note on Groceries: the question
+#   status      Sync status: what the next push would do
+#   log         the Sync log after the window's first sync
+#   newnote     New note, its title typed
+# The last four drive the GTK window's actions, which the Qt window does not have.
 # `theme-dir` holds a `colors.toml` (an Omarchy theme, such as /usr/share/omarchy/themes/catppuccin-latte) and is
 # copied in as the scratch desktop's current theme; without one the pictures are named `-default`.
 #
@@ -46,7 +51,9 @@ done
 for theme in "${themes[@]}"; do
   [[ -z $theme || -f $theme/colors.toml ]] || { echo "preview: $theme has no colors.toml" >&2; exit 1; }
 done
-read -r -a scenes <<< "${ICLOUD_NOTES_PREVIEW_SCENES:-notes search readonly conflict unreadable attach bare}"
+all="notes search readonly conflict unreadable attach bare"
+[[ -n ${ICLOUD_NOTES_PREVIEW_QT:-} ]] || all+=" delete status log newnote"
+read -r -a scenes <<< "${ICLOUD_NOTES_PREVIEW_SCENES:-$all}"
 parent_runtime=${XDG_RUNTIME_DIR:?preview: XDG_RUNTIME_DIR is required}
 parent_display=${WAYLAND_DISPLAY:?preview: run this from a Wayland desktop}
 parent_socket=$parent_runtime/$parent_display
@@ -69,6 +76,10 @@ declare -A keys=(
   [unreadable]="$open"
   [attach]="$open"
   [bare]=""
+  [delete]="$open action:delete-note"
+  [status]="action:sync-status"
+  [log]="action:sync-log"
+  [newnote]="action:new-note text:Packing_list"
 )
 for scene in "${scenes[@]}"; do
   [[ -v keys[$scene] ]] || { echo "preview: no scene named $scene" >&2; exit 2; }
