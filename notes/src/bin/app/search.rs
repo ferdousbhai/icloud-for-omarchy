@@ -190,3 +190,60 @@ fn rank(recall: &PathBuf, collection: &str, query: &str, records: &[Value]) -> O
             .unwrap_or_default()
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    /// A `recall` that reads the records and answers `answer`, exiting `code`.
+    fn recall(dir: &std::path::Path, answer: &str, code: i32) -> PathBuf {
+        let path = dir.join("recall");
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\ncat > \"$0.in\"\necho '{answer}'\nexit {code}\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[test]
+    fn recall_ranks_the_records_it_is_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let records = [json!({"id": "a.md", "title": "A", "text": "# A\n"})];
+        let ready = recall(
+            dir.path(),
+            r#"{"api":1,"meaning":true,"hits":[{"id":"b.md"},{"id":"a.md"}]}"#,
+            0,
+        );
+        assert_eq!(
+            rank(&ready, "icloud-notes:x", "q", &records),
+            Some(vec!["b.md".to_string(), "a.md".to_string()])
+        );
+        let given: Value = serde_json::from_slice(&std::fs::read(dir.path().join("recall.in")).unwrap()).unwrap();
+        assert_eq!(given, json!(records));
+        // Not ready to rank by meaning, an error, or a failure: no ranking.
+        for (answer, code) in [
+            (r#"{"api":1,"meaning":false,"hits":[]}"#, 0),
+            (r#"{"api":1,"meaning":true,"error":"warming up","hits":[]}"#, 0),
+            (r#"{"api":1,"meaning":true,"hits":[]}"#, 1),
+            ("not json", 0),
+        ] {
+            assert_eq!(
+                rank(&recall(dir.path(), answer, code), "c", "q", &records),
+                None,
+                "{answer}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_collection_is_named_for_the_vault_as_the_qt_window_named_it() {
+        assert_eq!(
+            collection("/home/me/Documents/Notes"),
+            "icloud-notes:fbae688d4c81d09019a92a40"
+        );
+    }
+}
