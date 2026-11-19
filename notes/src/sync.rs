@@ -316,6 +316,11 @@ impl Backend {
 
     // ---- running the engine --------------------------------------------------------
 
+    /// An engine run is under way: saves wait for it.
+    pub fn sync_running(&self) -> bool {
+        self.sync.running
+    }
+
     /// What the engine's last step said it did: "due", "changes", "idle",
     /// "signed_out", "session_unavailable", ...
     pub fn last_step(&self) -> &str {

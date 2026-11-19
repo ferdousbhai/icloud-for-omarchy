@@ -7,7 +7,9 @@
 //! line and the background timer link the library, and no GTK code may
 //! reach them.
 
+mod editor;
 mod icons;
+mod lists;
 mod window;
 
 use gtk::prelude::*;

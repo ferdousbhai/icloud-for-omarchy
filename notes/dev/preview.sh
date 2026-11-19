@@ -286,6 +286,7 @@ shoot() {
   sleep 0.5
   /usr/bin/grim -o preview "$picture"
   echo "preview: $picture"
+  [[ ! -s $root/app.log ]] || sed -n '1,20p' "$root/app.log" >&2
   stop "$app_pid"
   app_pid=""
 }
