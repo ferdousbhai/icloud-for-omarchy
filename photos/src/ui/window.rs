@@ -18,6 +18,7 @@ use icloud_photos::config::{Dirs, DownloadMode, Settings};
 use icloud_photos::sync::{self, Progress, Report};
 use icloud_photos::thumbs::{self, Downloader, Job, Priority};
 use icloud_photos::transport::{Error, Result, SignInState, Transport};
+use omui::icons::name;
 
 use super::albums::Albums;
 use super::decode;
@@ -101,17 +102,20 @@ const FOCUS_SYNC_AFTER: Duration = Duration::from_secs(120);
 const PERIODIC_SYNC_SECS: u32 = 600;
 
 pub struct App {
-    pub window: adw::ApplicationWindow,
+    pub window: gtk::ApplicationWindow,
+    /// Keeps the window's overlay; toasts are still libadwaita's.
+    _shell: Rc<omui::Shell>,
     pub toasts: adw::ToastOverlay,
-    pub banner: adw::Banner,
+    pub banner: omui::Banner,
     pub nav: adw::NavigationView,
     grid_page: adw::NavigationPage,
-    pub split: adw::NavigationSplitView,
+    grid_title: omui::Title,
+    pub split: omui::Split,
     pub status: gtk::Label,
     search: gtk::SearchEntry,
     search_hint: gtk::Label,
     search_query: RefCell<String>,
-    pub spinner: adw::Spinner,
+    pub spinner: gtk::Spinner,
     pub grid: Grid,
     pub albums: Albums,
     pub viewer: Viewer,
@@ -141,7 +145,7 @@ pub struct App {
     pub upload: RefCell<Option<super::upload::UploadUi>>,
 }
 
-pub fn build(application: &adw::Application) -> Rc<App> {
+pub fn build(application: &gtk::Application) -> Rc<App> {
     let dirs = Dirs::from_env();
     let settings = Settings::load(&dirs);
     let cat = match Catalog::open(&dirs.catalog()) {
@@ -155,15 +159,6 @@ pub fn build(application: &adw::Application) -> Rc<App> {
         }
     };
 
-    let window = adw::ApplicationWindow::builder()
-        .application(application)
-        .title("Photos")
-        .default_width(1100)
-        .default_height(760)
-        .build();
-    window.add_css_class("cloud-desktop");
-    window.set_icon_name(Some("com.ferdousbhai.IcloudPhotos"));
-
     // Sidebar: albums, sync status at the bottom.
     let albums = Albums::new();
     let status = gtk::Label::builder()
@@ -173,7 +168,7 @@ pub fn build(application: &adw::Application) -> Rc<App> {
         .build();
     status.add_css_class("dim-label");
     status.add_css_class("caption");
-    let spinner = adw::Spinner::new();
+    let spinner = omui::spinner();
     spinner.set_visible(false);
     let footer = gtk::Box::builder()
         .spacing(8)
@@ -184,7 +179,7 @@ pub fn build(application: &adw::Application) -> Rc<App> {
         .build();
     footer.append(&spinner);
     footer.append(&status);
-    let sidebar_header = adw::HeaderBar::new();
+    let sidebar_header = omui::header(Some(omui::Title::new("Albums", "").widget.upcast_ref()));
     let menu = gio::Menu::new();
     menu.append(Some("Sync Now"), Some("win.refresh"));
     menu.append(Some("Upload…"), Some("win.upload"));
@@ -192,41 +187,34 @@ pub fn build(application: &adw::Application) -> Rc<App> {
     menu.append(Some("About Photos"), Some("win.about"));
     sidebar_header.pack_end(
         &gtk::MenuButton::builder()
-            .icon_name("open-menu-symbolic")
+            .icon_name(name::MENU)
             .menu_model(&menu)
             .tooltip_text("Main Menu")
+            .has_frame(false)
             .build(),
     );
-    let sidebar_tv = adw::ToolbarView::new();
-    sidebar_tv.add_top_bar(&sidebar_header);
-    sidebar_tv.set_content(Some(
-        &gtk::ScrolledWindow::builder().child(&albums.list).vexpand(true).build(),
-    ));
-    sidebar_tv.add_bottom_bar(&footer);
-    let sidebar_page = adw::NavigationPage::builder()
-        .title("Albums")
-        .child(&sidebar_tv)
+    let sidebar = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .css_classes(["sidebar"])
         .build();
+    sidebar.append(&sidebar_header);
+    sidebar.append(&gtk::ScrolledWindow::builder().child(&albums.list).vexpand(true).build());
+    sidebar.append(&footer);
 
     // Content: the grid page, with the viewer pushed on top.
     let grid = Grid::new();
-    let grid_header = adw::HeaderBar::new();
-    grid_header.pack_end(
-        &gtk::Button::builder()
-            .icon_name("list-add-symbolic")
-            .action_name("win.upload")
-            .tooltip_text("Upload Photos (Ctrl+U)")
-            .build(),
-    );
-    grid_header.pack_end(
-        &gtk::Button::builder()
-            .icon_name("view-refresh-symbolic")
-            .action_name("win.refresh")
-            .tooltip_text("Sync Now (Ctrl+R)")
-            .build(),
-    );
-    let grid_tv = adw::ToolbarView::new();
-    grid_tv.add_top_bar(&grid_header);
+    let grid_title = omui::Title::new("All Photos", "");
+    let grid_header = omui::header(Some(grid_title.widget.upcast_ref()));
+    // Shown while the window is too narrow for both panes.
+    let back = omui::icon_button(name::BACK, "Albums");
+    back.set_visible(false);
+    grid_header.pack_start(&back);
+    let upload = omui::icon_button(name::ADD, "Upload Photos (Ctrl+U)");
+    upload.set_action_name(Some("win.upload"));
+    grid_header.pack_end(&upload);
+    let refresh = omui::icon_button(name::REFRESH, "Sync Now (Ctrl+R)");
+    refresh.set_action_name(Some("win.refresh"));
+    grid_header.pack_end(&refresh);
     let search = gtk::SearchEntry::builder()
         .placeholder_text("Search this album")
         .hexpand(true)
@@ -239,48 +227,66 @@ pub fn build(application: &adw::Application) -> Rc<App> {
     search_box.append(&search);
     search_box.append(&search_hint);
     search_hint.set_visible(false);
-    grid_tv.add_top_bar(&search_box);
-    grid_tv.set_content(Some(&grid.root));
+    let grid_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    grid_box.append(&grid_header);
+    grid_box.append(&search_box);
+    grid_box.append(&grid.root);
     let grid_page = adw::NavigationPage::builder()
         .title("All Photos")
         .tag("grid")
-        .child(&grid_tv)
+        .child(&grid_box)
         .build();
     let viewer = Viewer::new();
     let nav = adw::NavigationView::new();
     nav.add(&grid_page);
-    let content_page = adw::NavigationPage::builder().title("Photos").child(&nav).build();
 
-    let split = adw::NavigationSplitView::builder()
-        .sidebar(&sidebar_page)
-        .content(&content_page)
-        .min_sidebar_width(200.0)
-        .max_sidebar_width(280.0)
-        .build();
-    let banner = adw::Banner::builder()
-        .title("iCloud needs you to sign in again")
-        .button_label("Sign In")
-        .revealed(false)
-        .build();
+    let split = omui::Split::new(&sidebar, &nav, (200, 280), Some(640));
+    split.connect_changed({
+        let back = back.downgrade();
+        move |split| {
+            if let Some(back) = back.upgrade() {
+                back.set_visible(split.is_collapsed());
+            }
+        }
+    });
+    back.connect_clicked({
+        let split = split.downgrade();
+        move |_| {
+            if let Some(split) = split.upgrade() {
+                split.set_show_content(false);
+            }
+        }
+    });
+    let banner = omui::Banner::new("iCloud needs you to sign in again", Some("Sign In"));
     let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    body.append(&banner);
-    split.set_vexpand(true);
-    body.append(&split);
+    body.append(&banner.widget);
+    split.widget.set_vexpand(true);
+    body.append(&split.widget);
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&body));
-    window.set_content(Some(&toasts));
 
-    let bp = adw::Breakpoint::new(adw::BreakpointCondition::parse("max-width: 640sp").expect("breakpoint"));
-    bp.add_setter(&split, "collapsed", Some(&true.to_value()));
-    window.add_breakpoint(bp);
+    let window = gtk::ApplicationWindow::builder()
+        .application(application)
+        .title("Photos")
+        .icon_name("com.ferdousbhai.IcloudPhotos")
+        .default_width(1100)
+        .default_height(760)
+        .width_request(360)
+        .height_request(320)
+        .build();
+    // Each pane has a header of its own.
+    omui::claim_titlebar(&window);
+    let shell = omui::Shell::new(&window, &toasts);
 
     let (tx, rx) = async_channel::unbounded::<Msg>();
     let app = Rc::new(App {
         window,
+        _shell: shell,
         toasts,
         banner,
         nav,
         grid_page,
+        grid_title,
         split,
         status,
         search,
@@ -360,7 +366,7 @@ impl App {
         });
 
         let a = self.clone();
-        self.banner.connect_button_clicked(move |_| a.sign_in());
+        self.banner.connect_button_clicked(move || a.sign_in());
 
         let a = self.clone();
         self.window.connect_is_active_notify(move |w| {
@@ -689,6 +695,7 @@ impl App {
     fn apply_snapshot(&self, snap: Snapshot) {
         *self.album.borrow_mut() = snap.album.clone();
         self.grid_page.set_title(snap.title());
+        self.grid_title.set_title(snap.title());
         self.reloading.set(true);
         self.albums.set(snap.total, &snap.albums, snap.album.as_deref());
         self.reloading.set(false);

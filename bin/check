@@ -53,7 +53,7 @@ touched() { # touched REGEX: did a changed path match?
 
 # Rust: a changed crate, and every crate that depends on it; workspace files mean all of them.
 crates=()
-if touched '^(Cargo\.(toml|lock)|rustfmt\.toml|desktop\.css|native_theme\.rs|\.cargo/)'; then
+if touched '^(Cargo\.(toml|lock)|rustfmt\.toml|\.cargo/)'; then
   all_rust=1
 else
   all_rust=0

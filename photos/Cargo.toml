@@ -18,7 +18,7 @@ path = "src/lib.rs"
 name = "icloud-photos"
 path = "src/main.rs"
 
-# The window (GTK 4, libadwaita).
+# The window (GTK 4 with omui's look, theme and widgets).
 [[bin]]
 name = "icloud-photos-app"
 path = "src/app.rs"
@@ -26,7 +26,7 @@ required-features = ["ui"]
 
 [features]
 default = ["ui"]
-ui = ["dep:gtk", "dep:adw", "dep:async-channel"]
+ui = ["dep:gtk", "dep:adw", "dep:omui", "dep:async-channel"]
 
 [dependencies]
 # The shared iCloud sign-in (a D-Bus client for icloud-sessiond).
@@ -35,6 +35,7 @@ icloud-session = { workspace = true, features = ["clap"] }
 icloud-app.workspace = true
 gtk = { workspace = true, optional = true }
 adw = { workspace = true, optional = true }
+omui = { workspace = true, optional = true }
 async-channel = { workspace = true, optional = true }
 clap.workspace = true
 base64.workspace = true

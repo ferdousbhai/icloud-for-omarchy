@@ -1,36 +1,16 @@
 //! Sidebar: All Photos, then the user's albums with counts.
 
-use adw::prelude::*;
+use gtk::prelude::*;
 use icloud_photos::catalog::AlbumRow;
+use omui::icons::name;
 
 pub struct Albums {
     pub list: gtk::ListBox,
 }
 
-fn row(id: Option<&str>, name: &str, count: i64, icon: &str) -> gtk::ListBoxRow {
-    let b = gtk::Box::builder()
-        .spacing(12)
-        .margin_top(6)
-        .margin_bottom(6)
-        .margin_start(6)
-        .margin_end(6)
-        .build();
-    b.append(&gtk::Image::from_icon_name(icon));
-    b.append(
-        &gtk::Label::builder()
-            .label(name)
-            .xalign(0.0)
-            .hexpand(true)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .build(),
-    );
-    let n = gtk::Label::new(Some(&count.to_string()));
-    n.add_css_class("dim-label");
-    n.add_css_class("numeric");
-    b.append(&n);
-    let r = gtk::ListBoxRow::builder().child(&b).build();
-    r.set_widget_name(id.unwrap_or(""));
-    r
+/// All Photos is the row named "", an album the row named by its id.
+fn row(id: Option<&str>, title: &str, count: i64, icon: &str) -> gtk::ListBoxRow {
+    omui::sidebar_row(id.unwrap_or(""), Some(icon), title, Some(&count.to_string()))
 }
 
 impl Albums {
@@ -38,20 +18,17 @@ impl Albums {
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
             .build();
-        list.add_css_class("navigation-sidebar");
         Albums { list }
     }
 
     /// Rebuild, keeping the selection (falls back to All Photos).
     pub fn set(&self, total: i64, albums: &[AlbumRow], selected: Option<&str>) {
-        while let Some(child) = self.list.first_child() {
-            self.list.remove(&child);
-        }
-        let all = row(None, "All Photos", total, "view-grid-symbolic");
+        omui::clear(&self.list);
+        let all = row(None, "All Photos", total, name::GRID);
         self.list.append(&all);
         let mut to_select = all;
         for a in albums {
-            let r = row(Some(&a.id), &a.name, a.count, "folder-pictures-symbolic");
+            let r = row(Some(&a.id), &a.name, a.count, name::IMAGE);
             if selected == Some(a.id.as_str()) {
                 to_select = r.clone();
             }

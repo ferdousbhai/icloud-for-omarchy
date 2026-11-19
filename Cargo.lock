@@ -1005,6 +1005,7 @@ dependencies = [
  "jpeg-encoder",
  "libadwaita",
  "libc",
+ "omui",
  "rusqlite",
  "rustix",
  "serde",
