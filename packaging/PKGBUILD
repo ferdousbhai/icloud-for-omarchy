@@ -127,8 +127,11 @@ package_icloud-notes() {
   _release_bin icloud-notes-sync usr/lib/icloud-notes/icloud-notes-sync
   install -Dm644 notes-sync/README.md "$pkgdir/usr/share/doc/$pkgname/notes-sync.md"
   _install_licenses
+  # The command line and the timer's sync link no toolkit; for the window
+  # (and export-pdf) that binary becomes icloud-notes-app, found beside it.
+  _release_bin icloud-notes usr/bin/icloud-notes
   cd notes
-  install -Dm755 build/icloud-notes "$pkgdir/usr/bin/icloud-notes"
+  install -Dm755 build/icloud-notes "$pkgdir/usr/bin/icloud-notes-app"
   install -Dm644 icloud-notes.desktop "$pkgdir/usr/share/applications/icloud-notes.desktop"
   install -Dm644 icons/icloud-notes.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/icloud-notes.svg"
   # Background sync while the app is closed; it does nothing for a user
