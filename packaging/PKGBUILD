@@ -70,6 +70,18 @@ _install_background_timer() {
   ln -s "../$unit.timer" "$units/timers.target.wants/$unit.timer"
 }
 
+# Fails if the installed binary $1 links library $2. A release build keeps
+# only what its linker keeps of a crate, so the debug binaries the tests
+# check do not prove it for the binary that ships.
+_refuse_link() {
+  local needed
+  needed=$(readelf -d "$pkgdir/$1") || return 1
+  if grep -qF "[$2." <<<"$needed"; then
+    echo "$1 links $2, which its package does not depend on" >&2
+    return 1
+  fi
+}
+
 _package_gtk_app() {
   local app=${pkgname#icloud-} desktop=com.ferdousbhai.$1 binary
   cd "$srcdir/icloud-for-omarchy"
@@ -156,6 +168,7 @@ package_icloud-reminders() {
   license=('MIT' 'ISC')  # ISC: the Lucide icons omui compiles into the window (NOTICE)
   depends=('gtk4' "icloud-session>=$pkgver" 'hicolor-icon-theme')
   _package_gtk_app IcloudReminders
+  _refuse_link usr/bin/icloud-reminders-app libadwaita-1
   # Sync and due-time notifications every minute, window open or not.
   _install_background_timer reminders/data
 }

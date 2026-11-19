@@ -211,12 +211,12 @@ impl Window {
     }
 
     /// Runs one write on a worker thread; shows the cache afterwards (the
-    /// write updated it) and calls `done`, or shows the error and calls
-    /// `failed`, which gives back what the user typed.
+    /// write updated it) and calls `done`, whose message is toasted, or shows
+    /// the error and calls `failed`, which gives back what the user typed.
     fn write<T: Send + 'static>(
         self: &Rc<Self>,
         f: impl FnOnce(&Service) -> icloud_reminders::cloudkit::Result<T> + Send + 'static,
-        done: impl FnOnce(&Rc<Self>, T) + 'static,
+        done: impl FnOnce(&Rc<Self>, T) -> Option<String> + 'static,
         failed: impl FnOnce(&Rc<Self>) + 'static,
     ) {
         let (t, dir) = (self.transport.clone(), self.dir.clone());
@@ -233,12 +233,19 @@ impl Window {
                 let Some(this) = weak.upgrade() else { return };
                 match result {
                     Ok(Ok((out, cache))) => {
-                        match cache {
-                            Ok(cache) => *this.cache.borrow_mut() = cache,
-                            Err(e) => this.toast(&format!("Saved in iCloud; cannot read the local cache: {e}")),
-                        }
+                        let unread = match cache {
+                            Ok(cache) => {
+                                *this.cache.borrow_mut() = cache;
+                                None
+                            }
+                            Err(e) => Some(format!("Saved in iCloud; cannot read the local cache: {e}")),
+                        };
                         this.show_lists();
-                        done(&this, out);
+                        // One toast: a second would replace the first at once.
+                        let msgs: Vec<String> = unread.into_iter().chain(done(&this, out)).collect();
+                        if !msgs.is_empty() {
+                            this.toast(&msgs.join("\n"));
+                        }
                     }
                     Ok(Err(e)) => {
                         if e.is_sign_in() {
@@ -267,13 +274,7 @@ impl Window {
     ) {
         self.write(
             move |svc| svc.update(&r, &changes),
-            move |this, saved| {
-                if let Some(w) = saved.warning {
-                    this.toast(&w);
-                } else if let Some(t) = toast {
-                    this.toast(&t);
-                }
-            },
+            move |_, saved| saved.warning.or(toast),
             failed,
         );
     }
@@ -304,13 +305,11 @@ impl Window {
             move |svc| svc.add(&list, &title, "", due.as_ref()),
             move |this, saved| {
                 this.adding.set(false);
-                if let Some(w) = saved.warning {
-                    this.toast(&w);
-                }
                 if this.new_title.text() == sent_title && this.new_due.text() == sent_due {
                     this.new_title.set_text("");
                     this.new_due.set_text("");
                 }
+                saved.warning
             },
             |this| this.adding.set(false),
         );

@@ -210,7 +210,7 @@ JSON shapes are in the [command-line reference](https://github.com/ferdousbhai/i
 
 ## Building from source
 
-Needs `rust`, `cargo` and `gtk4`. From the repository root:
+Needs `rust`, `cargo`, `gtk4` and, to build only (the app does not link it), `libadwaita`. From the repository root:
 
 ```bash
 bin/build icloud-reminders
