@@ -42,6 +42,11 @@ impl DeviceMap {
         widget.set_map_source(source.as_ref());
         let viewport = widget.viewport().expect("a SimpleMap always has a viewport");
         viewport.set_min_zoom_level(2);
+        // In a narrow map the attribution wraps under the scale, which would hide part of it; the attribution is
+        // the tiles' licence term, the scale only a help, so the scale gives way.
+        if let Some(scale) = widget.scale() {
+            omui::on_narrow(&widget, 640, move |narrow| scale.set_visible(!narrow));
+        }
 
         let trail = shumate::PathLayer::new(&viewport);
         trail.set_stroke_color(Some(&gtk::gdk::RGBA::new(0.21, 0.52, 0.89, 0.85)));
