@@ -31,12 +31,13 @@ use crate::lists::{self, Handlers, Item, Lists};
 use crate::settings::Settings;
 
 /// The folder list's and the note list's widths beside the editor at
-/// first, and the least each is dragged to.
+/// first, and the least each is dragged to: the split's divider sets the two
+/// together, the handle between them the folder list's.
 pub const FOLDER_PANE: i32 = 210;
 const FOLDER_LEAST: i32 = 150;
 pub const NOTE_PANE: i32 = 290;
 const NOTE_LEAST: i32 = 200;
-/// The tree's width at first, and the least and the most it is dragged to.
+/// The tree's width at first, and the least and the most the divider drags it to.
 pub const TREE_PANE: i32 = 260;
 const TREE_LEAST: i32 = 200;
 const TREE_MOST: i32 = 500;
@@ -99,10 +100,11 @@ pub struct Ui {
     /// The sidebar: the two lists ("panes"), or the tree ("tree").
     pub sidebar: gtk::Stack,
     pub sidebar_button: gtk::Button,
-    /// The folder list, the note list and the tree: their widths are dragged
-    /// (the handles on their right edges) and kept.
-    panes: [gtk::Box; 3],
-    tree_grip: gtk::Widget,
+    /// The folder list, whose width the handle on its right edge drags.
+    folder_pane: gtk::Box,
+    /// The sidebar's width with the two lists and with the tree (the
+    /// divider's), kept for the layout not on screen and the next start.
+    sidebar_widths: Cell<[i32; 2]>,
     /// Shown only where there is room for them; their shortcuts stay.
     pub roomy: Vec<gtk::Widget>,
     pub narrow: Cell<bool>,
@@ -251,20 +253,19 @@ impl Window {
             let search_boxes = [search_box(), search_box()];
 
             // ---- the panes
+            let lists_width = saved.folder_pane + saved.note_pane;
             let folder_pane = pane(
                 "sidebar",
-                saved.folder_pane.clamp(FOLDER_LEAST, LISTS_MOST - NOTE_LEAST),
+                saved
+                    .folder_pane
+                    .clamp(FOLDER_LEAST, lists_width.min(LISTS_MOST) - NOTE_LEAST),
             );
             let caption = omui::label("ICLOUD", "dim-label");
             caption.add_css_class("pane-caption");
             folder_pane.append(&caption);
             folder_pane.append(&lists.folder_pane);
-            let note_pane = pane(
-                "note-pane",
-                saved
-                    .note_pane
-                    .clamp(NOTE_LEAST, LISTS_MOST - folder_pane.width_request()),
-            );
+            let note_pane = pane("note-pane", NOTE_LEAST);
+            note_pane.set_hexpand(true);
             let folder_title = gtk::Label::builder()
                 .xalign(0.0)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -279,19 +280,13 @@ impl Window {
             note_pane.append(&list_summary);
             note_pane.append(&lists.note_pane);
             let panes = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            // The note list keeps its least beside it.
             let w = weak.clone();
-            let (resizable_folders, _) = resizable(&folder_pane, FOLDER_LEAST, move || {
-                w.upgrade()
-                    .map_or(FOLDER_LEAST, |ui| LISTS_MOST - ui.panes[1].width_request())
-            });
-            panes.append(&resizable_folders);
-            let w = weak.clone();
-            let (resizable_notes, _) = resizable(&note_pane, NOTE_LEAST, move || {
-                w.upgrade()
-                    .map_or(NOTE_LEAST, |ui| LISTS_MOST - ui.panes[0].width_request())
-            });
-            panes.append(&resizable_notes);
-            let tree_pane = pane("sidebar", saved.tree_pane.clamp(TREE_LEAST, TREE_MOST));
+            panes.append(&resizable(&folder_pane, FOLDER_LEAST, move || {
+                w.upgrade().map_or(FOLDER_LEAST, |ui| ui.sidebar.width() - NOTE_LEAST)
+            }));
+            panes.append(&note_pane);
+            let tree_pane = pane("sidebar", TREE_LEAST);
             tree_pane.append(&search_boxes[1]);
             let tree_summary = gtk::Label::builder()
                 .xalign(0.0)
@@ -300,16 +295,9 @@ impl Window {
                 .build();
             tree_pane.append(&tree_summary);
             tree_pane.append(&lists.tree_pane);
-            // Dragged no wider than leaves the editor its least beside it.
-            let w = weak.clone();
-            let (resizable_tree, tree_grip) = resizable(&tree_pane, TREE_LEAST, move || {
-                w.upgrade().map_or(TREE_LEAST, |ui| {
-                    TREE_MOST.min(ui.split.widget.width() - EDITOR_LEAST - 1)
-                })
-            });
             let sidebar = gtk::Stack::builder().hhomogeneous(false).build();
             sidebar.add_named(&panes, Some("panes"));
-            sidebar.add_named(&resizable_tree, Some("tree"));
+            sidebar.add_named(&tree_pane, Some("tree"));
 
             let editor = Editor::new();
             editor.widget.set_width_request(EDITOR_LEAST);
@@ -321,11 +309,10 @@ impl Window {
                 .insert_child_after(&conflicts.unreadable, Some(&strip.widget));
             editor.page.append(&conflicts.picker);
 
-            // The sidebar's width is the most of the split's limits and what
-            // the sidebar itself needs: the two lists' widths, or the tree's.
-            // (omui's Split has no divider to drag: the panes' own handles
-            // set those widths.)
-            let split = omui::Split::new(&sidebar, &editor.widget, (TREE_LEAST, TREE_LEAST), Some(ONE_PANE_BELOW));
+            // The divider drags the sidebar within each layout's limits
+            // (set_narrow), and no wider than leaves the editor its least.
+            let split = omui::Split::new(&sidebar, &editor.widget, (TREE_LEAST, TREE_MOST), Some(ONE_PANE_BELOW));
+            split.set_resizable(true);
             split.widget.set_vexpand(true);
 
             // ---- the status line
@@ -369,8 +356,8 @@ impl Window {
                 split,
                 sidebar,
                 sidebar_button: sidebar_button.clone(),
-                panes: [folder_pane, note_pane, tree_pane],
-                tree_grip,
+                folder_pane,
+                sidebar_widths: Cell::new([lists_width, saved.tree_pane]),
                 roomy: vec![bold.upcast(), italic.upcast(), link.upcast()],
                 narrow: Cell::new(false),
                 laid_out: Cell::new(false),
@@ -576,8 +563,8 @@ fn handlers(weak: &Weak<Ui>) -> Handlers {
 }
 
 /// `pane` with a handle on its right edge that drags its width, from
-/// `least` to what `most` says then; and that handle.
-fn resizable(pane: &gtk::Box, least: i32, most: impl Fn() -> i32 + 'static) -> (gtk::Overlay, gtk::Widget) {
+/// `least` to what `most` says then.
+fn resizable(pane: &gtk::Box, least: i32, most: impl Fn() -> i32 + 'static) -> gtk::Overlay {
     let overlay = gtk::Overlay::builder().child(pane).build();
     let grip = gtk::Box::builder()
         .halign(gtk::Align::End)
@@ -600,7 +587,7 @@ fn resizable(pane: &gtk::Box, least: i32, most: impl Fn() -> i32 + 'static) -> (
     });
     grip.add_controller(drag);
     overlay.add_overlay(&grip);
-    (overlay, grip.upcast())
+    overlay
 }
 
 /// A pane of the sidebar: a column `width` wide at the least, with `class`.
@@ -669,9 +656,20 @@ impl Ui {
     /// sidebar away. Either way the sidebar comes back.
     fn set_narrow(&self, narrow: bool) {
         let first = !self.laid_out.replace(true);
+        let mut widths = self.sidebar_widths.get();
+        if !first {
+            widths[usize::from(self.narrow.get())] = self.split.sidebar_width();
+            self.sidebar_widths.set(widths);
+        }
         self.narrow.set(narrow);
         self.sidebar
             .set_visible_child_name(if narrow { "tree" } else { "panes" });
+        self.split.set_sidebar_limits(if narrow {
+            (TREE_LEAST, TREE_MOST)
+        } else {
+            (FOLDER_LEAST + NOTE_LEAST, LISTS_MOST)
+        });
+        self.split.set_sidebar_width(widths[usize::from(narrow)]);
         self.sidebar_button.set_visible(narrow);
         self.split.set_show_sidebar(true);
         self.split.set_show_content(false);
@@ -713,11 +711,10 @@ impl Ui {
             .update_property(&[gtk::accessible::Property::Label(tip)]);
         omui::set_class(&self.sidebar_button, "active", shown);
         // One pane at a time, the formatting buttons keep only their
-        // shortcuts, and the tree fills the window: no width to drag.
+        // shortcuts.
         for widget in &self.roomy {
             widget.set_visible(!self.split.is_collapsed());
         }
-        self.tree_grip.set_visible(!self.split.is_collapsed());
     }
 
     /// Unfolds what it takes for the open note (or, with none, the selected
@@ -928,12 +925,17 @@ impl Ui {
     /// What the window keeps for its next start.
     fn settings(&self) -> Settings {
         let (width, height) = self.window.default_size();
+        let mut widths = self.sidebar_widths.get();
+        if self.laid_out.get() {
+            widths[usize::from(self.narrow.get())] = self.split.sidebar_width();
+        }
+        let folder_pane = self.folder_pane.width_request();
         Settings {
             width,
             height,
-            folder_pane: self.panes[0].width_request(),
-            note_pane: self.panes[1].width_request(),
-            tree_pane: self.panes[2].width_request(),
+            folder_pane,
+            note_pane: widths[0] - folder_pane,
+            tree_pane: widths[1],
             zoom: self.zoom.get(),
             expanded: self.expanded.borrow().clone(),
         }
