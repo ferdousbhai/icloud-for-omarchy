@@ -139,6 +139,7 @@ impl DeviceRow {
         row.widget.set_activatable(true);
         let icon = gtk::Image::new();
         icon.set_pixel_size(24);
+        icon.add_css_class("device");
         row.add_prefix(&icon);
         let lost = gtk::Image::from_icon_name(name::WARNING);
         lost.set_tooltip_text(Some("Lost Mode is on"));

@@ -666,6 +666,7 @@ fn build(app: &gtk::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banne
     let actions_button = gtk::MenuButton::builder()
         .icon_name(name::MORE)
         .tooltip_text("Device Actions")
+        .has_frame(false)
         .menu_model(&actions)
         .build();
     header.pack_end(&actions_button);
@@ -742,9 +743,12 @@ fn build(app: &gtk::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banne
 }
 
 /// Over omui's stylesheet: the map's device badges (a round badge with the
-/// model icon, the selected one in the accent colour), and the battery and
-/// Lost Mode icons of a device's row in their state's colour, which omui's
-/// rows draw dim.
+/// model icon, the selected one in the accent colour); a device's row icon in
+/// the accent colour unless it is offline, and its battery and Lost Mode icons
+/// in their state's colour, which omui's rows all draw dim; and the map's scale
+/// and attribution, whose own stylesheet backs them with Adwaita's
+/// @theme_bg_color, which omui's theme does not define, leaving them bare and
+/// unreadable on the tiles (the attribution is the tiles' licence term).
 pub const CSS: &str = "\
 .device-marker {
   padding: 7px;
@@ -757,4 +761,14 @@ pub const CSS: &str = "\
 .device-marker.stale { opacity: 0.6; }
 row.om-row .row-side > image.error { color: @om_danger; }
 row.om-row .row-side > image.warning { color: @om_warning; }
+row.om-row .row-side > image.device { color: @om_accent; }
+row.om-row .row-side > image.device.dim-label { color: @om_dim_text; }
+map-scale label, map-license label {
+  background-color: alpha(@om_bg, 0.8);
+  color: @om_text;
+  padding: 3px;
+}
+map-scale label { border: 2px solid alpha(@om_text, 0.6); border-top: none; }
+map-license label { font-size: x-small; border-radius: 3px; }
+map-scale, map-license { margin: 6px; }
 ";
