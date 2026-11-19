@@ -1,0 +1,27 @@
+Usage: icloud-notes move NOTE FOLDER [--push]
+
+Move a note to another existing folder ("" is the vault root); the next push moves it in
+Notes, and takes the note's attachment files along. Refused for read-only notes.
+JSON: {action, path, from, sync?}
+
+NOTE: a path in the vault (.md optional), an apple-note-id, or a title only one note has.
+Output: text on a terminal; when piped (or with --json) the JSON envelope
+{"ok":true,"data","summary","meta"?} ("JSON:" above describes data); --quiet prints
+only data; --styled forces text; --ids-only prints one id per line (the note paths of list,
+search and read, the folder paths of folders, the path a change touched); --count the
+number of results. They combine: ids-only > count > quiet > json > styled. A failure is
+{"ok":false,"error":{"code","message","hint"?}} on stdout in those machine modes,
+`error:`/`hint:` lines on stderr in text mode. Key order is not part of the contract.
+Global options: --vault DIR (a vault other than ~/Documents/Notes), --wait SECS (how long to
+wait for the vault's lock; 30 when a background sync holds it, none while the Notes window
+holds it). Nothing asks without a terminal: delete, delete-folder, restore, detach and a write
+that empties a note or drops an attachment's link need --yes, and so does a push or sync that
+would delete most of the vault.
+Exit codes: 0 ok, 1 error, 2 usage or invalid request, 3 not signed in (sign_in_required,
+session_rejected: icloud-session sign-in) or not set up (not_cloned, account_mismatch, ...),
+4 not found, 5 unavailable (offline, network, session_service: icloud-sessiond unreachable,
+sync_tool_missing, iCloud trouble). push --dry-run and diff report their changes in the result
+and exit 0. A failed sync, pull, push or clone (or the sync of a change's --push) still prints
+its result, with the failure in it as error: {code, message, hint?} (the sync engine's own
+error and exit when it gave one; sync_failed, exit 1, when it did not), and exits with the
+failure's code. --version prints `icloud-notes VERSION` in every mode.

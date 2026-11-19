@@ -1,0 +1,34 @@
+Usage: icloud-notes sync [--yes]
+
+What the window does on its own: push what changed here, then pull what changed in iCloud,
+in one icloud-notes-sync run with the vault's lock held. A refused sign-in is reported to
+icloud-session, which checks it with Apple (one retry if it still works). No network is the
+error offline (or network), exit 5. A sync that ran but failed still prints its result, with
+error in it, and exits with the failure's code. When more than 3 tracked notes, and most of
+them, have no file any more (or an empty one), the push is refused (too_many_deletions, exit
+2: files gone by accident look like this) and the pull still runs; --yes pushes anyway, which
+moves those notes to Recently Deleted in iCloud.
+JSON: {ok, runs: [{command, ok, exit_code, result}], log, error?} (result: icloud-notes-sync's
+data for that half, or {error: {code, message, ...}} when it failed; error: why it failed)
+
+NOTE: a path in the vault (.md optional), an apple-note-id, or a title only one note has.
+Output: text on a terminal; when piped (or with --json) the JSON envelope
+{"ok":true,"data","summary","meta"?} ("JSON:" above describes data); --quiet prints
+only data; --styled forces text; --ids-only prints one id per line (the note paths of list,
+search and read, the folder paths of folders, the path a change touched); --count the
+number of results. They combine: ids-only > count > quiet > json > styled. A failure is
+{"ok":false,"error":{"code","message","hint"?}} on stdout in those machine modes,
+`error:`/`hint:` lines on stderr in text mode. Key order is not part of the contract.
+Global options: --vault DIR (a vault other than ~/Documents/Notes), --wait SECS (how long to
+wait for the vault's lock; 30 when a background sync holds it, none while the Notes window
+holds it). Nothing asks without a terminal: delete, delete-folder, restore, detach and a write
+that empties a note or drops an attachment's link need --yes, and so does a push or sync that
+would delete most of the vault.
+Exit codes: 0 ok, 1 error, 2 usage or invalid request, 3 not signed in (sign_in_required,
+session_rejected: icloud-session sign-in) or not set up (not_cloned, account_mismatch, ...),
+4 not found, 5 unavailable (offline, network, session_service: icloud-sessiond unreachable,
+sync_tool_missing, iCloud trouble). push --dry-run and diff report their changes in the result
+and exit 0. A failed sync, pull, push or clone (or the sync of a change's --push) still prints
+its result, with the failure in it as error: {code, message, hint?} (the sync engine's own
+error and exit when it gave one; sync_failed, exit 1, when it did not), and exits with the
+failure's code. --version prints `icloud-notes VERSION` in every mode.

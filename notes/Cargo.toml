@@ -1,0 +1,21 @@
+[package]
+name = "icloud-notes"
+version.workspace = true
+edition.workspace = true
+description = "iCloud Notes on Omarchy: the black-box suite any icloud-notes binary must pass"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# No Rust target yet: the app is the Qt one beside this file (icloud-notes.pro).
+# tests/blackbox/ drives whichever icloud-notes binary ICLOUD_NOTES_BIN names,
+# so the same suite holds the Qt binary today and its Rust port after it.
+[[test]]
+name = "blackbox"
+path = "tests/blackbox/main.rs"
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+# The suite's stand-in for icloud-sessiond on its private bus.
+zbus.workspace = true

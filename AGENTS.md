@@ -23,7 +23,13 @@ Cargo workspace (`Cargo.toml`) plus one Qt app:
   golden corpora live in `tests/`; regenerate with `ICLOUD_NOTES_SYNC_REGEN=1 cargo test -p
   icloud-notes-sync`. Ships inside the icloud-notes package, not on its own.
 - `notes/` — `icloud-notes`, the Qt6/QML app and CLI (C++ in `src/`, QML in `qml/`,
-  `notes/bin/build`, `notes/bin/test`).
+  `notes/bin/build`, `notes/bin/test`). Its cargo crate has no Rust target yet, only
+  `tests/blackbox/`: the command line driven as a separate process, whichever binary
+  `ICLOUD_NOTES_BIN` names (`notes/bin/test` builds the Qt one and runs it; without the variable
+  the tests run nothing), so a port must pass the same suite. `tests/fixtures/syncmodel.json`
+  pins what no command reaches (the merge of unsaved edits, the sidebar tree) as calls and the
+  C++'s answers, which `notes/bin/test` holds to the code (`tests/syncmodel_fixtures.cpp`; run
+  with `--write`, it refills the results from the C++).
 - `app/` — `icloud-app`, what the GTK apps share (Photos, Find My, Reminders, and Cloud Contacts by git), with no GTK in it: the command lines'
   helpers on top of `icloud_session::output` (`cli.rs`: confirm, the "or Sign In in the app" hint,
   `session_failure`, warnings, name folding, the launcher that turns `icloud-<app>` with no command

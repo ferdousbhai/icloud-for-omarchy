@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build and run the Qt app's tests (console asserts, no framework). The
-# installer and Rust suites run from the root bin/check.
+# Build and run the Qt app's tests (console asserts, no framework), then the
+# black-box suite (tests/blackbox/, a cargo test) on the app built from this
+# checkout. The installer and Rust suites run from the root bin/check.
 set -euo pipefail
 cd "$(dirname "$0")/../tests"
 # Everything runs on a private D-Bus session bus, so the tests' fake
@@ -16,10 +17,17 @@ export ICLOUD_NOTES_SYNC_REAL="${CARGO_TARGET_DIR:-$PWD/../../target}/debug/iclo
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
 export NO_AT_BRIDGE=1 # the private bus has no accessibility bus to find
 # sequence_test is random exploration: only with ICLOUD_DEEP=1 (bin/check --deep).
-tests=(guardrails_test backend_test layout_test cli_test)
+# syncmodel_fixtures holds tests/fixtures/syncmodel.json to what the C++ answers.
+tests=(guardrails_test syncmodel_fixtures backend_test layout_test cli_test)
 [[ ${ICLOUD_DEEP:-} == 1 ]] && tests+=(sequence_test)
 for t in "${tests[@]}"; do
   mkdir -p "build-$t"
   (cd "build-$t" && qmake6 "../$t.pro" && make -j"$(nproc)" && "./$t")
 done
-
+# The command line as a separate process: the app, built here in a directory
+# of its own (bin/build's is the one a package installs, with its version),
+# named to the suite by ICLOUD_NOTES_BIN.
+mkdir -p build-app
+(cd build-app && qmake6 ../../icloud-notes.pro && make -j"$(nproc)")
+ICLOUD_NOTES_BIN="$PWD/build-app/icloud-notes" \
+  cargo test --locked -p icloud-notes --test blackbox --manifest-path "$PWD/../../Cargo.toml"
