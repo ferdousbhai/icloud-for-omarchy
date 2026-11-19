@@ -1,6 +1,7 @@
 //! Sidebar: All Photos, then the user's albums with counts.
 
 use gtk::prelude::*;
+use gtk::{gdk, glib};
 use icloud_photos::catalog::AlbumRow;
 use omui::icons::name;
 
@@ -18,6 +19,39 @@ impl Albums {
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
             .build();
+        // One Tab stop, with the arrow keys between albums. A list box walks
+        // Tab from row to row and selects each, so Tab on the way to the grid
+        // or the search entry would load every album it passed.
+        let tab = gtk::EventControllerKey::new();
+        tab.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = list.downgrade();
+        tab.connect_key_pressed(move |_, key, _, modifiers| {
+            let shift = modifiers.contains(gdk::ModifierType::SHIFT_MASK);
+            let direction = match key {
+                _ if modifiers.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK) => None,
+                gdk::Key::ISO_Left_Tab => Some(gtk::DirectionType::TabBackward),
+                gdk::Key::Tab | gdk::Key::KP_Tab if shift => Some(gtk::DirectionType::TabBackward),
+                gdk::Key::Tab | gdk::Key::KP_Tab => Some(gtk::DirectionType::TabForward),
+                _ => None,
+            };
+            let list = weak.upgrade();
+            let (Some(direction), Some(list)) = (direction, list) else {
+                return glib::Propagation::Proceed;
+            };
+            let Some(root) = list.root() else {
+                return glib::Propagation::Proceed;
+            };
+            // Unfocusable for the move, the list is passed over as a whole.
+            list.set_can_focus(false);
+            if !root.child_focus(direction) {
+                // Off either end: round to the other, as the window's own Tab does.
+                root.set_focus(gtk::Widget::NONE);
+                root.child_focus(direction);
+            }
+            list.set_can_focus(true);
+            glib::Propagation::Stop
+        });
+        list.add_controller(tab);
         Albums { list }
     }
 
