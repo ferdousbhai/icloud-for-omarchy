@@ -254,12 +254,9 @@ impl Window {
 
             // ---- the panes
             let lists_width = saved.folder_pane + saved.note_pane;
-            let folder_pane = pane(
-                "sidebar",
-                saved
-                    .folder_pane
-                    .clamp(FOLDER_LEAST, lists_width.min(LISTS_MOST) - NOTE_LEAST),
-            );
+            // window.json may hold lists narrower than both panes' least; the least folder pane then wins.
+            let folder_most = (lists_width.min(LISTS_MOST) - NOTE_LEAST).max(FOLDER_LEAST);
+            let folder_pane = pane("sidebar", saved.folder_pane.clamp(FOLDER_LEAST, folder_most));
             let caption = omui::label("ICLOUD", "dim-label");
             caption.add_css_class("pane-caption");
             folder_pane.append(&caption);

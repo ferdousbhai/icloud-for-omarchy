@@ -79,6 +79,19 @@ fn without_a_session_bus_a_second_launch_still_ends() {
     assert!(!app.exited(), "the first is still open");
 }
 
+#[test]
+fn panes_saved_narrower_than_their_least_still_open() {
+    let Some(w) = World::seeded() else { return };
+    let config = w.scratch().join("config/icloud-notes");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("window.json"), r#"{"folder_pane":10,"note_pane":10}"#).unwrap();
+    let mut app = w.spawn([""; 0]);
+    assert!(opens_the_window(&w, &mut app));
+    // The panes are laid out after the lock is taken.
+    thread::sleep(Duration::from_secs(1));
+    assert!(!app.exited(), "the window is still open");
+}
+
 /// Polls `done` for up to 20 seconds.
 fn eventually(mut done: impl FnMut() -> bool) -> bool {
     let begun = Instant::now();
