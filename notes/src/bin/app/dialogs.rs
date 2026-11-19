@@ -243,20 +243,26 @@ pub fn delete_missing(ui: &Rc<Ui>) {
 /// cleared) did.
 pub fn sync_log(ui: &Rc<Ui>) {
     let log = ui.backend.borrow().sync_log().to_string();
-    let (scroller, _) = readout(&log);
+    let (scroller, view) = readout(&log);
+    // Clear empties the log and leaves it open: a button of the dialog's
+    // own would close it (omui's responses all close).
+    let clear = gtk::Button::builder().label("Clear").halign(gtk::Align::Start).build();
+    let weak = Rc::downgrade(ui);
+    clear.connect_clicked(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            ui.backend.borrow_mut().clear_log();
+            view.buffer().set_text("");
+        }
+    });
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.append(&scroller);
+    content.append(&clear);
     let dialog = omui::Dialog::new(Some("Sync log"), None);
-    dialog.set_extra_child(Some(scroller.upcast_ref()));
+    dialog.set_extra_child(Some(content.upcast_ref()));
     dialog.set_content_size(600, 400);
-    dialog.add_response("clear", "Clear");
     dialog.add_response("close", "Close");
     dialog.set_default_response("close");
     dialog.set_close_response("close");
-    let weak = Rc::downgrade(ui);
-    dialog.connect_response(move |_, id| {
-        if let (Some(ui), "clear") = (weak.upgrade(), id) {
-            ui.backend.borrow_mut().clear_log();
-        }
-    });
     dialog.present(&ui.window);
 }
 

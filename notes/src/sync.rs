@@ -528,6 +528,21 @@ impl Backend {
         self.lock.is_held()
     }
 
+    /// Whether closing the window can still write the save that waits for
+    /// the run: the run is this process's own (it holds the lock), so it can
+    /// be stopped ([`engine::Stopper`]) and the save written in its place.
+    pub fn close_writes_queued_save(&self) -> bool {
+        self.queued_save.is_some() && self.holds_lock()
+    }
+
+    /// The window closes under its own run, which was stopped: the save that
+    /// waited for it is written, to the vault as the run left it.
+    pub fn write_queued_save_on_close(&mut self) {
+        self.sync.running = false;
+        self.refresh();
+        self.write_queued_save();
+    }
+
     /// The run ended: logs what it wrote and how it exited, reads its
     /// answer, re-reads the vault where the run may have changed it, and
     /// writes a save that waited for it. Returns its finished runs: a sync's

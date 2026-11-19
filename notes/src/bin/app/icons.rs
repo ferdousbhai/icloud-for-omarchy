@@ -1,4 +1,4 @@
-//! The toolbar's icons omui does not bundle: Lucide's (ISC, as omui's are)
+//! The icons omui does not bundle: Lucide's (ISC, as omui's are)
 //! bold, italic, link, paperclip, folder-plus and square-pen. omui's own are
 //! outlined into fills so GTK recolours them; these stay strokes, so each is
 //! drawn here in the theme's text colour, and again when the theme changes.
@@ -17,16 +17,21 @@ const DRAWN: i32 = 32;
 
 /// A header button with the icon `geometry` (one of the above), as omui's `icon_button` makes one.
 pub fn button(geometry: &'static str, tooltip: &str) -> gtk::Button {
-    let image = gtk::Image::builder()
-        .pixel_size(16)
-        .accessible_role(gtk::AccessibleRole::Presentation)
-        .build();
     let button = gtk::Button::builder()
-        .child(&image)
+        .child(&image(geometry))
         .css_classes(["header-action"])
         .build();
     button.set_tooltip_text(Some(tooltip));
     button.update_property(&[gtk::accessible::Property::Label(tooltip)]);
+    button
+}
+
+/// The icon `geometry` at 16 pixels, as omui's `icon` makes one.
+pub fn image(geometry: &'static str) -> gtk::Image {
+    let image = gtk::Image::builder()
+        .pixel_size(16)
+        .accessible_role(gtk::AccessibleRole::Presentation)
+        .build();
     if let Some(theme) = omui::Theme::get() {
         paint(&image, geometry, &theme.tokens().text);
         let weak = image.downgrade();
@@ -36,7 +41,7 @@ pub fn button(geometry: &'static str, tooltip: &str) -> gtk::Button {
             }
         });
     }
-    button
+    image
 }
 
 fn paint(image: &gtk::Image, geometry: &str, colour: &str) {

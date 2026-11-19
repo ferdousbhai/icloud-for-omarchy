@@ -31,8 +31,8 @@ impl Strip {
             .margin_top(14)
             .visible(false)
             .build();
-        let icon = omui::icon(name::FILE);
-        icon.add_css_class("dim-label");
+        let icon = crate::icons::image(crate::icons::ATTACH);
+        icon.set_opacity(0.6);
         widget.append(&icon);
         let items = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         let scroller = gtk::ScrolledWindow::builder()

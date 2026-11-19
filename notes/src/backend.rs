@@ -39,6 +39,8 @@ const HEAD_LIMIT: usize = 64 * 1024;
 const SEARCH_LIMIT: usize = 1024 * 1024;
 /// The most notes a search answers with.
 const SEARCH_HITS: usize = 100;
+/// The most notes the window's search reads: it searches on every key.
+pub const WINDOW_SEARCH_NOTES: usize = 2000;
 /// The most the sync engine uploads as one attachment (notes-sync
 /// MAX_NEW_ATTACHMENT_BYTES).
 const MAX_ATTACHMENT_BYTES: u64 = 100 * 1024 * 1024;
@@ -147,6 +149,25 @@ pub struct SearchHit {
     pub file: String,
     pub title: String,
     pub snippet: String,
+}
+
+/// The window's search ([`Backend::search_window`]).
+#[derive(Debug, Default)]
+pub struct WindowSearch {
+    pub hits: Vec<SearchHit>,
+    /// There were more notes than it reads.
+    pub truncated: bool,
+    /// The notes it read, when asked for them: what Recall ranks by meaning.
+    pub read: Vec<ReadNote>,
+}
+
+/// A note the window's search read: its vault-relative path, the start of
+/// its text, and its row as a search shows it.
+#[derive(Debug, Clone)]
+pub struct ReadNote {
+    pub path: String,
+    pub text: String,
+    pub hit: SearchHit,
 }
 
 /// A file copied into a note's attachments/ directory.
@@ -1558,22 +1579,57 @@ impl Backend {
     /// The notes whose text or title holds `query`, ignoring case: at most
     /// 100, each with the line that matched.
     pub fn search_vault(&mut self, query: &str) -> Vec<SearchHit> {
+        self.search(query.trim(), None, false).hits
+    }
+
+    /// The window's search, which runs on every key: the text matches of
+    /// [`Backend::search_vault`] among the first [`WINDOW_SEARCH_NOTES`]
+    /// notes only, and, with `read_all` (Recall will rank them), every one of
+    /// those notes as read. A query starting with `~` asks for meaning alone:
+    /// its text matches are those of the rest.
+    pub fn search_window(&mut self, query: &str, read_all: bool) -> WindowSearch {
         let query = query.trim();
-        let mut hits = Vec::new();
+        let query = query.strip_prefix('~').map_or(query, str::trim);
+        self.search(query, Some(WINDOW_SEARCH_NOTES), read_all)
+    }
+
+    fn search(&mut self, query: &str, most_notes: Option<usize>, read_all: bool) -> WindowSearch {
+        let mut found = WindowSearch::default();
         if utf16_len(query) < 2 {
-            return hits;
+            return found;
         }
         let needle = folded(query);
         let mode = self.vault_title_mode();
+        let mut scanned = 0;
         for_each_note_file(self.vault.path(), &mut |relative, path| {
-            if hits.len() >= SEARCH_HITS {
+            if found.hits.len() >= SEARCH_HITS && !read_all {
                 return false;
             }
+            if most_notes == Some(scanned) {
+                found.truncated = true;
+                return false;
+            }
+            scanned += 1;
             let text = read_text(path, Some(SEARCH_LIMIT));
             let (folder, file) = split_path(relative);
             let stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
             let preview = syncmodel::preview_note(&text, stem, &mode);
-            if !folded_contains(&folded(&text), &needle) && !folded_contains(&folded(&preview.title), &needle) {
+            let hit = SearchHit {
+                folder: folder.to_string(),
+                file: file.to_string(),
+                title: preview.title.clone(),
+                snippet: preview.snippet.clone(),
+            };
+            if read_all {
+                found.read.push(ReadNote {
+                    path: relative.to_string(),
+                    text: left_utf16(&text, 4000),
+                    hit: hit.clone(),
+                });
+            }
+            if found.hits.len() >= SEARCH_HITS
+                || !folded_contains(&folded(&text), &needle) && !folded_contains(&folded(&preview.title), &needle)
+            {
                 return true;
             }
             let snippet = text
@@ -1581,15 +1637,13 @@ impl Backend {
                 .filter(|line| folded_contains(&folded(line), &needle))
                 .map(|line| left_utf16(&syncmodel::strip_markdown_lead(line), 120))
                 .find(|snippet| !snippet.is_empty());
-            hits.push(SearchHit {
-                folder: folder.to_string(),
-                file: file.to_string(),
-                title: preview.title,
+            found.hits.push(SearchHit {
                 snippet: snippet.unwrap_or(preview.snippet),
+                ..hit
             });
             true
         });
-        hits
+        found
     }
 
     // ---- the PDF -------------------------------------------------------------------

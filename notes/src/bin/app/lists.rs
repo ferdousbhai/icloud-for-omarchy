@@ -1,7 +1,8 @@
 //! The sidebar's lists: the folder list and the note list of a wide window,
-//! and the tree of folders and notes of a narrow one. Each is rebuilt from
-//! the backend when the vault or the selection changes; the window says what
-//! a row does when it is chosen.
+//! and the tree of folders and notes of a narrow one. Each is filled from the
+//! backend when the vault or the selection changes, and rebuilt only when
+//! what its rows show changed; the window says what a row does when it is
+//! chosen.
 
 use std::rc::Rc;
 
@@ -176,6 +177,46 @@ fn while_updating(list: &gtk::ListBox, f: impl FnOnce()) {
     unsafe { list.set_data("updating", false) };
 }
 
+/// Fills `list` by `fill`, unless its rows show `shown` already (a
+/// description of everything on them): then only the selection may have
+/// changed, and the rows stay as they are. A list that is rebuilt keeps its
+/// scroll, and the keyboard on the row of the same item.
+fn refill(list: &gtk::ListBox, shown: String, fill: impl FnOnce()) {
+    // SAFETY: only a String is stored under this key.
+    if unsafe { list.data::<String>("shown") }.is_some_and(|was| *unsafe { was.as_ref() } == shown) {
+        return;
+    }
+    let scroller = list
+        .ancestor(gtk::ScrolledWindow::static_type())
+        .and_downcast::<gtk::ScrolledWindow>();
+    let scrolled = scroller.as_ref().map(|s| s.vadjustment().value());
+    let focused = list
+        .root()
+        .and_then(|root| root.focus())
+        .and_then(|focus| focus.ancestor(gtk::ListBoxRow::static_type()))
+        .and_downcast::<gtk::ListBoxRow>()
+        .filter(|row| row.parent().as_ref() == Some(list.upcast_ref()))
+        .and_then(|row| item_of(&row));
+    while_updating(list, || {
+        omui::clear(list);
+        fill();
+    });
+    unsafe { list.set_data("shown", shown) };
+    if let (Some(scroller), Some(value)) = (scroller, scrolled) {
+        scroller.vadjustment().set_value(value);
+    }
+    if let Some(item) = focused {
+        let mut i = 0;
+        while let Some(row) = list.row_at_index(i) {
+            if item_of(&row).as_ref() == Some(&item) {
+                row.grab_focus();
+                break;
+            }
+            i += 1;
+        }
+    }
+}
+
 /// Selects the row standing for `item`, or none, without choosing it. A
 /// list that selects nothing (the tree) marks it as the current row.
 pub fn select(list: &gtk::ListBox, item: Option<&Item>) {
@@ -240,8 +281,8 @@ fn drop_on_folder(row: &gtk::ListBoxRow, folder: &str, handlers: &Rc<Handlers>) 
 /// Fills the folder list: All Notes, then every folder, indented by depth,
 /// with its note count.
 pub fn fill_folders(list: &gtk::ListBox, b: &Backend, handlers: &Rc<Handlers>) {
-    while_updating(list, || {
-        omui::clear(list);
+    let shown = format!("{:?}{:?}", b.folders(), b.folder_note_counts());
+    refill(list, shown, || {
         for folder in b.folders() {
             let count = b.folder_note_counts().get(folder).copied().unwrap_or(0);
             let icon = if folder.is_empty() {
@@ -334,63 +375,76 @@ pub fn fill_notes(
     hits: Option<&[Hit]>,
     extra: &dyn Fn(&str) -> Vec<(&'static str, &'static str)>,
 ) {
-    while_updating(list, || {
-        omui::clear(list);
-        let folder = b.current_folder();
-        match hits {
-            None => {
-                for file in b.notes() {
-                    let details = b.note_details(file);
-                    let title = if details.title.is_empty() {
-                        note_label(file)
-                    } else {
-                        &details.title
-                    };
-                    let date = if details.modified_ms > 0 {
-                        short_date(details.modified_ms)
-                    } else {
-                        String::new()
-                    };
-                    let mut pills = badges(b.note_flags(file));
-                    pills.extend(extra(file));
-                    let row = note_row(title, &date, &details.snippet, &pills);
-                    let item = Item::Note {
-                        folder: folder.to_string(),
-                        file: file.clone(),
-                    };
-                    drag_note(&row, &item, title);
-                    set_item(&row, item);
-                    list.append(&row);
-                }
+    let folder = b.current_folder();
+    let shown = match hits {
+        None => b
+            .notes()
+            .iter()
+            .map(|file| {
+                format!(
+                    "{file}{:?}{:?}{:?}",
+                    b.note_details(file),
+                    b.note_flags(file),
+                    extra(file)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Some(hits) => format!("{hits:?}"),
+    };
+    refill(list, format!("{folder}\n{shown}"), || match hits {
+        None => {
+            for file in b.notes() {
+                let details = b.note_details(file);
+                let title = if details.title.is_empty() {
+                    note_label(file)
+                } else {
+                    &details.title
+                };
+                let date = if details.modified_ms > 0 {
+                    short_date(details.modified_ms)
+                } else {
+                    String::new()
+                };
+                let mut pills = badges(b.note_flags(file));
+                pills.extend(extra(file));
+                let row = note_row(title, &date, &details.snippet, &pills);
+                let item = Item::Note {
+                    folder: folder.to_string(),
+                    file: file.clone(),
+                };
+                drag_note(&row, &item, title);
+                set_item(&row, item);
+                list.append(&row);
             }
-            Some(hits) => {
-                let mut related_shown = false;
-                for hit in hits {
-                    if hit.related && !related_shown {
-                        related_shown = true;
-                        let header = omui::label("Related by meaning", "heading");
-                        header.add_css_class("related-header");
-                        let row = gtk::ListBoxRow::builder()
-                            .child(&header)
-                            .selectable(false)
-                            .activatable(false)
-                            .build();
-                        list.append(&row);
-                    }
-                    let place = if hit.folder.is_empty() {
-                        "All Notes"
-                    } else {
-                        &hit.folder
-                    };
-                    let row = note_row(&hit.title, place, &hit.snippet, &[]);
-                    let item = Item::Note {
-                        folder: hit.folder.clone(),
-                        file: hit.file.clone(),
-                    };
-                    drag_note(&row, &item, &hit.title);
-                    set_item(&row, item);
+        }
+        Some(hits) => {
+            let mut related_shown = false;
+            for hit in hits {
+                if hit.related && !related_shown {
+                    related_shown = true;
+                    let header = omui::label("Related by meaning", "heading");
+                    header.add_css_class("related-header");
+                    let row = gtk::ListBoxRow::builder()
+                        .child(&header)
+                        .selectable(false)
+                        .activatable(false)
+                        .build();
                     list.append(&row);
                 }
+                let place = if hit.folder.is_empty() {
+                    "All Notes"
+                } else {
+                    &hit.folder
+                };
+                let row = note_row(&hit.title, place, &hit.snippet, &[]);
+                let item = Item::Note {
+                    folder: hit.folder.clone(),
+                    file: hit.file.clone(),
+                };
+                drag_note(&row, &item, &hit.title);
+                set_item(&row, item);
+                list.append(&row);
             }
         }
     });
@@ -426,8 +480,8 @@ pub fn fill_tree(
         &matches,
     );
     let note_open = !b.current_note().is_empty();
-    while_updating(list, || {
-        omui::clear(list);
+    let shown = format!("{rows:?}{}{note_open}", b.current_folder());
+    refill(list, shown, || {
         for row in rows {
             list.append(&tree_row(&row, b.current_folder(), note_open, &toggle, handlers));
         }

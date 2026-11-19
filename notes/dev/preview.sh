@@ -19,7 +19,8 @@ set -Eeuo pipefail
 #   status      Sync status: what the next push would do
 #   log         the Sync log after the window's first sync
 #   newnote     New note, its title typed
-# The last four drive the GTK window's actions, which the Qt window does not have.
+#   arrows      from the start, the keys alone: Down, Right, Down (a note the arrows reach opens)
+# The last five are the GTK window's alone: four drive its actions, which the Qt window does not have.
 # `theme-dir` holds a `colors.toml` (an Omarchy theme, such as /usr/share/omarchy/themes/catppuccin-latte) and is
 # copied in as the scratch desktop's current theme; without one the pictures are named `-default`.
 #
@@ -52,7 +53,7 @@ for theme in "${themes[@]}"; do
   [[ -z $theme || -f $theme/colors.toml ]] || { echo "preview: $theme has no colors.toml" >&2; exit 1; }
 done
 all="notes search readonly conflict unreadable attach bare"
-[[ -n ${ICLOUD_NOTES_PREVIEW_QT:-} ]] || all+=" delete status log newnote"
+[[ -n ${ICLOUD_NOTES_PREVIEW_QT:-} ]] || all+=" delete status log newnote arrows"
 read -r -a scenes <<< "${ICLOUD_NOTES_PREVIEW_SCENES:-$all}"
 parent_runtime=${XDG_RUNTIME_DIR:?preview: XDG_RUNTIME_DIR is required}
 parent_display=${WAYLAND_DISPLAY:?preview: run this from a Wayland desktop}
@@ -80,6 +81,7 @@ declare -A keys=(
   [status]="action:sync-status"
   [log]="action:sync-log"
   [newnote]="action:new-note text:Packing_list"
+  [arrows]="Down Right Down"
 )
 for scene in "${scenes[@]}"; do
   [[ -v keys[$scene] ]] || { echo "preview: no scene named $scene" >&2; exit 2; }
@@ -134,6 +136,8 @@ mkdir -p "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
 export XDG_RUNTIME_DIR=$runtime
 export LC_ALL=C.UTF-8 TZ=UTC
 unset GTK_THEME
+# Only what the system installs: no Recall, or anything else, of the desktop's own ~/.local/bin.
+export PATH=/usr/bin:/bin
 vault=$root/vault
 export ICLOUD_NOTES_VAULT=$vault
 # The stub engine: nothing reaches iCloud. Its step finds nothing due, so the status line stays as the window starts.
@@ -243,8 +247,11 @@ press() {
   local key
   for key in $1; do
     if [[ $key == action:* ]]; then
-      # The app's one window, as GtkApplication exports it on the session bus.
-      local window=(--session --dest com.ferdousbhai.IcloudNotes --object-path /com/ferdousbhai/IcloudNotes/window/1)
+      # The app's one window, as GtkApplication exports it on the session bus, under the app's id for this vault.
+      local id
+      id=$(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+        --method org.freedesktop.DBus.ListNames | grep -o "com\.ferdousbhai\.IcloudNotes[A-Za-z0-9.]*" | head -n 1)
+      local window=(--session --dest "$id" --object-path "/${id//.//}/window/1")
       local name=${key#action:} parameter='[]'
       if [[ $name == *=* ]]; then
         parameter="[<'${name#*=}'>]"

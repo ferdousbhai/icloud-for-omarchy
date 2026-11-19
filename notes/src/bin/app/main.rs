@@ -17,6 +17,8 @@ mod highlight;
 mod icons;
 mod lists;
 mod pdf;
+mod search;
+mod settings;
 mod syncing;
 mod window;
 

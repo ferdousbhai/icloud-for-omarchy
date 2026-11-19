@@ -239,7 +239,9 @@ impl Ui {
             Started::Nothing => self.freshening.set(false),
             Started::Ended(runs) => self.ran(vec![runs]),
             Started::Running(running) => {
+                self.run_stopper.replace(Some(running.stopper()));
                 self.spinner.set_visible(true);
+                self.show_banners(); // their buttons wait for the run
                 if !matches!(kind, Kind::Background { .. }) {
                     self.set_status(&format!("{}…", label(kind)));
                 }
@@ -249,6 +251,7 @@ impl Ui {
                     move || running.wait(),
                     move |finished| {
                         let Some(ui) = weak.upgrade() else { return };
+                        ui.run_stopper.take();
                         let runs = ui.backend.borrow_mut().finish(finished.unwrap_or_default());
                         ui.reports(runs);
                     },

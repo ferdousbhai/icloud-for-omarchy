@@ -29,18 +29,26 @@ use crate::conflicts::Conflicts;
 use crate::editor::Editor;
 use crate::icons;
 use crate::lists::{self, Handlers, Item, Lists};
+use crate::settings::Settings;
 
-/// The folder list's and the note list's widths beside the editor.
-const FOLDER_PANE: i32 = 210;
-const NOTE_PANE: i32 = 290;
-/// The tree's width beside the editor, and the least it is shown at.
-const TREE_PANE: i32 = 260;
+/// The folder list's and the note list's widths beside the editor at
+/// first, and the least each is dragged to.
+pub const FOLDER_PANE: i32 = 210;
+const FOLDER_LEAST: i32 = 150;
+pub const NOTE_PANE: i32 = 290;
+const NOTE_LEAST: i32 = 200;
+/// The tree's width at first, and the least and the most it is dragged to.
+pub const TREE_PANE: i32 = 260;
 const TREE_LEAST: i32 = 200;
+const TREE_MOST: i32 = 500;
 /// The least the editor is given, and the width it is comfortable at.
 const EDITOR_LEAST: i32 = 320;
 const EDITOR_COMFORT: i32 = 560;
 /// From this width the window has the two lists beside the editor.
 const WIDE_FROM: i32 = FOLDER_PANE + NOTE_PANE + EDITOR_COMFORT + 2;
+/// The most the two lists are dragged to together: the editor keeps its
+/// least beside them at the narrowest wide window.
+const LISTS_MOST: i32 = WIDE_FROM - EDITOR_LEAST - 2;
 /// Below this width it shows the tree or the editor, one at a time.
 const ONE_PANE_BELOW: i32 = TREE_LEAST + EDITOR_LEAST + 1;
 /// Edits are written once typing has paused this long.
@@ -80,6 +88,7 @@ image.unpicked { opacity: 0.3; }
 .notice { color: @om_accent; }
 /* The toolbar's own icons are pictures in the text colour: GTK cannot grey them. */
 button.header-action:disabled > image { opacity: 0.4; }
+.pane-grip { min-width: 5px; }
 .unsaved { color: @om_warning; }
 ";
 
@@ -93,9 +102,15 @@ pub struct Ui {
     /// The sidebar: the two lists ("panes"), or the tree ("tree").
     pub sidebar: gtk::Stack,
     pub sidebar_button: gtk::Button,
+    /// The folder list, the note list and the tree: their widths are dragged
+    /// (the handles on their right edges) and kept.
+    panes: [gtk::Box; 3],
+    tree_grip: gtk::Widget,
     /// Shown only where there is room for them; their shortcuts stay.
     pub roomy: Vec<gtk::Widget>,
     pub narrow: Cell<bool>,
+    /// The window has had its first layout.
+    laid_out: Cell<bool>,
     pub lists: Lists,
     pub handlers: Rc<Handlers>,
     pub folder_title: gtk::Label,
@@ -111,6 +126,10 @@ pub struct Ui {
     /// What the search boxes hold (both layouts' share it), and what it found.
     pub query: RefCell<String>,
     pub hits: RefCell<Option<Vec<lists::Hit>>>,
+    /// The search read only the first notes of a larger vault.
+    pub search_truncated: Cell<bool>,
+    /// Recall's ranking by meaning: which search it is for, and its delay.
+    pub meaning: crate::search::Meaning,
     search_boxes: [gtk::SearchEntry; 2],
     autosave: RefCell<Option<glib::SourceId>>,
     /// The editor's font zoom (Ctrl++, Ctrl+-, Ctrl+0), and the style that sets it.
@@ -135,6 +154,9 @@ pub struct Ui {
     /// The editor waits, read-only, for a pull to bring the latest copy.
     pub freshening: Cell<bool>,
     pub soon: RefCell<Option<glib::SourceId>>,
+    /// What stops the engine's run under way, for a close that writes the
+    /// save waiting for it.
+    pub run_stopper: RefCell<Option<icloud_notes::engine::Stopper>>,
     /// The engine's message when it refused a push that would delete most of
     /// the vault; empty once a push goes through.
     pub deletions_refused: RefCell<String>,
@@ -151,12 +173,13 @@ pub struct Window;
 impl Window {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(app: &gtk::Application) -> gtk::ApplicationWindow {
+        let saved = Settings::load();
         let window = gtk::ApplicationWindow::builder()
             .application(app)
             .title("Notes")
             .icon_name(crate::APP_ID)
-            .default_width(1100)
-            .default_height(700)
+            .default_width(saved.width)
+            .default_height(saved.height)
             .width_request(440)
             .build();
 
@@ -201,6 +224,10 @@ impl Window {
             .tooltip_text("More")
             .menu_model(&more_menu())
             .build();
+        // Drawn as the toolbar's other buttons are.
+        if let Some(button) = more.first_child() {
+            button.add_css_class("header-action");
+        }
         // pack_end goes from the right edge inwards.
         for widget in [
             more.upcast_ref::<gtk::Widget>(),
@@ -231,12 +258,20 @@ impl Window {
             let search_boxes = [search_box(), search_box()];
 
             // ---- the panes
-            let folder_pane = pane("sidebar", FOLDER_PANE);
+            let folder_pane = pane(
+                "sidebar",
+                saved.folder_pane.clamp(FOLDER_LEAST, LISTS_MOST - NOTE_LEAST),
+            );
             let caption = omui::label("ICLOUD", "dim-label");
             caption.add_css_class("pane-caption");
             folder_pane.append(&caption);
             folder_pane.append(&lists.folder_pane);
-            let note_pane = pane("note-pane", NOTE_PANE);
+            let note_pane = pane(
+                "note-pane",
+                saved
+                    .note_pane
+                    .clamp(NOTE_LEAST, LISTS_MOST - folder_pane.width_request()),
+            );
             let folder_title = gtk::Label::builder()
                 .xalign(0.0)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -251,9 +286,19 @@ impl Window {
             note_pane.append(&list_summary);
             note_pane.append(&lists.note_pane);
             let panes = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            panes.append(&folder_pane);
-            panes.append(&note_pane);
-            let tree_pane = pane("sidebar", TREE_LEAST);
+            let w = weak.clone();
+            let (resizable_folders, _) = resizable(&folder_pane, FOLDER_LEAST, move || {
+                w.upgrade()
+                    .map_or(FOLDER_LEAST, |ui| LISTS_MOST - ui.panes[1].width_request())
+            });
+            panes.append(&resizable_folders);
+            let w = weak.clone();
+            let (resizable_notes, _) = resizable(&note_pane, NOTE_LEAST, move || {
+                w.upgrade()
+                    .map_or(NOTE_LEAST, |ui| LISTS_MOST - ui.panes[0].width_request())
+            });
+            panes.append(&resizable_notes);
+            let tree_pane = pane("sidebar", saved.tree_pane.clamp(TREE_LEAST, TREE_MOST));
             tree_pane.append(&search_boxes[1]);
             let tree_summary = gtk::Label::builder()
                 .xalign(0.0)
@@ -262,9 +307,16 @@ impl Window {
                 .build();
             tree_pane.append(&tree_summary);
             tree_pane.append(&lists.tree_pane);
+            // Dragged no wider than leaves the editor its least beside it.
+            let w = weak.clone();
+            let (resizable_tree, tree_grip) = resizable(&tree_pane, TREE_LEAST, move || {
+                w.upgrade().map_or(TREE_LEAST, |ui| {
+                    TREE_MOST.min(ui.split.widget.width() - EDITOR_LEAST - 1)
+                })
+            });
             let sidebar = gtk::Stack::builder().hhomogeneous(false).build();
             sidebar.add_named(&panes, Some("panes"));
-            sidebar.add_named(&tree_pane, Some("tree"));
+            sidebar.add_named(&resizable_tree, Some("tree"));
 
             let editor = Editor::new();
             editor.widget.set_width_request(EDITOR_LEAST);
@@ -278,7 +330,9 @@ impl Window {
 
             // The sidebar's width is the most of the split's limits and what
             // the sidebar itself needs: the two lists' widths, or the tree's.
-            let split = omui::Split::new(&sidebar, &editor.widget, (TREE_PANE, TREE_PANE), Some(ONE_PANE_BELOW));
+            // (omui's Split has no divider to drag: the panes' own handles
+            // set those widths.)
+            let split = omui::Split::new(&sidebar, &editor.widget, (TREE_LEAST, TREE_LEAST), Some(ONE_PANE_BELOW));
             split.widget.set_vexpand(true);
 
             // ---- the status line
@@ -322,23 +376,28 @@ impl Window {
                 split,
                 sidebar,
                 sidebar_button: sidebar_button.clone(),
+                panes: [folder_pane, note_pane, tree_pane],
+                tree_grip,
                 roomy: vec![bold.upcast(), italic.upcast(), link.upcast()],
                 narrow: Cell::new(false),
+                laid_out: Cell::new(false),
                 lists,
                 handlers,
                 folder_title,
                 list_summary,
-                expanded: RefCell::default(),
+                expanded: RefCell::new(saved.expanded),
                 editor,
                 conflicts,
                 strip,
                 close_warned: Cell::new(false),
                 query: RefCell::default(),
                 hits: RefCell::default(),
+                search_truncated: Cell::new(false),
+                meaning: Default::default(),
                 search_boxes,
                 tree_summary,
                 autosave: RefCell::default(),
-                zoom: Cell::new(1.0),
+                zoom: Cell::new(saved.zoom),
                 zoom_style: gtk::CssProvider::new(),
                 status,
                 notice,
@@ -352,6 +411,7 @@ impl Window {
                 last_sync: Cell::new(None),
                 freshening: Cell::new(false),
                 soon: RefCell::default(),
+                run_stopper: RefCell::default(),
                 deletions_refused: RefCell::default(),
                 statuses: RefCell::default(),
                 watching: RefCell::default(),
@@ -397,13 +457,18 @@ impl Window {
             &ui.zoom_style,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
         );
+        ui.zoom(saved.zoom);
         actions::add(&ui);
         crate::attach::connect(&ui);
         ui.pane_keys();
         let weak = Rc::downgrade(&ui);
         window.connect_close_request(move |_| match weak.upgrade() {
             Some(ui) if !ui.may_close() => glib::Propagation::Stop,
-            _ => glib::Propagation::Proceed,
+            Some(ui) => {
+                ui.settings().save();
+                glib::Propagation::Proceed
+            }
+            None => glib::Propagation::Proceed,
         });
         // Editing the latest copy: focusing the editor, or the first key typed
         // into an untouched note, pulls first when the last pull is a minute
@@ -513,6 +578,34 @@ fn handlers(weak: &Weak<Ui>) -> Handlers {
     }
 }
 
+/// `pane` with a handle on its right edge that drags its width, from
+/// `least` to what `most` says then; and that handle.
+fn resizable(pane: &gtk::Box, least: i32, most: impl Fn() -> i32 + 'static) -> (gtk::Overlay, gtk::Widget) {
+    let overlay = gtk::Overlay::builder().child(pane).build();
+    let grip = gtk::Box::builder()
+        .halign(gtk::Align::End)
+        .css_classes(["pane-grip"])
+        .build();
+    grip.set_cursor_from_name(Some("col-resize"));
+    let drag = gtk::GestureDrag::new();
+    let from = Rc::new(Cell::new(0));
+    let (pane_at, from_at) = (pane.downgrade(), from.clone());
+    drag.connect_drag_begin(move |_, _, _| {
+        if let Some(pane) = pane_at.upgrade() {
+            from_at.set(pane.width_request());
+        }
+    });
+    let pane_at = pane.downgrade();
+    drag.connect_drag_update(move |_, dx, _| {
+        if let Some(pane) = pane_at.upgrade() {
+            pane.set_width_request((from.get() + dx as i32).clamp(least, most().max(least)));
+        }
+    });
+    grip.add_controller(drag);
+    overlay.add_overlay(&grip);
+    (overlay, grip.upcast())
+}
+
 /// A pane of the sidebar: a column `width` wide at the least, with `class`.
 fn pane(class: &str, width: i32) -> gtk::Box {
     gtk::Box::builder()
@@ -574,6 +667,7 @@ impl Ui {
     /// Wide: the two lists. Narrow: the tree, and the button that puts the
     /// sidebar away. Either way the sidebar comes back.
     fn set_narrow(&self, narrow: bool) {
+        let first = !self.laid_out.replace(true);
         self.narrow.set(narrow);
         self.sidebar
             .set_visible_child_name(if narrow { "tree" } else { "panes" });
@@ -585,6 +679,11 @@ impl Ui {
         }
         self.show_lists();
         self.sync_sidebar_button();
+        // At the start the arrows work the list (the folders, or the tree)
+        // before anything is clicked.
+        if first {
+            focus_list(if narrow { &self.lists.tree } else { &self.lists.folders });
+        }
     }
 
     /// Whether the sidebar is on screen.
@@ -612,10 +711,12 @@ impl Ui {
         self.sidebar_button
             .update_property(&[gtk::accessible::Property::Label(tip)]);
         omui::set_class(&self.sidebar_button, "active", shown);
-        // One pane at a time, the formatting buttons keep only their shortcuts.
+        // One pane at a time, the formatting buttons keep only their
+        // shortcuts, and the tree fills the window: no width to drag.
         for widget in &self.roomy {
             widget.set_visible(!self.split.is_collapsed());
         }
+        self.tree_grip.set_visible(!self.split.is_collapsed());
     }
 
     /// Unfolds what it takes for the open note (or, with none, the selected
@@ -706,7 +807,7 @@ impl Ui {
             self.tree_summary.set_visible(hits.is_some());
             self.tree_summary.set_label(&match hits.as_deref() {
                 Some([]) => "No matching notes".to_string(),
-                Some(found) => summary(found),
+                Some(found) => summary(found, self.search_truncated.get()),
                 None => String::new(),
             });
         } else {
@@ -724,7 +825,7 @@ impl Ui {
             self.folder_title.set_label(lists::folder_label(b.current_folder()));
             let n = b.notes().len();
             self.list_summary.set_label(&match hits.as_deref() {
-                Some(found) => summary(found),
+                Some(found) => summary(found, self.search_truncated.get()),
                 None => format!("{n} note{}", if n == 1 { "" } else { "s" }),
             });
         }
@@ -814,25 +915,6 @@ impl Ui {
         self.show_lists();
     }
 
-    /// Searches again (the vault changed): text matches, at least two characters.
-    pub fn refresh_search(&self) {
-        let query = self.query.borrow().trim().to_string();
-        let hits = (query.chars().count() >= 2).then(|| {
-            let found = self.backend.borrow_mut().search_vault(&query);
-            found
-                .into_iter()
-                .map(|hit| lists::Hit {
-                    folder: hit.folder,
-                    file: hit.file,
-                    title: hit.title,
-                    snippet: hit.snippet,
-                    related: false,
-                })
-                .collect()
-        });
-        self.hits.replace(hits);
-    }
-
     /// Ctrl+F: the sidebar shown, and its search box focused.
     pub fn focus_search(&self) {
         if !self.sidebar_shown() {
@@ -842,8 +924,22 @@ impl Ui {
         entry.grab_focus();
     }
 
+    /// What the window keeps for its next start.
+    fn settings(&self) -> Settings {
+        let (width, height) = self.window.default_size();
+        Settings {
+            width,
+            height,
+            folder_pane: self.panes[0].width_request(),
+            note_pane: self.panes[1].width_request(),
+            tree_pane: self.panes[2].width_request(),
+            zoom: self.zoom.get(),
+            expanded: self.expanded.borrow().clone(),
+        }
+    }
+
     /// The window, for a handler that must not keep it alive.
-    fn weak(&self) -> Weak<Ui> {
+    pub fn weak(&self) -> Weak<Ui> {
         self.me.clone()
     }
 
@@ -942,6 +1038,26 @@ impl Ui {
             _ => false,
         });
         on(&self.lists.tree, |ui, list, key| {
+            use gtk::gdk::Key;
+            if matches!(
+                key,
+                Key::Up | Key::Down | Key::Home | Key::End | Key::Page_Up | Key::Page_Down
+            ) {
+                // The list moves the keyboard; a note it lands on opens, as
+                // in the two lists (a folder only opens on Enter or a click).
+                let weak = ui.weak();
+                let list = list.clone();
+                glib::idle_add_local_once(move || {
+                    let Some(ui) = weak.upgrade() else { return };
+                    let row = list.focus_child().and_downcast::<gtk::ListBoxRow>();
+                    if let Some(Item::Note { folder, file }) = row.as_ref().and_then(lists::item_of)
+                        && ui.backend.borrow().current_path() != icloud_notes_path(&folder, &file)
+                    {
+                        ui.open_note(&folder, &file);
+                    }
+                });
+                return false;
+            }
             let Some(row) = list.focus_child().and_downcast::<gtk::ListBoxRow>() else {
                 return false;
             };
@@ -1117,15 +1233,24 @@ impl Ui {
         saved
     }
 
-    /// Closing saves what autosave has not written yet. Edits a guardrail
-    /// holds back, or that wait behind a running sync, stop the first close
-    /// so they are not dropped unseen; closing again discards them.
+    /// Closing saves what autosave has not written yet; a save that waits
+    /// for the window's own sync is written once that sync is stopped. Edits
+    /// a guardrail holds back, or that wait behind another program's sync,
+    /// stop the first close so they are not dropped unseen; closing again
+    /// discards them.
     fn may_close(&self) -> bool {
         if !self.editor.dirty() || self.close_warned.get() {
             return true;
         }
         let held = !self.backend.borrow().save_warning(&self.editor.text()).is_empty();
         if !held && (self.save() || !self.editor.dirty()) {
+            return true;
+        }
+        if !held && self.backend.borrow().close_writes_queued_save() {
+            if let Some(stopper) = self.run_stopper.take() {
+                stopper.stop();
+            }
+            self.backend.borrow_mut().write_queued_save_on_close();
             return true;
         }
         self.close_warned.set(true);
@@ -1274,12 +1399,18 @@ fn focus_row(list: &gtk::ListBox, index: i32) {
 }
 
 /// The line under a search box: what it found.
-fn summary(hits: &[lists::Hit]) -> String {
+fn summary(hits: &[lists::Hit], truncated: bool) -> String {
     let related = hits.iter().filter(|hit| hit.related).count();
     let matches = hits.len() - related;
     let mut line = format!("{matches} result{}", if matches == 1 { "" } else { "s" });
     if related > 0 {
         line.push_str(&format!(" · {related} related"));
+    }
+    if truncated {
+        line.push_str(&format!(
+            " · searched the first {} notes",
+            icloud_notes::backend::WINDOW_SEARCH_NOTES
+        ));
     }
     line
 }

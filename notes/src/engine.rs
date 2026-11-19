@@ -4,10 +4,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read};
-use std::os::fd::{BorrowedFd, RawFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd, RawFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -155,6 +156,8 @@ pub fn vault_info(tool: &Path, vault: &Path) -> Option<VaultInfo> {
 #[derive(Debug)]
 pub struct Running {
     child: Child,
+    /// The process itself, which outlives a reused pid: what [`Stopper`] signals.
+    pidfd: Option<Arc<OwnedFd>>,
     stdout: thread::JoinHandle<Vec<u8>>,
     stderr: thread::JoinHandle<Vec<u8>>,
 }
@@ -202,7 +205,11 @@ pub fn start(tool: &Path, args: &[String], vault: &Path, lock_fd: RawFd) -> io::
     };
     std::fs::read_dir(vault).map_err(|e| child_setup("chdir", e))?;
     let mut child = command.spawn()?;
+    let pid = rustix::process::Pid::from_child(&child);
     Ok(Running {
+        pidfd: rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty())
+            .ok()
+            .map(Arc::new),
         stdout: drain(child.stdout.take()),
         stderr: drain(child.stderr.take()),
         child,
@@ -220,10 +227,26 @@ impl Running {
         }
     }
 
-    /// Stops the run (the window closing under it).
-    pub fn kill(mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+    /// What stops the run from another thread than the one waiting for it.
+    pub fn stopper(&self) -> Stopper {
+        Stopper(self.pidfd.clone())
+    }
+}
+
+/// Stops a run that a thread of its own waits for: the window closing under
+/// its own sync, with a save that waits for that sync.
+#[derive(Debug, Clone)]
+pub struct Stopper(Option<Arc<OwnedFd>>);
+
+impl Stopper {
+    /// Kills the run and returns once it has ended (the thread waiting for
+    /// it still reaps it); at once when it had ended already.
+    pub fn stop(&self) {
+        let Some(pidfd) = &self.0 else { return };
+        if rustix::process::pidfd_send_signal(pidfd.as_fd(), rustix::process::Signal::KILL).is_ok() {
+            let ended = rustix::process::WaitIdOptions::EXITED | rustix::process::WaitIdOptions::NOWAIT;
+            let _ = rustix::process::waitid(rustix::process::WaitId::PidFd(pidfd.as_fd()), ended);
+        }
     }
 }
 

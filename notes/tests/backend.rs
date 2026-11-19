@@ -170,6 +170,29 @@ fn a_save_under_a_sync_waits_and_is_written_once_it_is_done() {
 }
 
 #[test]
+fn closing_stops_the_windows_own_sync_and_writes_the_save_that_waits_for_it() {
+    let mut w = World::new("# Q\none\n");
+    // A pull that would never end by itself.
+    let engine = w.dir.path().join("engine");
+    let script = fs::read_to_string(&engine).unwrap();
+    fs::write(&engine, script.replace("*) echo", "*) exec sleep 600; echo")).unwrap();
+    let Started::Running(running) = w.backend.start(Kind::Pull) else {
+        panic!("the engine starts");
+    };
+    let stopper = running.stopper();
+    let waiting = std::thread::spawn(move || running.wait());
+    assert!(!w.backend.save_note("# Q\none, mine\n", None), "it waits");
+    assert!(w.backend.close_writes_queued_save());
+    stopper.stop();
+    w.backend.write_queued_save_on_close();
+    assert_eq!(w.read("Q.md"), format!("{ID}# Q\none, mine\n"));
+    assert!(!w.backend.sync_running());
+    assert_ne!(waiting.join().unwrap().exit_code, 0, "the run was killed");
+    // Stopping a run that is over already does nothing.
+    stopper.stop();
+}
+
+#[test]
 fn a_waiting_save_is_merged_from_the_text_its_editor_started_from() {
     // The note was loaded again under the sync before the window saved: its
     // save names the text the editor started from, so the reloaded note is
@@ -373,4 +396,35 @@ fn the_tree_lists_every_note_newest_first() {
         .map(|r| (r.folder.as_str(), r.depth, r.count, r.note.is_some()))
         .collect();
     assert_eq!(shown, [("", 0, 2, false), ("Work", 0, 1, false), ("Work", 1, 0, true)]);
+}
+
+#[test]
+fn the_windows_search_reads_the_first_notes_and_hands_them_to_recall() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let most = icloud_notes::backend::WINDOW_SEARCH_NOTES;
+    for n in 0..=most {
+        fs::write(vault.join(format!("N{n}.md")), format!("# Note {n}\nneedle\n")).unwrap();
+    }
+    let mut b = Backend::with_engine(Vault::at(vault.to_string_lossy()), Role::App, None);
+    // The command line searches every note, to its 100 answers.
+    assert_eq!(b.search_vault("needle").len(), 100);
+    // The window reads no more than its share, says so, and hands what it
+    // read to Recall; `~` asks Recall alone, with the same text matches.
+    // Without Recall it stops at its 100 answers, as the command line does.
+    let found = b.search_window("needle", true);
+    assert!(found.truncated);
+    assert_eq!((found.hits.len(), found.read.len()), (100, most));
+    assert_eq!(
+        found.read[0].text,
+        format!("# Note {}\nneedle\n", found.read[0].path[1..].trim_end_matches(".md"))
+    );
+    let alone = b.search_window("~ needle", false);
+    assert!(!alone.truncated && alone.read.is_empty());
+    assert_eq!(alone.hits, found.hits);
+    assert!(
+        b.search_window("~n", false).hits.is_empty(),
+        "one character is no query"
+    );
 }
