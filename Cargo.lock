@@ -1452,8 +1452,8 @@ dependencies = [
 
 [[package]]
 name = "omui"
-version = "0.5.3"
-source = "git+https://github.com/ferdousbhai/omui?rev=ad8058e157b028074bb4c492723cd0316b283968#ad8058e157b028074bb4c492723cd0316b283968"
+version = "0.5.6"
+source = "git+https://github.com/ferdousbhai/omui?rev=c6e3199e112c9e2d24914a44b5822beab9cbf874#c6e3199e112c9e2d24914a44b5822beab9cbf874"
 dependencies = [
  "glib-build-tools",
  "gtk4",
