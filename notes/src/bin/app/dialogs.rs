@@ -246,6 +246,9 @@ pub fn sync_log(ui: &Rc<Ui>) {
         if let (Some(ui), "clear") = (weak.upgrade(), id) {
             ui.backend.borrow_mut().clear_log();
             view.buffer().set_text("");
+            // To the log before Clear is disabled with the keyboard on it: GTK then leaves the keyboard nowhere, and
+            // omui's dialog brings it back only from an idle, until when Escape reaches no one.
+            view.grab_focus();
             dialog.set_response_enabled("clear", false);
         }
     });

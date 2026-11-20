@@ -35,9 +35,8 @@
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":null}
 
-# The Sync log, from the More menu: Clear empties it and leaves it open, disabled once there is nothing left; Escape
-# closes it, once the keyboard has left the button that went disabled under it for the log (Escape before that is
-# ignored: see bin/qa).
+# The Sync log, from the More menu: Clear empties it and leaves it open, disabled once there is nothing left, the
+# keyboard in the log; Escape closes it at once (it was ignored while the keyboard was on the disabled button).
 {"do":"click","role":"button","name":"More"}
 {"do":"click","role":"menu-item","name":"Sync log"}
 {"do":"wait","dialog":"Sync log"}
@@ -46,7 +45,6 @@
 {"do":"click","role":"button","name":"Clear","in":{"role":"dialog","name":"Sync log"}}
 {"do":"wait","dialog":"Sync log"}
 {"do":"wait","role":"button","name":"Clear","in":{"role":"dialog","name":"Sync log"},"sensitive":false}
-{"do":"wait","focus":{"role":"text-box","name":""}}
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":null}
 
