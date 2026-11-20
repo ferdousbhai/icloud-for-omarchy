@@ -18,7 +18,7 @@ icloud-app = { path = "app" }
 icloud-app-ui = { path = "app/ui" }
 # The look, the Omarchy theme, the icons and the widgets of the windows
 # (Photos, Find My and Reminders). None of them loads libadwaita.
-omui = { git = "https://github.com/ferdousbhai/omui", rev = "84fda37d4df6c0f0f47e8296c4a1357930fceab1" } # v0.5.1
+omui = { git = "https://github.com/ferdousbhai/omui", rev = "422c8602886614021104e250c3aef2577b98c2de" } # v0.5.2
 async-channel = "2"
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
