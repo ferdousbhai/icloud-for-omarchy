@@ -51,6 +51,8 @@ const WIDE_FROM: i32 = FOLDER_PANE + NOTE_PANE + EDITOR_COMFORT + 2;
 const LISTS_MOST: i32 = WIDE_FROM - EDITOR_LEAST - 2;
 /// Below this width it shows the tree or the editor, one at a time.
 const ONE_PANE_BELOW: i32 = TREE_LEAST + EDITOR_LEAST + 1;
+/// Between the toolbar's buttons, as GTK's header bar spaces what is packed into it.
+const TOOLBAR_SPACING: i32 = 6;
 /// Edits are written once typing has paused this long.
 const AUTOSAVE: Duration = Duration::from_millis(1500);
 
@@ -105,8 +107,6 @@ pub struct Ui {
     /// The sidebar's width with the two lists and with the tree (the
     /// divider's), kept for the layout not on screen and the next start.
     sidebar_widths: Cell<[i32; 2]>,
-    /// Shown only where there is room for them; their shortcuts stay.
-    pub roomy: Vec<gtk::Widget>,
     pub narrow: Cell<bool>,
     /// The window has had its first layout.
     laid_out: Cell<bool>,
@@ -223,15 +223,17 @@ impl Window {
         let sync_status = omui::icon_button(name::REFRESH, "Sync status");
         sync_status.set_action_name(Some("win.sync-status"));
         let more = omui::icon_menu_button(name::MORE, "More", &more_menu());
+        let styles = gtk::Box::new(gtk::Orientation::Horizontal, TOOLBAR_SPACING);
+        for button in [&bold, &italic, &link] {
+            styles.append(button);
+        }
         // pack_end goes from the right edge inwards.
         for widget in [
             more.upcast_ref::<gtk::Widget>(),
             sync_status.upcast_ref(),
             separator().upcast_ref(),
             attach.upcast_ref(),
-            link.upcast_ref(),
-            italic.upcast_ref(),
-            bold.upcast_ref(),
+            gives_way(&styles).upcast_ref(),
             checklist.upcast_ref(),
         ] {
             header.pack_end(widget);
@@ -355,7 +357,6 @@ impl Window {
                 sidebar_button: sidebar_button.clone(),
                 folder_pane,
                 sidebar_widths: Cell::new([lists_width, saved.tree_pane]),
-                roomy: vec![bold.upcast(), italic.upcast(), link.upcast()],
                 narrow: Cell::new(false),
                 laid_out: Cell::new(false),
                 lists,
@@ -594,6 +595,28 @@ fn pane(class: &str, width: i32) -> gtk::Box {
         .build()
 }
 
+/// `buttons` at their own width while the toolbar has room for them, and off screen when it has not: they ask the
+/// toolbar for no width at all, so they never keep the window wider than its one pane. Hidden by the window's width
+/// instead, they would hold the window at the width that shows them. Their shortcuts stay.
+fn gives_way(buttons: &gtk::Box) -> gtk::ScrolledWindow {
+    // A scrolled window that scrolls with no bar asks for no width of its own, and offers what it holds as the
+    // width it would like.
+    let holder = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::External)
+        .vscrollbar_policy(gtk::PolicyType::Never)
+        .propagate_natural_width(true)
+        .child(buttons)
+        .build();
+    // Its adjustment changes with the width it is given: all of the buttons, or none.
+    let buttons = buttons.downgrade();
+    holder.hadjustment().connect_changed(move |room| {
+        if let Some(buttons) = buttons.upgrade() {
+            buttons.set_child_visible(room.upper() <= room.page_size());
+        }
+    });
+    holder
+}
+
 fn more_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     let note = gio::Menu::new();
@@ -705,11 +728,6 @@ impl Ui {
         self.sidebar_button
             .update_property(&[gtk::accessible::Property::Label(tip)]);
         omui::set_class(&self.sidebar_button, "active", shown);
-        // One pane at a time, the formatting buttons keep only their
-        // shortcuts.
-        for widget in &self.roomy {
-            widget.set_visible(!self.split.is_collapsed());
-        }
     }
 
     /// Unfolds what it takes for the open note (or, with none, the selected

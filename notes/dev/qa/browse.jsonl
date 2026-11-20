@@ -1,5 +1,5 @@
 # Notes on a scratch vault and the stub engine, in the tree: broadway's screen is 1024 wide, under the 1062 the two
-# lists need. The one-pane window is left to dev/preview.sh (see bin/qa).
+# lists need (see bin/qa).
 {"do":"wait","role":"list-item","name":"Notes","visible":true}
 {"do":"wait","role":"label","name":"Ready.","visible":true}
 {"do":"shot","path":"tree.png"}
@@ -55,4 +55,24 @@
 {"do":"wait","dialog":null}
 {"do":"wait","role":"list-item","name":"Travel","visible":true}
 
+# A narrow tile: one pane, the tree and then the note. Bold, Italic and Link leave the toolbar, which would keep the
+# window 573 wide with them, and Ctrl+B still makes the selection bold.
+{"do":"resize","width":480,"height":700}
+{"do":"wait","size":[480,700]}
+{"do":"wait","role":"button","name":"Bold (Ctrl+B)","visible":false}
+{"do":"wait","role":"text-box","name":"Note","visible":false}
+{"do":"shot","path":"one-pane-tree.png"}
+{"do":"click","role":"button","name":"Hide the sidebar"}
+{"do":"wait","role":"text-box","name":"Note","visible":true}
+{"do":"wait","role":"list-item","name":"Travel","visible":false}
+{"do":"focus","role":"text-box","name":"Note"}
+{"do":"key","keys":"<Control>a"}
+{"do":"key","keys":"<Control>b"}
+{"do":"wait","role":"text-box","name":"Note","text":"**# Trip ideas\nKyoto in spring for the cherry blossoms.\n**"}
+{"do":"wait","role":"label","name":"● unsaved","visible":false}
+{"do":"shot","path":"one-pane-note.png"}
+
+# Wide again: the buttons are back.
+{"do":"resize","width":900,"height":700}
+{"do":"wait","role":"button","name":"Bold (Ctrl+B)","visible":true}
 {"do":"quit"}
