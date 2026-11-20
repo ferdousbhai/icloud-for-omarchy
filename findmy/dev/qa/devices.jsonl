@@ -16,6 +16,7 @@
 {"do":"key","keys":"Return"}
 {"do":"wait","dialog":"Turn On Lost Mode for Test's iPhone?"}
 {"do":"wait","role":"button","name":"Turn On","sensitive":false}
+{"do":"shot","path":"lost.png"}
 {"do":"type","role":"text-box","name":"Phone number","text":"+1 555 0100"}
 {"do":"wait","role":"button","name":"Turn On","sensitive":true}
 {"do":"shot","path":"lost-filled.png"}
