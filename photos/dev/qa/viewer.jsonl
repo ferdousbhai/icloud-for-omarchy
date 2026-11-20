@@ -1,15 +1,14 @@
-# The newest photo in the viewer, and Escape back to the grid. Where the keyboard is then is not looked at (see
-# bin/qa).
+# The newest photo in the viewer, and Escape back to the grid, the keyboard on the photo it left.
 {"do":"wait","role":"progress-bar","name":"Loading","visible":false,"timeout_ms":30000}
 {"do":"click","role":"button","name":"IMG_1120.JPG"}
 {"do":"wait","role":"label","name":"1 of 120","visible":true}
 {"do":"shot","path":"viewer.png"}
 {"do":"key","keys":"Escape"}
-{"do":"wait","role":"button","name":"IMG_1120.JPG","visible":true}
+{"do":"wait","role":"button","name":"IMG_1120.JPG","visible":true,"focused":true}
 {"do":"shot","path":"back.png"}
 
-# Open again. Delete asks first, and Escape answers no.
-{"do":"click","role":"button","name":"IMG_1120.JPG"}
+# Return opens it again. Delete asks first, and Escape answers no.
+{"do":"key","keys":"Return"}
 {"do":"wait","role":"label","name":"1 of 120","visible":true}
 {"do":"key","keys":"Delete"}
 {"do":"wait","dialog":"Delete this photo?"}
@@ -18,7 +17,8 @@
 {"do":"wait","dialog":null}
 {"do":"wait","role":"label","name":"1 of 120","visible":true}
 
-# Deleted: the next photo, one fewer in the library, and a toast whose Undo brings it back.
+# Deleted: the next photo, one fewer in the library, and a toast whose Undo brings it back. Each built the grid's
+# rows anew under the viewer, and Escape still leaves the keyboard on the photo the viewer showed last.
 {"do":"key","keys":"Delete"}
 {"do":"wait","dialog":"Delete this photo?"}
 {"do":"click","role":"button","name":"Delete","in":{"role":"dialog","name":"Delete this photo?"}}
@@ -31,5 +31,6 @@
 {"do":"wait","role":"list-item","name":"All Photos, 120","visible":true}
 {"do":"key","keys":"Escape"}
 {"do":"wait","role":"button","name":"IMG_1120.JPG","visible":true}
+{"do":"wait","focus":{"role":"button","name":"IMG_1119.JPG"}}
 {"do":"shot","path":"restored.png"}
 {"do":"quit"}

@@ -307,12 +307,14 @@ pub fn build(application: &gtk::Application) -> Rc<App> {
     let a = app.clone();
     app.search.connect_activate(move |entry| {
         *a.search_query.borrow_mut() = entry.text().trim().to_owned();
+        a.grid.start_at_top();
         a.load_snapshot();
     });
     let a = app.clone();
     app.search.connect_search_changed(move |entry| {
         if entry.text().is_empty() && !a.search_query.borrow().is_empty() {
             a.search_query.borrow_mut().clear();
+            a.grid.start_at_top();
             a.load_snapshot();
         }
     });
@@ -341,9 +343,24 @@ impl App {
             }
             // The snapshot sets the page title along with the grid.
             *a.album.borrow_mut() = Albums::id_of(row);
+            a.grid.start_at_top();
             a.nav.pop_to_root();
             a.load_snapshot();
             a.split.set_show_content(true);
+        });
+
+        // Back at the grid, the keyboard is on the photo the viewer left. The pages return it to the tile it was on
+        // themselves, but a sync that came in under the viewer built the rows anew, and that tile is gone. Not when
+        // the keyboard is outside the pages: an album chosen in the sidebar closes the viewer too.
+        let a = self.clone();
+        self.nav.connect_changed(move |nav| {
+            let outside = gtk::prelude::RootExt::focus(&a.window).is_some_and(|at| !at.is_ancestor(&nav.widget));
+            if nav.visible_tag().is_none()
+                && !outside
+                && let Some(id) = a.viewer.current()
+            {
+                a.grid.focus(&id);
+            }
         });
 
         let a = self.clone();

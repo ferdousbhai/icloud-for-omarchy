@@ -5,10 +5,14 @@
 
 # An album opened, and All Photos again: the grid built anew each time, the keyboard still in the list of albums,
 # which is built anew with it (a key then went to the row that was removed, and Ctrl+, below never reached the
-# window). Its title is waited for and no photo of it: about one time in ten the grid opens at its end (see bin/qa).
+# window). The album opens at its top: its newest photo is there, and its oldest, which the list makes only when it is
+# scrolled near, is not (the grid used to open at its end in some runs).
 {"do":"click","role":"list-item","name":"Trips, 40"}
 {"do":"wait","role":"group","name":"Trips","visible":true}
 {"do":"wait","role":"button","name":"IMG_1119.JPG","visible":false}
+{"do":"wait","role":"button","name":"IMG_1120.JPG","visible":true}
+{"do":"wait","role":"button","name":"IMG_1003.JPG","visible":false}
+{"do":"shot","path":"album.png"}
 {"do":"click","role":"list-item","name":"All Photos, 120"}
 {"do":"wait","role":"group","name":"All Photos","visible":true}
 {"do":"wait","role":"list-item","name":"All Photos, 120","focused":true}

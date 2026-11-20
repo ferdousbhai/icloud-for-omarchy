@@ -47,10 +47,25 @@ type BindTile = Box<dyn Fn(&str, Option<&PathBuf>, &gtk::Picture)>;
 /// Called when a tile scrolls out of the list's reach: (asset id).
 type UnbindTile = Box<dyn Fn(&str)>;
 
+/// Where the list is to be once it has laid out the rows last given it. The list view starts new rows at its first
+/// row, under that row's month, so the place is put back; and it reads a place given it before it has laid the rows
+/// out against rows that are gone, and goes to its end, so the place waits for the frame after.
+#[derive(Default)]
+struct Place {
+    /// How far down, as a fraction of the way to the end; `None` once the list is there.
+    fraction: Cell<Option<f64>>,
+    /// The rows are new, and no frame has laid them out yet.
+    fresh: Cell<bool>,
+    /// A tick callback is waiting to put the list there.
+    waiting: Cell<bool>,
+}
+
 pub struct Grid {
     pub root: gtk::Stack,
     pub empty: omui::EmptyState,
     scrolled: gtk::ScrolledWindow,
+    list: gtk::ListView,
+    place: Rc<Place>,
     store: gio::ListStore,
     columns: Rc<Cell<usize>>,
     tile: Rc<Cell<i32>>,
@@ -294,6 +309,8 @@ impl Grid {
             root,
             empty,
             scrolled,
+            list,
+            place: Rc::default(),
             store,
             columns,
             tile,
@@ -303,6 +320,9 @@ impl Grid {
             on_unbind,
         };
         grid.watch_width();
+        // What was shown while the grid was under the viewer or the empty page is put in place as it comes back.
+        let (place, adj) = (grid.place.clone(), grid.scrolled.vadjustment());
+        grid.list.connect_map(move |list| settle(list, &adj, &place));
         grid
     }
 
@@ -368,24 +388,42 @@ impl Grid {
         self.show_rows(rows);
     }
 
+    /// The rows shown next are another view's (an album, a search): they start at the top.
+    pub fn start_at_top(&self) {
+        self.place.fraction.set(Some(0.0));
+    }
+
     fn show_rows(&self, rows: Vec<RowItem>) {
         let adj = self.scrolled.vadjustment();
-        let fraction = if adj.upper() > adj.page_size() {
-            adj.value() / (adj.upper() - adj.page_size())
-        } else {
-            0.0
-        };
+        // A place still waiting is where the list was going: the adjustment is not there yet.
+        let fraction = self.place.fraction.get().unwrap_or_else(|| {
+            if adj.upper() > adj.page_size() {
+                adj.value() / (adj.upper() - adj.page_size())
+            } else {
+                0.0
+            }
+        });
         let objects: Vec<glib::BoxedAnyObject> = rows.into_iter().map(glib::BoxedAnyObject::new).collect();
         self.store.splice(0, self.store.n_items(), &objects);
         self.root
             .set_visible_child_name(if objects.is_empty() { "empty" } else { "grid" });
-        // The list view anchors on the first row, which would hide the first
-        // month header; put the scroll position back explicitly.
-        glib::idle_add_local_once(move || adj.set_value(fraction * (adj.upper() - adj.page_size()).max(0.0)));
+        self.place.fraction.set(Some(fraction));
+        self.place.fresh.set(true);
+        settle(&self.list, &adj, &self.place);
     }
 
     pub fn ids(&self) -> Vec<String> {
         self.tiles.borrow().iter().map(|t| t.id.clone()).collect()
+    }
+
+    /// Gives the keyboard to the tile showing `id`, if the list has one.
+    pub fn focus(&self, id: &str) {
+        if let Some(picture) = self.bound.borrow().get(id)
+            && picture.widget_name() == id
+            && let Some(tile) = picture.ancestor(gtk::Button::static_type())
+        {
+            tile.grab_focus();
+        }
     }
 
     /// Put a freshly loaded thumbnail on the tile showing `id`, if any.
@@ -396,6 +434,28 @@ impl Grid {
             p.set_paintable(Some(texture));
         }
     }
+}
+
+/// Puts the list at its [`Place`] once a frame has laid out the rows it was last given: a frame ticks before it lays
+/// out, so the tick after the one that first sees the rows. A list off screen is laid out by no frame, and waits to be
+/// mapped.
+fn settle(list: &gtk::ListView, adj: &gtk::Adjustment, place: &Rc<Place>) {
+    if !list.is_mapped() || place.fraction.get().is_none() || place.waiting.replace(true) {
+        return;
+    }
+    let (adj, place) = (adj.clone(), place.clone());
+    list.add_tick_callback(move |list, _| {
+        if list.is_mapped() && place.fresh.replace(false) {
+            return glib::ControlFlow::Continue;
+        }
+        place.waiting.set(false);
+        if list.is_mapped()
+            && let Some(fraction) = place.fraction.take()
+        {
+            adj.set_value(fraction * (adj.upper() - adj.page_size()).max(0.0));
+        }
+        glib::ControlFlow::Break
+    });
 }
 
 /// Every widget currently realised under `root` (only the visible rows and a
