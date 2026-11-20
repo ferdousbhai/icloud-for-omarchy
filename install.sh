@@ -85,13 +85,20 @@ add_signed_repo() {
       END { if (!added) print repo_include }
     ' /etc/pacman.conf > "$temporary"
     if ! cmp -s "$temporary" /etc/pacman.conf; then
-      $sudo tee /etc/pacman.conf < "$temporary" >/dev/null
+      # Whole or not at all: a new file beside it, renamed over it. Where that
+      # cannot be (pacman.conf is itself a mount), written in place as before.
+      local new=/etc/pacman.conf.new.$$
+      # A link (a managed dotfile) is written through, not replaced by a file.
+      if [[ -L /etc/pacman.conf ]] || ! { $sudo install -m 644 "$temporary" "$new" && $sudo mv -f "$new" /etc/pacman.conf; } 2>/dev/null; then
+        $sudo rm -f "$new" 2>/dev/null || true
+        $sudo tee /etc/pacman.conf < "$temporary" >/dev/null
+      fi
     fi
     rm -f "$temporary"
   }
   restore_repo_include "$include"
   user="${SUDO_USER:-${USER:-$(id -un)}}"
-  home="$(getent passwd "$user" | cut -d: -f6)"
+  home="$(getent passwd "$user" | cut -d: -f6)" || home=''   # no such account: no hook
   if [[ -n $home && -d $home/.config/omarchy ]]; then
     # The home is the user's: write there as them, so a symlink in it cannot
     # turn root's write onto a system file.
