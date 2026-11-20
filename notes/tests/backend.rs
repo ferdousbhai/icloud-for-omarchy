@@ -446,8 +446,14 @@ fn a_run_waits_for_another_processs_lock_and_saves_wait_with_it() {
     );
     other.release();
     drop(other);
-    let Started::Running(running) = w.backend.go_on() else {
-        panic!("the engine starts once the lock is free");
+    // Another test's child, between its fork and its exec, still holds a copy of the released lock for a moment.
+    let free_by = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let running = loop {
+        match w.backend.go_on() {
+            Started::Running(running) => break running,
+            Started::Waiting if std::time::Instant::now() < free_by => std::thread::yield_now(),
+            _ => panic!("the engine starts once the lock is free"),
+        }
     };
     assert!(w.backend.holds_lock());
     w.backend.finish(running.wait());
