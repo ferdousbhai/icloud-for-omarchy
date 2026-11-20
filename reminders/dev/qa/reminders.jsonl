@@ -2,6 +2,14 @@
 {"do":"wait","role":"list-item","name":"Milk","visible":true,"timeout_ms":15000}
 {"do":"shot","path":"lists.png"}
 
+# A list opened: its reminders alone. Then Upcoming again.
+{"do":"click","role":"list-item","name":"Groceries, 2"}
+{"do":"wait","role":"list-item","name":"Call the dentist","visible":false}
+{"do":"wait","role":"list-item","name":"Eggs","visible":true}
+{"do":"shot","path":"list.png"}
+{"do":"click","role":"list-item","name":"Upcoming, 4"}
+{"do":"wait","role":"list-item","name":"Call the dentist","visible":true}
+
 # Ctrl+N: the keyboard in the line that adds a reminder. A due date that cannot be read is refused with a toast.
 {"do":"key","keys":"<Control>n"}
 {"do":"wait","role":"text-box","name":"New reminder (Ctrl+N)","focused":true}
@@ -12,9 +20,11 @@
 {"do":"wait","toasts":["wants a due date like 2026-10-10, \"2026-10-10 17:30\", today, \"tomorrow 9:00\", 17:30 or +2h, not \"someday\""]}
 {"do":"shot","path":"toast.png"}
 
-# The first reminder's dialog, closed unsaved with Escape.
-{"do":"click","role":"list-item","name":"Milk"}
+# Return on the first reminder: its dialog, the keyboard in its title, closed unsaved with Escape.
+{"do":"focus","role":"list-item","name":"Milk"}
+{"do":"key","keys":"Return"}
 {"do":"wait","dialog":"Edit Reminder"}
+{"do":"wait","role":"text-box","name":"Title","focused":true,"text":"Milk"}
 {"do":"shot","path":"edit.png"}
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":null}
@@ -29,7 +39,8 @@
 
 # A narrow window: one pane, the reminders the keyboard is in, the lists one step back.
 {"do":"resize","width":480,"height":640}
-{"do":"wait","role":"list-item","name":"Upcoming","visible":false}
+{"do":"wait","size":[480,640]}
+{"do":"wait","role":"list-item","name":"Upcoming, 3","visible":false}
 {"do":"wait","role":"list-item","name":"Milk","visible":true}
 {"do":"shot","path":"narrow.png"}
 {"do":"quit"}

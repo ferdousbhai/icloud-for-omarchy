@@ -16,13 +16,9 @@
 #   QA_VERBOSE=1     the commands and answers, and the app's output, of a script that passed too
 #
 # What the scripts leave to each app's dev/preview.sh (a nested compositor, which tiles the window to any size):
-# - Broadway's screen is 1024x768, so no window is wider: Notes shows its tree, never the two lists. And a window
-#   asked to shrink keeps the least width its wide layout needs, so Notes cannot be made narrow enough for one pane.
-# - With the page connected that `key` and `type` need, GTK 4.24's broadway display aborts (broadway-output.c,
-#   append_node_ops: !reused_node->consumed) on a frame that brings in again, at two places, an icon drawn in the
-#   frame before: its renderer reuses a node by its pointer, and every image of one icon shares that node. So no
-#   script rebuilds a list of rows with icons after the first frame: Notes' tree on an unfold or a note opened,
-#   Photos' grid on coming back from the viewer or after a delete (its Undo toast), a Reminders list opened.
+# - Broadway's screen is 1024x768, so no window is wider: Notes shows its tree, never the two lists.
+# - Photos asked to be narrower keeps the 764 px of the five columns its grid had: one pane, and no narrower.
+# - Notes asked to be narrower keeps the 573 px its toolbar needs, over the 520 it shows one pane under.
 set -Eeuo pipefail
 cd "$(dirname "$0")/.."
 repo=$PWD
@@ -66,6 +62,7 @@ put() {
 # The stand-in an app runs on, started fresh for each script: its environment goes into `stand_in`.
 fake() { # fake EXAMPLE ARGS... -- BANNER: a fake Apple server, which prints BANNER and its URL once it listens
   local example=$1 banner=${*: -1} url=""
+  : > "$root/fake.log" # there to read before the server has opened it
   "$target/debug/examples/$example" "${@:2:$#-3}" > "$root/fake.log" 2>&1 &
   fake_pid=$!
   for _ in {1..100}; do

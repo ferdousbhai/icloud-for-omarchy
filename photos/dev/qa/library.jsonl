@@ -1,20 +1,33 @@
-# Photos on the fake CloudKit: the library by month beside the albums, once the first sync is done; the preferences
-# (Ctrl+,) and About, each closed with Escape; then a narrow window, one pane.
+# Photos on the fake CloudKit: the library by month beside the albums, once the first sync is done.
 {"do":"wait","role":"progress-bar","name":"Loading","visible":false,"timeout_ms":30000}
 {"do":"wait","role":"button","name":"IMG_1120.JPG","visible":true}
 {"do":"shot","path":"grid.png"}
+
+# The preferences (Ctrl+,): Download originals opens its choices, the first of them the one in use; Escape closes
+# them, and then the dialog.
 {"do":"key","keys":"<Control>comma"}
-{"do":"state"}
+{"do":"wait","dialog":"Preferences"}
 {"do":"shot","path":"prefs.png"}
+{"do":"click","role":"combo-box","name":"Download originals"}
+{"do":"wait","role":"list-item","name":"On demand","focused":true}
+{"do":"wait","role":"list-item","name":"All","visible":true}
+{"do":"key","keys":"Escape"}
+{"do":"wait","role":"list-item","name":"All","visible":false}
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":null}
-{"do":"action","name":"win.about"}
-{"do":"state"}
+
+# About, from the main menu.
+{"do":"click","role":"button","name":"Main Menu"}
+{"do":"click","role":"menu-item","name":"About Photos"}
+{"do":"wait","dialog":"Photos"}
 {"do":"shot","path":"about.png"}
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":null}
+
+# A narrower window: one pane, the albums. It stays 764 wide, the five columns the grid had (see bin/qa).
 {"do":"resize","width":560,"height":760}
-{"do":"state"}
-{"do":"list"}
+{"do":"wait","size":[764,760]}
+{"do":"wait","role":"list-item","name":"All Photos, 120","visible":true}
+{"do":"wait","role":"button","name":"IMG_1120.JPG","visible":false}
 {"do":"shot","path":"narrow.png"}
 {"do":"quit"}

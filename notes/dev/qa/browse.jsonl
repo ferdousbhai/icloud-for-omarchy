@@ -1,8 +1,19 @@
 # Notes on a scratch vault and the stub engine, in the tree: broadway's screen is 1024 wide, under the 1062 the two
-# lists need. A folder unfolded, a note opened and the one-pane window are left to dev/preview.sh (see bin/qa).
+# lists need. The one-pane window is left to dev/preview.sh (see bin/qa).
 {"do":"wait","role":"list-item","name":"Notes","visible":true}
 {"do":"wait","role":"label","name":"Ready.","visible":true}
 {"do":"shot","path":"tree.png"}
+
+# The arrows from the start: Down to a folder, Right unfolds it, Down and Return open a note of it.
+{"do":"key","keys":"Down"}
+{"do":"key","keys":"Right"}
+{"do":"wait","role":"list-item","name":"Trip ideas","visible":true}
+{"do":"key","keys":"Down"}
+{"do":"key","keys":"Down"}
+{"do":"key","keys":"Return"}
+{"do":"wait","role":"text-box","name":"Note","focused":true,"text":"# Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
+{"do":"wait","role":"button","name":"Bold (Ctrl+B)","visible":true,"sensitive":true}
+{"do":"shot","path":"note.png"}
 
 # The divider: Right widens the sidebar a step, Home and End take it to the tree's least and most.
 {"do":"wait","role":"search-box","name":"Search notes","width":207}
@@ -16,14 +27,16 @@
 {"do":"shot","path":"divider.png"}
 
 # Sync status asks the engine what a push would do.
-{"do":"action","name":"win.sync-status"}
-{"do":"state"}
+{"do":"click","role":"button","name":"Sync status"}
+{"do":"wait","dialog":"Sync status"}
 {"do":"shot","path":"status.png"}
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":null}
 
-# The Sync log: Clear empties it and leaves it open, disabled once there is nothing left; Escape closes it.
-{"do":"action","name":"win.sync-log"}
+# The Sync log, from the More menu: Clear empties it and leaves it open, disabled once there is nothing left; Escape
+# closes it.
+{"do":"click","role":"button","name":"More"}
+{"do":"click","role":"menu-item","name":"Sync log"}
 {"do":"wait","dialog":"Sync log"}
 {"do":"wait","role":"button","name":"Clear","in":{"role":"dialog","name":"Sync log"},"sensitive":true}
 {"do":"shot","path":"log.png"}
@@ -33,11 +46,13 @@
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":null}
 
-# New folder: its name asked for.
+# New folder: its name asked for, and the folder in the tree, inside the one the open note is in.
 {"do":"click","role":"button","name":"New folder"}
-{"do":"state"}
+{"do":"wait","dialog":"New folder"}
+{"do":"type","role":"text-box","name":"Folder name","text":"Travel"}
 {"do":"shot","path":"new-folder.png"}
-{"do":"key","keys":"Escape"}
+{"do":"key","keys":"Return"}
 {"do":"wait","dialog":null}
+{"do":"wait","role":"list-item","name":"Travel","visible":true}
 
 {"do":"quit"}
