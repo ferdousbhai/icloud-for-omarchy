@@ -4,12 +4,14 @@
 {"do":"wait","role":"label","name":"Ready.","visible":true}
 {"do":"shot","path":"tree.png"}
 
-# The arrows from the start: Down to a folder, Right unfolds it, Down and Return open a note of it.
+# The arrows from the start: Down to a folder, Right unfolds it, Down to a note, which opens as the arrows rest on
+# it, and Return goes on to its text (on a note not open yet, Return opens it and stays in the tree, as a click does).
 {"do":"key","keys":"Down"}
 {"do":"key","keys":"Right"}
 {"do":"wait","role":"list-item","name":"Trip ideas","visible":true}
 {"do":"key","keys":"Down"}
 {"do":"key","keys":"Down"}
+{"do":"wait","role":"text-box","name":"Note","visible":true,"focused":false}
 {"do":"key","keys":"Return"}
 {"do":"wait","role":"text-box","name":"Note","focused":true,"text":"# Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
 {"do":"wait","role":"button","name":"Bold (Ctrl+B)","visible":true,"sensitive":true}
@@ -34,7 +36,8 @@
 {"do":"wait","dialog":null}
 
 # The Sync log, from the More menu: Clear empties it and leaves it open, disabled once there is nothing left; Escape
-# closes it.
+# closes it, once the keyboard has left the button that went disabled under it for the log (Escape before that is
+# ignored: see bin/qa).
 {"do":"click","role":"button","name":"More"}
 {"do":"click","role":"menu-item","name":"Sync log"}
 {"do":"wait","dialog":"Sync log"}
@@ -43,6 +46,7 @@
 {"do":"click","role":"button","name":"Clear","in":{"role":"dialog","name":"Sync log"}}
 {"do":"wait","dialog":"Sync log"}
 {"do":"wait","role":"button","name":"Clear","in":{"role":"dialog","name":"Sync log"},"sensitive":false}
+{"do":"wait","focus":{"role":"text-box","name":""}}
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":null}
 

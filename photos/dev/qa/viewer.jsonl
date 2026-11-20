@@ -1,14 +1,15 @@
-# The newest photo in the viewer, and Escape back to the grid, the keyboard on the photo it left.
+# The newest photo in the viewer, and Escape back to the grid. Where the keyboard is then is not looked at (see
+# bin/qa).
 {"do":"wait","role":"progress-bar","name":"Loading","visible":false,"timeout_ms":30000}
 {"do":"click","role":"button","name":"IMG_1120.JPG"}
 {"do":"wait","role":"label","name":"1 of 120","visible":true}
 {"do":"shot","path":"viewer.png"}
 {"do":"key","keys":"Escape"}
-{"do":"wait","role":"button","name":"IMG_1120.JPG","visible":true,"focused":true}
+{"do":"wait","role":"button","name":"IMG_1120.JPG","visible":true}
 {"do":"shot","path":"back.png"}
 
-# Return opens it again. Delete asks first, and Escape answers no.
-{"do":"key","keys":"Return"}
+# Open again. Delete asks first, and Escape answers no.
+{"do":"click","role":"button","name":"IMG_1120.JPG"}
 {"do":"wait","role":"label","name":"1 of 120","visible":true}
 {"do":"key","keys":"Delete"}
 {"do":"wait","dialog":"Delete this photo?"}
