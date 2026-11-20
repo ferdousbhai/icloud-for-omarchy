@@ -24,8 +24,11 @@ impl Albums {
         Albums { list }
     }
 
-    /// Rebuild, keeping the selection (falls back to All Photos).
+    /// Rebuild, keeping the selection (falls back to All Photos) and, when it is in the list, the keyboard: GTK
+    /// takes it off a removed row only after the next frame, and a key pressed before then goes to that row, in no
+    /// window, where no shortcut hears it.
     pub fn set(&self, total: i64, albums: &[AlbumRow], selected: Option<&str>) {
+        let focused = self.list.focus_child().is_some();
         omui::clear(&self.list);
         let all = row(None, "All Photos", total, name::GRID);
         self.list.append(&all);
@@ -38,6 +41,9 @@ impl Albums {
             self.list.append(&r);
         }
         self.list.select_row(Some(&to_select));
+        if focused {
+            to_select.grab_focus();
+        }
     }
 
     /// The album id a row stands for; `None` is All Photos.

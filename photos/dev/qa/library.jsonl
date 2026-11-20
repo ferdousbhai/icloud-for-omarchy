@@ -3,6 +3,16 @@
 {"do":"wait","role":"button","name":"IMG_1120.JPG","visible":true}
 {"do":"shot","path":"grid.png"}
 
+# An album opened, and All Photos again: the grid built anew each time, the keyboard still in the list of albums,
+# which is built anew with it (a key then went to the row that was removed, and Ctrl+, below never reached the
+# window). Its title is waited for and no photo of it: about one time in ten the grid opens at its end (see bin/qa).
+{"do":"click","role":"list-item","name":"Trips, 40"}
+{"do":"wait","role":"group","name":"Trips","visible":true}
+{"do":"wait","role":"button","name":"IMG_1119.JPG","visible":false}
+{"do":"click","role":"list-item","name":"All Photos, 120"}
+{"do":"wait","role":"group","name":"All Photos","visible":true}
+{"do":"wait","role":"list-item","name":"All Photos, 120","focused":true}
+
 # The preferences (Ctrl+,): Download originals opens its choices, the first of them the one in use; Escape closes
 # them, and then the dialog.
 {"do":"key","keys":"<Control>comma"}
@@ -24,10 +34,11 @@
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":null}
 
-# A narrower window: one pane, the albums. It stays 764 wide, the five columns the grid had (see bin/qa).
+# A narrower window: one pane, the grid, with a button back to the albums. It stays 764 wide, the five columns the
+# grid had (see bin/qa).
 {"do":"resize","width":560,"height":760}
 {"do":"wait","size":[764,760]}
-{"do":"wait","role":"list-item","name":"All Photos, 120","visible":true}
-{"do":"wait","role":"button","name":"IMG_1120.JPG","visible":false}
+{"do":"wait","role":"button","name":"Albums","visible":true}
+{"do":"wait","role":"list-item","name":"All Photos, 120","visible":false}
 {"do":"shot","path":"narrow.png"}
 {"do":"quit"}
