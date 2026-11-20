@@ -295,8 +295,10 @@ impl Grid {
         list.add_css_class("photo-grid");
         list.set_single_click_activate(false);
 
+        // No bar across, and no width asked for the columns the rows have now: a narrower window is given, and the
+        // rows are chunked again to fit it (`watch_width`). `Never` would hold the window at the rows' width.
         let scrolled = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
+            .hscrollbar_policy(gtk::PolicyType::External)
             .child(&list)
             .vexpand(true)
             .build();

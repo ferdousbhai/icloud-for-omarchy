@@ -222,7 +222,8 @@ impl Window {
         attach.set_action_name(Some("win.attach"));
         let sync_status = omui::icon_button(name::REFRESH, "Sync status");
         sync_status.set_action_name(Some("win.sync-status"));
-        let more = omui::icon_menu_button(name::MORE, "More", &more_menu());
+        let (menu, styles_menu) = more_menu();
+        let more = omui::icon_menu_button(name::MORE, "More", &menu);
         let styles = gtk::Box::new(gtk::Orientation::Horizontal, TOOLBAR_SPACING);
         for button in [&bold, &italic, &link] {
             styles.append(button);
@@ -233,7 +234,7 @@ impl Window {
             sync_status.upcast_ref(),
             separator().upcast_ref(),
             attach.upcast_ref(),
-            gives_way(&styles).upcast_ref(),
+            gives_way(&styles, styles_menu).upcast_ref(),
             checklist.upcast_ref(),
         ] {
             header.pack_end(widget);
@@ -597,8 +598,9 @@ fn pane(class: &str, width: i32) -> gtk::Box {
 
 /// `buttons` at their own width while the toolbar has room for them, and off screen when it has not: they ask the
 /// toolbar for no width at all, so they never keep the window wider than its one pane. Hidden by the window's width
-/// instead, they would hold the window at the width that shows them. Their shortcuts stay.
-fn gives_way(buttons: &gtk::Box) -> gtk::ScrolledWindow {
+/// instead, they would hold the window at the width that shows them. Their shortcuts stay, and while they are off
+/// screen `menu`, a section of More, has them.
+fn gives_way(buttons: &gtk::Box, menu: gio::Menu) -> gtk::ScrolledWindow {
     // A scrolled window that scrolls with no bar asks for no width of its own, and offers what it holds as the
     // width it would like.
     let holder = gtk::ScrolledWindow::builder()
@@ -611,14 +613,26 @@ fn gives_way(buttons: &gtk::Box) -> gtk::ScrolledWindow {
     let buttons = buttons.downgrade();
     holder.hadjustment().connect_changed(move |room| {
         if let Some(buttons) = buttons.upgrade() {
-            buttons.set_child_visible(room.upper() <= room.page_size());
+            let fits = room.upper() <= room.page_size();
+            buttons.set_child_visible(fits);
+            if fits != (menu.n_items() == 0) {
+                menu.remove_all();
+                if !fits {
+                    menu.append(Some("Bold"), Some("win.bold"));
+                    menu.append(Some("Italic"), Some("win.italic"));
+                    menu.append(Some("Link"), Some("win.link"));
+                }
+            }
         }
     });
     holder
 }
 
-fn more_menu() -> gio::Menu {
+/// More's menu, and its first section: empty until the toolbar has no room for Bold, Italic and Link (`gives_way`).
+fn more_menu() -> (gio::Menu, gio::Menu) {
     let menu = gio::Menu::new();
+    let styles = gio::Menu::new();
+    menu.append_section(None, &styles);
     let note = gio::Menu::new();
     note.append(Some("Note history"), Some("win.history"));
     note.append(Some("Export PDF"), Some("win.export-pdf"));
@@ -627,7 +641,7 @@ fn more_menu() -> gio::Menu {
     app.append(Some("Refresh"), Some("win.refresh"));
     app.append(Some("Sync log"), Some("win.sync-log"));
     menu.append_section(None, &app);
-    menu
+    (menu, styles)
 }
 
 impl Ui {

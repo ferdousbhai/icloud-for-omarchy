@@ -38,10 +38,9 @@
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":null}
 
-# A narrower window: one pane, the grid, with a button back to the albums. It stays 764 wide, the five columns the
-# grid had (see bin/qa).
+# A narrower window: one pane, the grid in the columns that fit, with a button back to the albums.
 {"do":"resize","width":560,"height":760}
-{"do":"wait","size":[764,760]}
+{"do":"wait","size":[560,760]}
 {"do":"wait","role":"button","name":"Albums","visible":true}
 {"do":"wait","role":"list-item","name":"All Photos, 120","visible":false}
 {"do":"shot","path":"narrow.png"}

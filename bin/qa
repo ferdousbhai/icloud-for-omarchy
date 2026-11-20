@@ -17,7 +17,6 @@
 #
 # What the scripts leave to each app's dev/preview.sh (a nested compositor, which tiles the window to any size):
 # - Broadway's screen is 1024x768, so no window is wider: Notes shows its tree, never the two lists.
-# - Photos asked to be narrower keeps the 764 px of the five columns its grid had: one pane, and no narrower.
 set -Eeuo pipefail
 cd "$(dirname "$0")/.."
 repo=$PWD

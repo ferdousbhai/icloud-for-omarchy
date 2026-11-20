@@ -58,7 +58,7 @@
 {"do":"wait","role":"list-item","name":"Travel","visible":true}
 
 # A narrow tile: one pane, the tree and then the note. Bold, Italic and Link leave the toolbar, which would keep the
-# window 573 wide with them, and Ctrl+B still makes the selection bold.
+# window 573 wide with them, for More's menu; Ctrl+B still makes the selection bold.
 {"do":"resize","width":480,"height":700}
 {"do":"wait","size":[480,700]}
 {"do":"wait","role":"button","name":"Bold (Ctrl+B)","visible":false}
@@ -73,6 +73,10 @@
 {"do":"wait","role":"text-box","name":"Note","text":"**# Trip ideas\nKyoto in spring for the cherry blossoms.\n**"}
 {"do":"wait","role":"label","name":"● unsaved","visible":false}
 {"do":"shot","path":"one-pane-note.png"}
+{"do":"click","role":"button","name":"More"}
+{"do":"wait","role":"menu-item","name":"Italic","visible":true}
+{"do":"key","keys":"Escape"}
+{"do":"wait","role":"menu-item","name":"Italic","visible":false}
 
 # Wide again: the buttons are back.
 {"do":"resize","width":900,"height":700}
