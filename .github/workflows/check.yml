@@ -7,10 +7,11 @@ on:
   pull_request:
 permissions:
   contents: read
-# A pull request from a branch of this repository is the commit its push already checks: one run per branch, the
-# newest, and a pull request's run only for a fork's branch, which pushes nowhere here.
+# A pull request from a branch of this repository is the commit its push already checks, so its jobs are skipped
+# (the `if` on each job) and only a fork's pull request runs them. Each ref keeps its newest run: the group stays per
+# ref, so the skipped run of a pull request cannot cancel its push's.
 concurrency:
-  group: check-${{ github.head_ref || github.ref_name }}
+  group: check-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   # The installers run against a stubbed pacman in a user namespace, which a container does not hand out: there
