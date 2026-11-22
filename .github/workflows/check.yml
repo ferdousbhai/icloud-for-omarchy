@@ -7,13 +7,16 @@ on:
   pull_request:
 permissions:
   contents: read
+# A pull request from a branch of this repository is the commit its push already checks: one run per branch, the
+# newest, and a pull request's run only for a fork's branch, which pushes nowhere here.
 concurrency:
-  group: check-${{ github.ref }}
+  group: check-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
   # The installers run against a stubbed pacman in a user namespace, which a container does not hand out: there
   # tests/install_test.sh skips its runs, so they are made here, on the runner itself, as packages.yml makes them.
   scripts:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -23,8 +26,11 @@ jobs:
           tests/install_test.sh
           python3 tests/packaging_test.py
   check:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # A cold build and every test take about a quarter of an hour; each step has its own limit below, so a hang
+    # fails in the step it is in, with its log.
+    timeout-minutes: 45
     # Arch, as the packages are built on: its gtk4 and webkitgtk-6.0 are the ones the apps ship against.
     container: archlinux:base-devel
     steps:
@@ -32,6 +38,7 @@ jobs:
       # python for the packaging tests, node for the sign-in page's script, sqlite for the catalog, and a font, without
       # which the windows have no text to lay out. gtk4 brings gtk4-broadwayd, the QA scripts' display.
       - name: Install what the build and the tests need
+        timeout-minutes: 10
         run: |
           pacman -Syu --noconfirm --needed rust git dbus gtk4 libshumate webkitgtk-6.0 \
             sqlite python nodejs util-linux procps-ng ttf-dejavu
@@ -59,6 +66,7 @@ jobs:
       # As a regular user, as the packages' check() runs: root passes the permission checks some tests rely on.
       # CI is named to the tests, so Notes' black-box suite cannot be left out: bin/check builds its binary first.
       - name: Run bin/check --all
+        timeout-minutes: 30
         run: |
           useradd -m builder
           chown -R builder:builder .

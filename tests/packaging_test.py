@@ -57,8 +57,16 @@ class Packaging(unittest.TestCase):
             shutil.copy2(ROOT / "bin" / name, root / "bin" / name)
 
     def need_namespace(self):
-        if subprocess.run([*NAMESPACE, "true"], capture_output=True).returncode:
-            self.skipTest("subordinate UID namespaces unavailable")
+        # Where user namespaces are refused (a container), `unshare --map-auto` fails but leaves its uid-map helper
+        # behind, holding whatever output it was given: so a plain namespace is asked for first, which has no
+        # helper, and the probe's output goes nowhere a wait could hang on.
+        for probe in (["unshare", "--user", "true"], [*NAMESPACE, "true"]):
+            try:
+                if subprocess.run(probe, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, timeout=30).returncode:
+                    self.skipTest("subordinate UID namespaces unavailable")
+            except subprocess.TimeoutExpired:
+                self.skipTest("subordinate UID namespaces unavailable (the probe hung)")
 
     def populate(self):
         for arch in ("x86_64", "aarch64"):
