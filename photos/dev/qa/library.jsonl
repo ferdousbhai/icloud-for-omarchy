@@ -27,7 +27,18 @@
 {"do":"wait","role":"list-item","name":"All","visible":true}
 {"do":"key","keys":"Escape"}
 {"do":"wait","role":"list-item","name":"All","visible":false}
+
+# A file chooser that will not open, for the originals folder and for an upload: the window says so in omui's words,
+# not the portal's, and the dialog stays.
+{"do":"picker","fail":"refused"}
+{"do":"click","role":"button","name":"Choose…"}
+{"do":"wait","role":"label","name":"The desktop's file chooser would not open.","visible":true}
+{"do":"wait","dialog":"Preferences"}
 {"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"picker","fail":"lost"}
+{"do":"key","keys":"<Control>u"}
+{"do":"wait","role":"label","name":"The desktop's file chooser stopped while it was open.","visible":true}
 {"do":"wait","dialog":null}
 
 # About, from the main menu.
@@ -36,6 +47,27 @@
 {"do":"wait","dialog":"Photos"}
 {"do":"shot","path":"about.png"}
 {"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+
+# Every shortcut, on F1 and on ?, from the menu too; Escape closes the list. In the search entry ? is typed.
+{"do":"key","keys":"F1"}
+{"do":"wait","dialog":"Keyboard shortcuts"}
+{"do":"wait","role":"label","name":"Upload photos and videos","visible":true}
+{"do":"shot","path":"shortcuts.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"key","keys":"question"}
+{"do":"wait","dialog":"Keyboard shortcuts"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"click","role":"button","name":"Main Menu"}
+{"do":"click","role":"menu-item","name":"Keyboard Shortcuts"}
+{"do":"wait","dialog":"Keyboard shortcuts"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"focus","role":"search-box","name":"Search this album"}
+{"do":"type","text":"?"}
+{"do":"wait","role":"search-box","name":"Search this album","text":"?"}
 {"do":"wait","dialog":null}
 
 # A narrower window: one pane, the grid in the columns that fit, with a button back to the albums.

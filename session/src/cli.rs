@@ -2,35 +2,49 @@
 //! error on stderr, the yes/no prompt, and (the `clap` feature) parsing
 //! that answers a usage error the same way. Tools that adopted the full
 //! output contract use [`crate::output`] for parsing and reporting instead.
+//!
+//! Omarchy's command lines exit 0 on success and 1 on any failure, so a
+//! script needs nothing but the exit status to know whether a call worked.
+//! What kind of failure it was is the stable `code` of the JSON error, which
+//! goes to stderr; the numbered exit codes the tools once had (2 usage, 3
+//! signed out, 4 not found, 5 unavailable) are gone.
 
 use std::io::{BufRead, IsTerminal, Write};
 
 pub const EXIT_OK: u8 = 0;
+/// Every failure, whatever its kind: the JSON `code` tells them apart.
 pub const EXIT_ERROR: u8 = 1;
-/// Invalid usage or request; a destructive command without `--yes`.
-pub const EXIT_USAGE: u8 = 2;
-/// Not signed in: `icloud-session sign-in`.
-pub const EXIT_SIGN_IN: u8 = 3;
-/// Find My needs the Apple password: `icloud-session authorize-find-my`.
-/// The same exit code as a sign-in (not configured / not signed in); the
-/// JSON `code` (`find_my_auth_required`) still tells the two apart.
-pub const EXIT_FIND_MY_AUTH: u8 = 3;
-/// The thing asked for does not exist.
-pub const EXIT_NOT_FOUND: u8 = 4;
-/// A service or a required tool is unavailable: no network, offline, the
-/// daemon unreachable, a keyring that cannot be read, an unreadable answer,
-/// an HTTP 5xx (`network`, `offline`, `session_service`,
-/// `keyring_unavailable`, `bad_response`, `http` for a 5xx only: another
-/// non-2xx is [`EXIT_ERROR`], a 401/421 that persists [`EXIT_SIGN_IN`]).
-pub const EXIT_UNAVAILABLE: u8 = 5;
-/// An internal error, a bug. The same exit code as [`EXIT_ERROR`]; kept so
-/// call sites can say which they mean.
-pub const EXIT_INTERNAL: u8 = 1;
+/// Once 2. Kept, as 1, so the crates that pin this one by git `rev` still
+/// build after a bump; the deprecation names what to use.
+#[deprecated(note = "every failure exits 1: use EXIT_ERROR, and tell failures apart by the JSON `code`")]
+pub const EXIT_USAGE: u8 = EXIT_ERROR;
+/// Once 3.
+#[deprecated(note = "every failure exits 1: use EXIT_ERROR, and tell failures apart by the JSON `code`")]
+pub const EXIT_SIGN_IN: u8 = EXIT_ERROR;
+/// Once 3.
+#[deprecated(note = "every failure exits 1: use EXIT_ERROR, and tell failures apart by the JSON `code`")]
+pub const EXIT_FIND_MY_AUTH: u8 = EXIT_ERROR;
+/// Once 4.
+#[deprecated(note = "every failure exits 1: use EXIT_ERROR, and tell failures apart by the JSON `code`")]
+pub const EXIT_NOT_FOUND: u8 = EXIT_ERROR;
+/// Once 5.
+#[deprecated(note = "every failure exits 1: use EXIT_ERROR, and tell failures apart by the JSON `code`")]
+pub const EXIT_UNAVAILABLE: u8 = EXIT_ERROR;
+/// Always 1.
+#[deprecated(note = "every failure exits 1: use EXIT_ERROR")]
+pub const EXIT_INTERNAL: u8 = EXIT_ERROR;
 
-/// Reports an error on stderr and returns `exit_code`. With `json`, one line
-/// of the shared product contract, `{"ok":false,"error":{"code","message","hint"?}}`
-/// in that key order (the process exit code carries the number); else
-/// `tool: message`, then the hint on a line of its own.
+/// The exit code for a process that ends with `exit`: 0 stays 0, and every
+/// other number, from a caller that still passes the old ones, becomes 1.
+pub fn exit_status(exit: u8) -> u8 {
+    if exit == EXIT_OK { EXIT_OK } else { EXIT_ERROR }
+}
+
+/// Reports an error on stderr and returns the exit code, 1 (any non-zero
+/// `exit_code` becomes 1, see [`exit_status`]). With `json`, one line of the
+/// shared product contract, `{"ok":false,"error":{"code","message","hint"?}}`
+/// in that key order; else `tool: message`, then the hint on a line of its
+/// own.
 ///
 /// Legacy: for tools not yet on [`crate::output`], whose
 /// [`CliError::report`](crate::output::CliError::report) puts a machine-mode
@@ -38,7 +52,8 @@ pub const EXIT_INTERNAL: u8 = 1;
 #[deprecated(note = "use icloud_session::output")]
 pub fn report(tool: &str, json: bool, code: &str, exit_code: u8, message: &str, hint: Option<&str>) -> u8 {
     eprintln!("{}", render(tool, json, code, message, hint));
-    exit_code
+    let _ = exit_code;
+    EXIT_ERROR
 }
 
 fn render(tool: &str, json: bool, code: &str, message: &str, hint: Option<&str>) -> String {
@@ -71,7 +86,7 @@ fn ask(question: &str, mut input: impl BufRead, mut output: impl Write) -> bool 
 }
 
 /// Parses the process arguments. `--help` and `--version` print and give
-/// `Err(EXIT_OK)`; a usage error gives `Err(EXIT_USAGE)` after clap's
+/// `Err(EXIT_OK)`; a usage error gives `Err(EXIT_ERROR)` after clap's
 /// message, or the JSON error (with a ``run `<tool> --help` `` hint) when
 /// `--json` is among the arguments.
 ///
@@ -92,17 +107,25 @@ pub fn parse<P: clap::Parser>(tool: &str) -> Result<P, u8> {
             .any(|a| a == "--json")
         {
             let _ = e.print();
-            return EXIT_USAGE;
+            return EXIT_ERROR;
         }
         let message = crate::output::usage_message(&e);
         let hint = crate::output::usage_hint(tool);
-        report(tool, true, "usage", EXIT_USAGE, &message, Some(&hint))
+        report(tool, true, "usage", EXIT_ERROR, &message, Some(&hint))
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ask, render};
+    use super::{EXIT_ERROR, EXIT_OK, ask, exit_status, render};
+
+    #[test]
+    fn a_process_exits_0_or_1_and_nothing_else() {
+        assert_eq!(exit_status(EXIT_OK), 0);
+        for old in 1..=u8::MAX {
+            assert_eq!(exit_status(old), EXIT_ERROR, "{old}");
+        }
+    }
 
     #[test]
     fn the_error_line_has_a_fixed_key_order() {

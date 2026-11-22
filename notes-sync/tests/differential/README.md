@@ -52,10 +52,12 @@ cargo test -p icloud-notes-sync --test cli_differential
 `vaultFrom` scenario starts from the vault just recorded for the earlier
 one) and rewrites `expected/<name>/` from the run:
 
-- `exit`: the exit code
-- `stdout.json`: the `--quiet` output (the result's data, or the error
-  object `{"ok":false,"error":{…}}` of a failing scenario), with the run's temp dir replaced by
-  `@OUT@`
+- `exit`: the exit code, 0 or 1
+- `stdout.json`: the `--quiet` output (the result's data; empty for a
+  failing scenario), with the run's temp dir replaced by `@OUT@`
+- `error.json`: a failing scenario's error object `{"ok":false,"error":{…}}`,
+  the last line of its stderr, normalized as stdout is (compared with
+  `stdout`)
 - `requests.json`: the request log (`{"requests": []}` when nothing was
   sent)
 - `vault/`: the vault tree, with state.json's `generator` replaced by

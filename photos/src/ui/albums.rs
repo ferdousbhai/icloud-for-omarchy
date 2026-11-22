@@ -8,9 +8,16 @@ pub struct Albums {
     pub list: gtk::ListBox,
 }
 
-/// All Photos is the row named "", an album the row named by its id.
+/// All Photos is the row named "", an album the row named by its id. An
+/// album's name is the user's, never translated; the count is written as the
+/// language writes numbers.
 fn row(id: Option<&str>, title: &str, count: i64, icon: &str) -> gtk::ListBoxRow {
-    omui::sidebar_row(id.unwrap_or(""), Some(icon), title, Some(&count.to_string()))
+    omui::sidebar_row(
+        id.unwrap_or(""),
+        Some(icon),
+        title,
+        Some(&omui::i18n::format_int(count)),
+    )
 }
 
 impl Albums {
@@ -24,13 +31,13 @@ impl Albums {
         Albums { list }
     }
 
-    /// Rebuild, keeping the selection (falls back to All Photos) and, when it is in the list, the keyboard: GTK
+    /// Rebuild (also after a switch of language, for All Photos and the counts), keeping the selection (falls back to All Photos) and, when it is in the list, the keyboard: GTK
     /// takes it off a removed row only after the next frame, and a key pressed before then goes to that row, in no
     /// window, where no shortcut hears it.
     pub fn set(&self, total: i64, albums: &[AlbumRow], selected: Option<&str>) {
         let focused = self.list.focus_child().is_some();
         omui::clear(&self.list);
-        let all = row(None, "All Photos", total, name::GRID);
+        let all = row(None, &omui::tr("All Photos"), total, name::GRID);
         self.list.append(&all);
         let mut to_select = all;
         for a in albums {

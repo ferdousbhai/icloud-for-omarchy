@@ -207,7 +207,9 @@ fn spans(text: &[char]) -> Vec<Span> {
 }
 
 /// One line as Pango markup, for a page (export-pdf): styled as in the
-/// editor off the cursor's line, its marks left out.
+/// editor off the cursor's line, its marks left out. Its colours are fixed
+/// inks, not the theme's: a page is printed on white paper, whatever the
+/// desktop looks like.
 pub fn markup(line: &str) -> String {
     let text: Vec<char> = line.chars().collect();
     let n = text.len();

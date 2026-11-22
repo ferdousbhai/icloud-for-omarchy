@@ -19,9 +19,11 @@ done
 ln -sfn icloud-sessiond "$bin_dir/icloud-session"
 install -d "$services_dir"
 sed "s|^Exec=.*|Exec=$bin_dir/icloud-sessiond|" "sessiond/data/$service" >"$services_dir/$service"
-# The sign-in window's desktop entry: its name and icon in bars and docks.
-install -Dm644 sessiond/data/io.github.ferdousbhai.ICloudSession.desktop \
-  "${XDG_DATA_HOME:-$HOME/.local/share}/applications/io.github.ferdousbhai.ICloudSession.desktop"
+# The sign-in window's desktop entry: its name and icon in bars and docks, named by the window's Wayland app id. An
+# earlier dev install named it by the D-Bus name, which it no longer matches.
+applications="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+rm -f "$applications/io.github.ferdousbhai.ICloudSession.desktop"
+install -Dm644 sessiond/data/icloud-session.desktop "$applications/icloud-session.desktop"
 
 # dbus-broker only notices new service files on a reload.
 dbus-send --session --type=method_call --dest=org.freedesktop.DBus \

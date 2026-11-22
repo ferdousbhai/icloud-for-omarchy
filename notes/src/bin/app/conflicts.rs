@@ -9,7 +9,9 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use icloud_notes::backend::{Conflict, ConflictLine};
+use omui::i18n::bind_label;
 use omui::icons::name;
+use omui::{tr, trn};
 
 use crate::window::Ui;
 
@@ -39,7 +41,7 @@ fn card_box(class: &str) -> gtk::Box {
 }
 
 /// The yellow card's heading and text, with a warning icon.
-fn warning(title: &str, text: &gtk::Label) -> gtk::Box {
+fn warning(title: &gtk::Label, text: &gtk::Label) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     let icon = omui::icon(name::WARNING);
     icon.add_css_class("warning");
@@ -50,7 +52,8 @@ fn warning(title: &str, text: &gtk::Label) -> gtk::Box {
         .spacing(2)
         .hexpand(true)
         .build();
-    column.append(&omui::label(title, "heading"));
+    title.add_css_class("heading");
+    column.append(title);
     text.add_css_class("dim-label");
     column.append(text);
     row.append(&column);
@@ -79,29 +82,28 @@ impl Conflicts {
         unreadable.set_margin_top(14);
         unreadable.set_visible(false);
         let unreadable_text = omui::label("", "");
-        unreadable.append(&warning(
-            "This note has conflict markers Notes can't read.",
-            &unreadable_text,
-        ));
+        let heading = omui::label("", "");
+        bind_label(&heading, "This note has conflict markers Notes can't read.");
+        unreadable.append(&warning(&heading, &unreadable_text));
         let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let as_text = gtk::Button::builder()
-            .label("Edit as text")
             .css_classes(["flat"])
             .hexpand(true)
             .halign(gtk::Align::Start)
             .action_name("win.conflict-as-text")
             .build();
+        bind_label(&as_text, "Edit as text");
         let synced = gtk::Button::builder()
-            .label("Use the last synced version")
             .action_name("win.recover-conflict")
             .action_target(&"synced".to_variant())
             .build();
+        bind_label(&synced, "Use the last synced version");
         let strip = gtk::Button::builder()
-            .label("Remove the markers")
             .css_classes(["suggested-action"])
             .action_name("win.recover-conflict")
             .action_target(&"strip".to_variant())
             .build();
+        bind_label(&strip, "Remove the markers");
         buttons.append(&as_text);
         buttons.append(&synced);
         buttons.append(&strip);
@@ -146,14 +148,15 @@ impl Ui {
         c.picker.set_visible(resolving);
         c.unreadable.set_visible(stuck);
         if stuck {
-            c.unreadable_text.set_label(&format!(
-                "\"Remove the markers\" keeps every line from both versions and drops only the marker lines, for you to read over. {}Before either, the note as it is now is copied to .icloud-notes/conflict-backups in your notes folder, so nothing is lost.",
-                if synced_copy {
-                    "\"Use the last synced version\" goes back to the text last synced with iCloud. "
-                } else {
-                    ""
-                }
-            ));
+            c.unreadable_text.set_label(&if synced_copy {
+                tr(
+                    "\"Remove the markers\" keeps every line from both versions and drops only the marker lines, for you to read over. \"Use the last synced version\" goes back to the text last synced with iCloud. Before either, the note as it is now is copied to .icloud-notes/conflict-backups in your notes folder, so nothing is lost.",
+                )
+            } else {
+                tr(
+                    "\"Remove the markers\" keeps every line from both versions and drops only the marker lines, for you to read over. Before either, the note as it is now is copied to .icloud-notes/conflict-backups in your notes folder, so nothing is lost.",
+                )
+            });
             c.synced.set_visible(synced_copy);
         }
         if resolving {
@@ -176,17 +179,18 @@ impl Ui {
         let n = blocks.len();
         let banner = card_box("warning-card");
         let text = omui::label(
-            &format!(
-                "It was edited on this computer and in iCloud before the two could sync. {}",
-                if n == 1 {
-                    "Pick the version to keep.".to_string()
-                } else {
-                    format!("Pick the version to keep for each of the {n} changes.")
-                }
-            ),
+            &if n == 1 {
+                tr("It was edited on this computer and in iCloud before the two could sync. Pick the version to keep.")
+            } else {
+                trn!(
+                    "It was edited on this computer and in iCloud before the two could sync. Pick the version to keep for each of the {n} changes.",
+                    n
+                )
+            },
             "",
         );
-        banner.append(&warning("This note changed in two places", &text));
+        let heading = omui::label(&tr("This note changed in two places"), "");
+        banner.append(&warning(&heading, &text));
         c.column.append(&banner);
         let choices = c.choices();
         let wide = self.editor.widget.width() >= SIDE_BY_SIDE + 64 || self.editor.widget.width() == 0;
@@ -196,7 +200,11 @@ impl Ui {
                 .spacing(8)
                 .build();
             if n > 1 {
-                hunk.append(&omui::label(&format!("Change {} of {n}", index + 1), "caption"));
+                let (at, of) = (
+                    omui::i18n::format_int(index as i64 + 1),
+                    omui::i18n::format_int(n as i64),
+                );
+                hunk.append(&omui::label(&tr!("Change {} of {}", at, of), "caption"));
             }
             let context = |lines: &[String]| {
                 let label = omui::label(&lines.join("\n"), "dim-label");
@@ -216,11 +224,19 @@ impl Ui {
                 .homogeneous(wide)
                 .build();
             let choice = choices.get(index).cloned().unwrap_or_default();
-            sides.append(&self.version_card(index, "local", "This computer", name::COMPUTER, &block.local, &choice));
+            sides.append(&self.version_card(
+                index,
+                "local",
+                &tr("This computer"),
+                name::COMPUTER,
+                &block.local,
+                &choice,
+            ));
+            // The brand, in every language.
             sides.append(&self.version_card(index, "remote", "iCloud", name::CLOUD, &block.remote, &choice));
             hunk.append(&sides);
             let both = gtk::CheckButton::builder()
-                .label("Keep both, this computer's version first")
+                .label(tr("Keep both, this computer's version first"))
                 .active(choice == "both")
                 .build();
             // Unticked, the block has no version picked again.
@@ -237,7 +253,7 @@ impl Ui {
         let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         buttons.append(
             &gtk::Button::builder()
-                .label("Edit as text")
+                .label(tr("Edit as text"))
                 .css_classes(["flat"])
                 .hexpand(true)
                 .halign(gtk::Align::Start)
@@ -245,8 +261,11 @@ impl Ui {
                 .build(),
         );
         if n > 1 {
-            for (label, side) in [("All from this computer", "local"), ("All from iCloud", "remote")] {
-                let button = gtk::Button::with_label(label);
+            for (label, side) in [
+                (tr("All from this computer"), "local"),
+                (tr("All from iCloud"), "remote"),
+            ] {
+                let button = gtk::Button::with_label(&label);
                 let weak = Rc::downgrade(self);
                 button.connect_clicked(move |_| {
                     if let Some(ui) = weak.upgrade() {
@@ -258,7 +277,7 @@ impl Ui {
             }
         }
         let keep = gtk::Button::builder()
-            .label("Keep selected")
+            .label(tr("Keep selected"))
             .css_classes(["suggested-action"])
             .action_name("win.resolve-conflicts")
             .build();
@@ -301,13 +320,15 @@ impl Ui {
         let changed = lines.iter().filter(|l| l.changed).count();
         let differs = match changed {
             0 => String::new(),
-            1 => "1 line differs".to_string(),
-            n => format!("{n} lines differ"),
+            n => trn!("{n} lines differ", n),
         };
         head.append(&omui::label(&differs, "caption"));
         column.append(&head);
         if lines.is_empty() {
-            column.append(&omui::label("Empty. This version removed these lines.", "dim-label"));
+            column.append(&omui::label(
+                &tr("Empty. This version removed these lines."),
+                "dim-label",
+            ));
         }
         for line in lines {
             // The Markdown as written: rendered, a line from iCloud could load

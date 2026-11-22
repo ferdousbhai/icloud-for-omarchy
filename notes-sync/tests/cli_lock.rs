@@ -45,15 +45,15 @@ fn hold(path: &str, owner: &str) -> File {
     file
 }
 
-/// The contract error object a machine-mode failure prints: the whole of
-/// stdout (stderr carries no JSON).
+/// The contract error object a machine-mode failure prints: the last line
+/// of stderr (stdout holds only results, so it is empty).
 fn json_error(o: &Output) -> Value {
     assert!(
-        !String::from_utf8_lossy(&o.stderr).contains("\"ok\""),
-        "an error object on stderr: {}",
-        String::from_utf8_lossy(&o.stderr)
+        o.stdout.is_empty(),
+        "a failure on stdout: {}",
+        String::from_utf8_lossy(&o.stdout)
     );
-    let doc = serde_json::from_slice::<Value>(&o.stdout).unwrap_or(Value::Null);
+    let doc = icloud_session::output::error_line(&o.stderr).unwrap_or(Value::Null);
     assert_eq!(doc["ok"], false, "{doc}");
     doc["error"].clone()
 }

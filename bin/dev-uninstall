@@ -9,7 +9,8 @@ bin_dir="$HOME/.local/bin"
 services_dir="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services"
 
 rm -f "$services_dir/$service"
-rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/io.github.ferdousbhai.ICloudSession.desktop"
+# The sign-in window's desktop entry, under its name and the one an earlier dev install gave it.
+rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/"{icloud-session,io.github.ferdousbhai.ICloudSession}.desktop
 for bin in icloud-sessiond icloud-session icloud-session-signin; do
   rm -f "$bin_dir/$bin"
 done

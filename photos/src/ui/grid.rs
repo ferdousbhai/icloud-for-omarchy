@@ -84,12 +84,15 @@ fn month_key(unix: i64) -> i64 {
     }
 }
 
+/// A month's header in the language in use: its name and year, in the order
+/// and form the catalog's `%B %Y` says (a `strftime` format a translation
+/// may change, `%Y年%m月`), with the month's name from the language's locale.
+/// The rows are built again after a switch, and with them these.
 fn month_label(key: i64) -> Arc<str> {
     let (year, month) = ((key - 1).div_euclid(12), (key - 1).rem_euclid(12) + 1);
     glib::DateTime::from_local(year as i32, month as i32, 1, 0, 0, 0.0)
         .ok()
-        .and_then(|dt| dt.format("%B %Y").ok())
-        .map(|s| Arc::from(s.as_str()))
+        .map(|dt| Arc::from(omui::i18n::format_datetime(&dt, &omui::tr("%B %Y")).as_str()))
         .unwrap_or_else(|| Arc::from(""))
 }
 
@@ -302,7 +305,8 @@ impl Grid {
             .child(&list)
             .vexpand(true)
             .build();
-        let empty = omui::EmptyState::new(Some(name::IMAGE), "No photos yet", None);
+        // Its text is the window's to give, with each snapshot.
+        let empty = omui::EmptyState::new(Some(name::IMAGE), "", None);
         let root = gtk::Stack::new();
         root.add_named(&scrolled, Some("grid"));
         root.add_named(&empty.widget, Some("empty"));

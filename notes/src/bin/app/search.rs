@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use gtk::glib;
 use icloud_notes::backend::ReadNote;
+use omui::tr;
 use serde_json::{Value, json};
 
 use crate::lists::Hit;
@@ -65,7 +66,7 @@ impl Ui {
         let Some(ui) = self.weak().upgrade() else { return };
         let Some(recall) = recall else {
             if alone {
-                ui.set_notice("Recall unavailable or warming up · showing text matches");
+                ui.set_notice(|| tr("Recall unavailable or warming up · showing text matches"));
             }
             return;
         };
@@ -115,11 +116,11 @@ impl Ui {
                 self.hits
                     .replace(Some(ranked.iter().map(|found| hit(found, false)).collect()));
             }
-            self.set_notice(if ranked.is_some() {
-                "Matches by meaning · local Recall"
+            if ranked.is_some() {
+                self.set_notice(|| tr("Matches by meaning · local Recall"));
             } else {
-                "Recall unavailable or warming up · showing text matches"
-            });
+                self.set_notice(|| tr("Recall unavailable or warming up · showing text matches"));
+            }
         } else if let Some(ranked) = ranked {
             let mut hits = self.hits.borrow_mut();
             let Some(hits) = hits.as_mut() else { return };

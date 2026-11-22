@@ -1,0 +1,11 @@
+# A reminder added, and the window closed while its write is on its way (the fake answers a "Slow" title late):
+# the app stays, windowless, until the write is done, then ends by itself. close.after checks that the write was
+# answered and the cache took it, which only the finished request leaves; the wait below fails if the app is still
+# running after five seconds (a sync timer or the sign-in banner's watch keeping it).
+{"do":"wait","role":"list-item","name":"Milk","visible":true,"timeout_ms":15000}
+{"do":"click","role":"list-item","name":"Groceries, 2"}
+{"do":"wait","role":"list-item","name":"Eggs","visible":true}
+{"do":"type","text":"Slow tea","role":"text-box","name":"New reminder (Ctrl+N)"}
+{"do":"key","keys":"Return"}
+{"do":"close"}
+{"do":"wait","role":"button","name":"never there"}

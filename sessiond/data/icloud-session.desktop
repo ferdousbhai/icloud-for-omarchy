@@ -7,3 +7,4 @@ Icon=dialog-password
 Terminal=false
 NoDisplay=true
 Categories=Network;
+StartupWMClass=icloud-session

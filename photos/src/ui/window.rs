@@ -19,20 +19,21 @@ use icloud_photos::sync::{self, Progress, Report};
 use icloud_photos::thumbs::{self, Downloader, Job, Priority};
 use icloud_photos::transport::{Error, Result, SignInState, Transport};
 use omui::icons::name;
+use omui::{ShortcutOverlay, ShortcutSection, i18n, tr, trn};
 
 use super::albums::Albums;
+use super::banner::BannerView;
 use super::decode;
 use super::grid::Grid;
 use super::upload::UploadMsg;
 use super::viewer::Viewer;
+use super::{Relabel, relabel};
 
 pub enum Msg {
     TransportReady(Result<Arc<dyn Transport>>),
     SyncProgress(Progress),
     SyncDone(Result<Report>),
     Download(thumbs::Event),
-    Deleted(String, Result<Modified>),
-    Restored(String, Result<Modified>),
     Upload(UploadMsg),
     /// icloud-sessiond's sign-in state changed (or was first read).
     SignIn(SignInState),
@@ -89,29 +90,85 @@ struct Snapshot {
 }
 
 impl Snapshot {
-    fn title(&self) -> &str {
+    /// The album's name, which is the user's and never translated, or All Photos.
+    fn title(&self) -> String {
         self.album
             .as_ref()
             .and_then(|id| self.albums.iter().find(|album| &album.id == id))
-            .map_or("All Photos", |album| album.name.as_str())
+            .map_or_else(|| tr("All Photos"), |album| album.name.clone())
     }
 }
 
-/// How often a focused window re-syncs, and the background cadence.
+/// What the line under the search entry says about the matches shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Notice {
+    /// No search.
+    None,
+    Searching,
+    /// Recall ranked every match: none by filename.
+    MeaningOnly,
+    /// Filename matches, and this many more by meaning (maybe none).
+    Filenames {
+        names: usize,
+        meaning: usize,
+    },
+    /// `~` asked for matches by meaning, and Recall could not give them.
+    RecallUnavailable,
+    /// Without Recall: matches by filename alone.
+    FilenamesOnly,
+}
+
+impl Notice {
+    /// In the language in use.
+    fn text(self) -> String {
+        match self {
+            Notice::None => String::new(),
+            Notice::Searching => tr("Searching…"),
+            Notice::MeaningOnly => tr("Matches by meaning · cached thumbnails only"),
+            Notice::Filenames { names, meaning: 0 } => trn("{n} filename matches", names as i64),
+            Notice::Filenames { names, meaning } => omui::trnf(
+                "{n} filename matches · {} by meaning",
+                names as i64,
+                &[&i18n::format_int(meaning as i64)],
+            ),
+            Notice::RecallUnavailable => tr("Recall unavailable or warming up · filename matches"),
+            Notice::FilenamesOnly => tr("Filename matches"),
+        }
+    }
+}
+
+/// How old the last sync may be when the window comes back (to the front, or on screen) before it syncs again, and
+/// how often a window on screen syncs by itself.
 const FOCUS_SYNC_AFTER: Duration = Duration::from_secs(120);
 const PERIODIC_SYNC_SECS: u32 = 600;
+
+/// The periodic sync runs only for a window on screen: shown, and not suspended by the compositor.
+fn timer_syncs(visible: bool, suspended: bool) -> bool {
+    visible && !suspended
+}
+
+/// A window coming back syncs once its last sync, at `last`, is [`FOCUS_SYNC_AFTER`] old. Before the first sync
+/// has ended there is one on its way already.
+fn stale_on_return(last: Option<Instant>) -> bool {
+    last.is_some_and(|at| at.elapsed() > FOCUS_SYNC_AFTER)
+}
 
 pub struct App {
     pub window: gtk::ApplicationWindow,
     shell: Rc<omui::Shell>,
     pub banner: omui::Banner,
+    /// What the banner says, written again after a switch of language.
+    pub banner_view: RefCell<BannerView>,
     /// The photos, with the viewer pushed over them.
     pub nav: omui::Nav,
     grid_title: omui::Title,
+    sidebar_title: omui::Title,
     pub split: omui::Split,
-    pub status: gtk::Label,
+    /// The sync status line under the albums.
+    status: Relabel<gtk::Label>,
     search: gtk::SearchEntry,
     search_hint: gtk::Label,
+    search_notice: Relabel<gtk::Label>,
     search_query: RefCell<String>,
     pub spinner: gtk::Spinner,
     pub grid: Grid,
@@ -141,6 +198,50 @@ pub struct App {
     /// Why the account was signed out, as the daemon last said.
     pub sign_out_reason: RefCell<Option<String>>,
     pub upload: RefCell<Option<super::upload::UploadUi>>,
+    /// The desktop's file chooser (the portal's), for uploads and the originals' folder.
+    pub picker: Rc<dyn omui::FilePicker>,
+    /// The window's menus, filled again in the language of the moment.
+    main_menu: gio::Menu,
+}
+
+/// The main menu's items, in the language in use.
+fn fill_main_menu(menu: &gio::Menu) {
+    menu.remove_all();
+    menu.append(Some(&tr("Sync Now")), Some("win.refresh"));
+    menu.append(Some(&tr("Upload…")), Some("win.upload"));
+    menu.append(Some(&tr("Preferences")), Some("win.preferences"));
+    menu.append(Some(&tr("Keyboard Shortcuts")), Some("win.shortcuts"));
+    menu.append(Some(&tr("About Photos")), Some("win.about"));
+}
+
+/// Every shortcut of the window, for its overlay (`?`, F1) and as the
+/// README's table lists them. Key names are not translated.
+pub fn shortcut_sections() -> Vec<ShortcutSection> {
+    vec![
+        ShortcutSection::new(
+            &tr("Anywhere"),
+            &[
+                ("Ctrl+R / F5", &tr("Sync with iCloud")),
+                ("Ctrl+U", &tr("Upload photos and videos")),
+                ("Ctrl+,", &tr("Preferences")),
+                ("? / F1", &tr("Show the keyboard shortcuts")),
+                ("Ctrl+W", &tr("Close the window")),
+                ("Ctrl+Q", &tr("Quit")),
+            ],
+        ),
+        ShortcutSection::new(
+            &tr("Viewer"),
+            &[
+                ("Left", &tr("Previous photo")),
+                ("Right", &tr("Next photo")),
+                ("Ctrl+S", &tr("Download the original")),
+                ("Ctrl+O", &tr("Open the original in your default app")),
+                ("Ctrl+C", &tr("Copy the image")),
+                ("Delete", &tr("Move to Recently Deleted, after a question")),
+                ("Escape / Alt+Left", &tr("Back to the grid")),
+            ],
+        ),
+    ]
 }
 
 pub fn build(application: &gtk::Application) -> Rc<App> {
@@ -166,6 +267,7 @@ pub fn build(application: &gtk::Application) -> Rc<App> {
         .build();
     status.add_css_class("dim-label");
     status.add_css_class("caption");
+    let status_text = relabel(&status);
     let spinner = omui::spinner();
     spinner.set_visible(false);
     let footer = gtk::Box::builder()
@@ -177,13 +279,13 @@ pub fn build(application: &gtk::Application) -> Rc<App> {
         .build();
     footer.append(&spinner);
     footer.append(&status);
-    let sidebar_header = omui::header(Some(omui::Title::new("Albums", "").widget.upcast_ref()));
+    let sidebar_title = omui::Title::new(&tr("Albums"), "");
+    let sidebar_header = omui::header(Some(sidebar_title.widget.upcast_ref()));
     let menu = gio::Menu::new();
-    menu.append(Some("Sync Now"), Some("win.refresh"));
-    menu.append(Some("Upload…"), Some("win.upload"));
-    menu.append(Some("Preferences"), Some("win.preferences"));
-    menu.append(Some("About Photos"), Some("win.about"));
-    sidebar_header.pack_end(&omui::icon_menu_button(name::MENU, "Main Menu", &menu));
+    fill_main_menu(&menu);
+    let menu_button = omui::icon_menu_button(name::MENU, "", &menu);
+    i18n::bind_tooltip(&menu_button, "Main Menu");
+    sidebar_header.pack_end(&menu_button);
     let sidebar = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .css_classes(["sidebar"])
@@ -194,23 +296,30 @@ pub fn build(application: &gtk::Application) -> Rc<App> {
 
     // Content: the grid page, with the viewer pushed on top.
     let grid = Grid::new();
-    let grid_title = omui::Title::new("All Photos", "");
+    let grid_title = omui::Title::new(&tr("All Photos"), "");
     let grid_header = omui::header(Some(grid_title.widget.upcast_ref()));
     // Shown while the window is too narrow for both panes.
-    let back = omui::icon_button(name::BACK, "Albums");
+    let back = omui::icon_button(name::BACK, "");
+    i18n::bind_tooltip(&back, "Albums");
     back.set_visible(false);
     grid_header.pack_start(&back);
-    let upload = omui::icon_button(name::ADD, "Upload Photos (Ctrl+U)");
+    let upload = omui::icon_button(name::ADD, "");
+    i18n::bind_tooltip(&upload, "Upload Photos (Ctrl+U)");
     upload.set_action_name(Some("win.upload"));
     grid_header.pack_end(&upload);
-    let refresh = omui::icon_button(name::REFRESH, "Sync Now (Ctrl+R)");
+    let refresh = omui::icon_button(name::REFRESH, "");
+    i18n::bind_tooltip(&refresh, "Sync Now (Ctrl+R)");
     refresh.set_action_name(Some("win.refresh"));
     grid_header.pack_end(&refresh);
-    let search = gtk::SearchEntry::builder()
-        .placeholder_text("Search this album")
-        .hexpand(true)
-        .build();
+    let search = gtk::SearchEntry::builder().hexpand(true).build();
+    // The placeholder is also what a screen reader calls the entry.
+    i18n::bind(&search, |search| {
+        let text = tr("Search this album");
+        search.set_placeholder_text(Some(&text));
+        search.update_property(&[gtk::accessible::Property::Label(&text)]);
+    });
     let search_hint = gtk::Label::builder().xalign(0.0).css_classes(["dim-label"]).build();
+    let search_notice = relabel(&search_hint);
     let search_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
     search_box.set_margin_start(12);
     search_box.set_margin_end(12);
@@ -242,7 +351,9 @@ pub fn build(application: &gtk::Application) -> Rc<App> {
             }
         }
     });
-    let banner = omui::Banner::new("iCloud needs you to sign in again", Some("Sign In"));
+    let banner_view = BannerView::SignIn(None);
+    let (title, button) = banner_view.text();
+    let banner = omui::Banner::new(&title, button.as_deref());
     let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
     body.append(&banner.widget);
     split.widget.set_vexpand(true);
@@ -250,8 +361,7 @@ pub fn build(application: &gtk::Application) -> Rc<App> {
 
     let window = gtk::ApplicationWindow::builder()
         .application(application)
-        .title("Photos")
-        .icon_name("com.ferdousbhai.IcloudPhotos")
+        .icon_name("icloud-photos")
         .default_width(1100)
         .default_height(760)
         .width_request(360)
@@ -260,18 +370,22 @@ pub fn build(application: &gtk::Application) -> Rc<App> {
     // Each pane has a header of its own.
     omui::claim_titlebar(&window);
     let shell = omui::Shell::new(&window, &body);
+    i18n::bind(&window, |window| window.set_title(Some(&tr("Photos"))));
 
     let (tx, rx) = async_channel::unbounded::<Msg>();
     let app = Rc::new(App {
         window,
         shell,
         banner,
+        banner_view: RefCell::new(banner_view),
         nav,
         grid_title,
+        sidebar_title,
         split,
-        status,
+        status: status_text,
         search,
         search_hint,
+        search_notice,
         search_query: RefCell::new(String::new()),
         spinner,
         grid,
@@ -296,6 +410,8 @@ pub fn build(application: &gtk::Application) -> Rc<App> {
         signing_in: Cell::new(false),
         sign_out_reason: RefCell::new(None),
         upload: RefCell::new(None),
+        picker: Rc::new(omui::PortalFilePicker::new()),
+        main_menu: menu,
     });
 
     let a = app.clone();
@@ -368,14 +484,26 @@ impl App {
 
         let a = self.clone();
         self.window.connect_is_active_notify(move |w| {
-            if w.is_active() && a.last_sync.get().is_some_and(|t| t.elapsed() > FOCUS_SYNC_AFTER) {
+            if w.is_active() && stale_on_return(a.last_sync.get()) {
                 a.sync();
             }
         });
+        // Back on screen without the keyboard (its workspace shown on another monitor): the sync the timer left out
+        // while nobody could see the window.
+        let a = self.clone();
+        self.window.connect_suspended_notify(move |w| {
+            if !w.is_suspended() && stale_on_return(a.last_sync.get()) {
+                a.sync();
+            }
+        });
+        // iCloud does not tell a web client that the library changed, so it is asked on a timer, and only while the
+        // window is on screen: hidden, minimised or on another workspace, nobody sees what a sync would bring.
         let weak = Rc::downgrade(self);
         glib::timeout_add_seconds_local(PERIODIC_SYNC_SECS, move || match weak.upgrade() {
             Some(a) => {
-                a.sync();
+                if timer_syncs(a.window.is_visible(), a.window.is_suspended()) {
+                    a.sync();
+                }
                 glib::ControlFlow::Continue
             }
             None => glib::ControlFlow::Break,
@@ -384,6 +512,24 @@ impl App {
         self.add_actions();
         self.viewer.connect(self);
         super::upload::connect_drop(self);
+
+        // After a switch of language, what is not bound to a fixed string is written again: the menus and titles
+        // here, the sidebar, grid and search line from a fresh snapshot (its month headers and counts too), the
+        // viewer's lines and the banner. The status line and the upload dialog's lines follow by themselves.
+        let weak = Rc::downgrade(self);
+        i18n::on_change(&self.window, move || {
+            if let Some(a) = weak.upgrade() {
+                a.relabel();
+            }
+        });
+    }
+
+    fn relabel(self: &Rc<Self>) {
+        fill_main_menu(&self.main_menu);
+        self.viewer.relabel(self);
+        self.sidebar_title.set_title(&tr("Albums"));
+        self.render_banner();
+        self.load_snapshot();
     }
 
     fn add_actions(self: &Rc<Self>) {
@@ -399,6 +545,21 @@ impl App {
         action("regrid", Box::new(move || a.grid.regrid()));
         let a = self.clone();
         action("about", Box::new(move || about(&a.window)));
+        // `?` and F1: every shortcut, from the menu too. `?` is a character in the search entry, where it types.
+        let shortcuts = ShortcutOverlay::new(shortcut_sections);
+        shortcuts.install(&self.window, false);
+        let (overlay, window) = (shortcuts.clone(), self.window.downgrade());
+        action(
+            "shortcuts",
+            Box::new(move || {
+                if let Some(window) = window.upgrade() {
+                    overlay.present(&window);
+                }
+            }),
+        );
+        // Ctrl+Q closes every window and Ctrl+W this one, each as its close button would; an upload or a delete on
+        // its way holds the application until it is done.
+        omui::quit_keys(&self.window);
         let open = gio::SimpleAction::new("open-asset", Some(glib::VariantTy::STRING));
         let a = self.clone();
         open.connect_activate(move |_, v| {
@@ -407,13 +568,21 @@ impl App {
             }
         });
         win.add_action(&open);
+        // A file to upload by its path, as a drop on the window does: for what drives the window from outside it
+        // (`dev/preview.sh`, over the session bus), where no file chooser can be typed into.
+        let upload_file = gio::SimpleAction::new("upload-file", Some(glib::VariantTy::STRING));
+        let a = self.clone();
+        upload_file.connect_activate(move |_, v| {
+            if let Some(path) = v.and_then(|v| v.get::<String>()) {
+                super::upload::start(&a, vec![PathBuf::from(path)]);
+            }
+        });
+        win.add_action(&upload_file);
 
         if let Some(app) = win.application() {
             app.set_accels_for_action("win.refresh", &["<Primary>r", "F5"]);
             app.set_accels_for_action("win.upload", &["<Primary>u"]);
             app.set_accels_for_action("win.preferences", &["<Primary>comma"]);
-            app.set_accels_for_action("window.close", &["<Primary>w"]);
-            app.set_accels_for_action("app.quit", &["<Primary>q"]);
         }
     }
 
@@ -431,7 +600,7 @@ impl App {
             return;
         }
         let tx = self.tx.clone();
-        self.set_busy(true, "Connecting to iCloud…");
+        self.set_busy(true, || tr("Connecting to iCloud…"));
         std::thread::spawn(move || {
             let _ = tx.send_blocking(Msg::TransportReady(icloud_photos::session::connect()));
         });
@@ -460,26 +629,25 @@ impl App {
                 );
                 *self.transport.borrow_mut() = Some(t);
                 *self.downloader.borrow_mut() = Some(pool);
-                self.set_busy(false, "");
+                self.set_idle();
                 self.sync();
             }
             Msg::TransportReady(Err(e)) => {
-                self.set_busy(false, "");
-                self.fail("Could not connect to iCloud", &e);
+                self.set_idle();
+                self.fail(&tr("Could not connect to iCloud"), &e);
             }
-            Msg::SyncProgress(p) => {
-                let text = match p {
-                    Progress::Albums => "Syncing albums…".to_owned(),
-                    Progress::Assets(n) => format!("Syncing… {n} photos"),
-                    Progress::AlbumMembers { done, total } => format!("Syncing album {} of {total}…", done + 1),
-                    Progress::Changes(n) => format!("Syncing {n} changes…"),
-                };
-                self.status.set_label(&text);
-            }
+            Msg::SyncProgress(p) => self.status.set(move || match p {
+                Progress::Albums => tr("Syncing albums…"),
+                Progress::Assets(n) => trn("Syncing… {n} photos", n as i64),
+                Progress::AlbumMembers { done, total } => omui::tr!(
+                    "Syncing album {} of {}…",
+                    i18n::format_int(done as i64 + 1),
+                    i18n::format_int(total as i64)
+                ),
+                Progress::Changes(n) => trn("Syncing {n} changes…", n as i64),
+            }),
             Msg::SyncDone(result) => self.on_sync_done(result),
             Msg::Download(e) => self.on_download(e),
-            Msg::Deleted(id, result) => self.on_deleted(&id, result),
-            Msg::Restored(id, result) => self.on_restored(&id, result),
             Msg::Upload(m) => super::upload::on_msg(self, m),
             Msg::SignIn(s) => self.on_sign_in_state(s),
             Msg::SignInFailed(e) => self.on_sign_in_failed(&e),
@@ -490,23 +658,27 @@ impl App {
         self.shell.toast(text);
     }
 
-    /// Report an error: the banner for a lapsed sign-in, a toast otherwise.
+    /// Report an error: the banner for a lapsed sign-in, a toast otherwise. `what` is in the language in use; the
+    /// error's own words are the library's, in English.
     pub fn fail(&self, what: &str, e: &Error) {
         if e.is_sign_in() {
             self.show_sign_in_banner();
         } else {
             eprintln!("icloud-photos: {what}: {e}");
-            self.toast(&format!("{what}: {e}"));
+            self.toast(&omui::tr!("{}: {}", what, e));
         }
     }
 
-    fn set_busy(&self, busy: bool, text: &str) {
+    /// The spinner and `text` on the status line, which builds it again after a switch of language.
+    fn set_busy(&self, busy: bool, text: impl Fn() -> String + 'static) {
         self.spinner.set_visible(busy);
-        if busy {
-            self.status.set_label(text);
-        } else {
-            self.update_status();
-        }
+        self.status.set(text);
+    }
+
+    /// No spinner, and the library's count on the status line.
+    fn set_idle(&self) {
+        self.spinner.set_visible(false);
+        self.update_status();
     }
 
     fn update_status(&self) {
@@ -517,16 +689,10 @@ impl App {
             .ok()
             .flatten()
             .and_then(|s| s.parse::<i64>().ok())
-            .and_then(|t| glib::DateTime::from_unix_local(t).ok())
-            .and_then(|d| d.format("%H:%M").ok());
-        let photos = if count == 1 {
-            "1 item".to_owned()
-        } else {
-            format!("{count} items")
-        };
-        self.status.set_label(&match when {
-            Some(w) => format!("{photos} · synced {w}"),
-            None => photos,
+            .and_then(|t| glib::DateTime::from_unix_local(t).ok());
+        self.status.set(move || match &when {
+            Some(when) => omui::trnf("{n} items · synced {}", count, &[&i18n::format_time_short(when)]),
+            None => trn("{n} items", count),
         });
     }
 
@@ -545,7 +711,7 @@ impl App {
             self.sync_again.set(true);
             return;
         }
-        self.set_busy(true, "Syncing…");
+        self.set_busy(true, || tr("Syncing…"));
         let (tx, dirs) = (self.tx.clone(), self.dirs.clone());
         std::thread::spawn(move || {
             let ptx = tx.clone();
@@ -559,7 +725,7 @@ impl App {
     fn on_sync_done(self: &Rc<Self>, result: Result<Report>) {
         self.syncing.set(false);
         self.last_sync.set(Some(Instant::now()));
-        self.set_busy(false, "");
+        self.set_idle();
         match result {
             Ok(report) => {
                 self.banner.set_revealed(false);
@@ -574,7 +740,7 @@ impl App {
                     self.queue_all_originals();
                 }
             }
-            Err(e) => self.fail("Sync failed", &e),
+            Err(e) => self.fail(&tr("Sync failed"), &e),
         }
         if self.sync_again.replace(false) {
             self.sync();
@@ -599,7 +765,7 @@ impl App {
         let (path, album, columns) = (self.dirs.catalog(), self.album.borrow().clone(), self.grid.columns());
         let query = self.search_query.borrow().clone();
         self.search_hint.set_visible(!query.is_empty());
-        self.search_hint.set_text("Searching…");
+        self.search_notice.set(|| Notice::Searching.text());
         let a = self.clone();
         glib::spawn_future_local(async move {
             let snap = gio::spawn_blocking(move || {
@@ -621,25 +787,27 @@ impl App {
                 let notice = filter_snapshot_with(&mut snap, &a.search_query.borrow(), |_, _| None);
                 (snap, notice)
             });
-            a.search_hint.set_text(&notice);
+            a.search_notice.set(move || notice.text());
             a.apply_snapshot(snap);
         });
     }
 
     fn apply_snapshot(&self, snap: Snapshot) {
         *self.album.borrow_mut() = snap.album.clone();
-        self.grid_title.set_title(snap.title());
+        self.grid_title.set_title(&snap.title());
         self.reloading.set(true);
         self.albums.set(snap.total, &snap.albums, snap.album.as_deref());
         self.reloading.set(false);
         let first = snap.first_sync;
-        self.grid
-            .empty
-            .set_title(if first { "Getting your photos" } else { "No photos here" });
-        self.grid.empty.set_description(if first {
-            "The first sync lists your whole library; thumbnails follow as you scroll."
+        self.grid.empty.set_title(&if first {
+            tr("Getting your photos")
         } else {
-            "Photos you add in iCloud, or upload from here, appear in this view."
+            tr("No photos here")
+        });
+        self.grid.empty.set_description(&if first {
+            tr("The first sync lists your whole library; thumbnails follow as you scroll.")
+        } else {
+            tr("Photos you add in iCloud, or upload from here, appear in this view.")
         });
         self.grid.set_rows(snap.tiles, snap.rows, snap.columns);
     }
@@ -713,7 +881,7 @@ impl App {
                         || self.want_open.borrow().contains(&e.id)
                         || self.want_toast.borrow().contains(&e.id)
                     {
-                        self.fail("The Live Photo's video did not download", err);
+                        self.fail(&tr("The Live Photo's video did not download"), err);
                     } else {
                         eprintln!("icloud-photos: Live Photo video {}: {err}", e.id);
                     }
@@ -722,9 +890,9 @@ impl App {
                     self.launch(&path);
                 }
                 if self.want_toast.borrow_mut().remove(&e.id) {
-                    let saved = format!("Saved {}", path.file_name().unwrap_or_default().to_string_lossy());
+                    let saved = omui::tr!("Saved {}", path.file_name().unwrap_or_default().to_string_lossy());
                     let (win, file) = (self.window.clone(), gio::File::for_path(&path));
-                    self.shell.toast_action(&saved, "Show", 5, move || {
+                    self.shell.toast_action(&saved, &tr("Show"), 5, move || {
                         gtk::FileLauncher::new(Some(&file)).open_containing_folder(
                             Some(&win),
                             gio::Cancellable::NONE,
@@ -738,7 +906,7 @@ impl App {
                 let wanted = job != Job::Thumb
                     && (self.want_open.borrow_mut().remove(&e.id) | self.want_toast.borrow_mut().remove(&e.id));
                 if err.is_sign_in() || wanted || job == Job::Medium {
-                    self.fail("Download failed", &err);
+                    self.fail(&tr("Download failed"), &err);
                 } else {
                     eprintln!("icloud-photos: {job:?} {}: {err}", e.id);
                 }
@@ -766,12 +934,12 @@ impl App {
             if open {
                 self.launch(&p);
             } else {
-                self.toast(&format!("Already saved as {}", p.display()));
+                self.toast(&omui::tr!("Already saved as {}", p.display()));
             }
             return;
         }
         let Some(d) = self.downloader.borrow().clone() else {
-            self.toast("Not connected to iCloud yet");
+            self.toast(&tr("Not connected to iCloud yet"));
             return;
         };
         if open {
@@ -779,7 +947,7 @@ impl App {
         } else {
             self.want_toast.borrow_mut().insert(id.to_owned());
         }
-        self.toast("Downloading the original…");
+        self.toast(&tr("Downloading the original…"));
         d.enqueue(id, Job::Original, Priority::Now);
     }
 
@@ -788,14 +956,14 @@ impl App {
             return;
         };
         let Some(t) = self.transport() else {
-            self.toast("Not connected to iCloud yet");
+            self.toast(&tr("Not connected to iCloud yet"));
             return;
         };
-        let body = format!(
+        let body = omui::tr!(
             "{} moves to Recently Deleted in iCloud on all your devices, and can be recovered there for about 30 days.",
             row.filename
         );
-        let tx = self.tx.clone();
+        let a = self.clone();
         // Enter and Escape cancel: only the button deletes.
         omui::confirm(
             &self.window,
@@ -804,11 +972,13 @@ impl App {
             "Delete",
             omui::Appearance::Destructive,
             move || {
-                std::thread::spawn(move || {
-                    let result =
-                        CloudKit::connect(&*t).and_then(|ck| ck.delete_asset(&row.id, row.change_tag.as_deref()));
-                    let _ = tx.send_blocking(Msg::Deleted(row.id, result));
-                });
+                // A write: it holds the application (`omui::background`) until iCloud has answered and the catalog
+                // says so, even once the last window has closed.
+                let id = row.id.clone();
+                omui::background(
+                    move || CloudKit::connect(&*t).and_then(|ck| ck.delete_asset(&row.id, row.change_tag.as_deref())),
+                    move |result| a.on_deleted(&id, flatten(result)),
+                );
             },
         );
     }
@@ -822,29 +992,31 @@ impl App {
                 self.update_status();
                 let (a, id, tag) = (self.clone(), id.to_owned(), m.change_tag);
                 self.shell
-                    .toast_action("Moved to Recently Deleted", "Undo", 10, move || {
+                    .toast_action(&tr("Moved to Recently Deleted"), &tr("Undo"), 10, move || {
                         a.restore(&id, tag.as_deref())
                     });
             }
             Err(Error::CloudKit { code, .. }) if code == "CONFLICT" => {
-                self.toast("This photo changed on another device; syncing, then try again");
+                self.toast(&tr("This photo changed on another device; syncing, then try again"));
                 self.sync();
             }
-            Err(e) => self.fail("Delete failed", &e),
+            Err(e) => self.fail(&tr("Delete failed"), &e),
         }
     }
 
     /// Undo a delete: bring the photo back from Recently Deleted.
     fn restore(self: &Rc<Self>, id: &str, change_tag: Option<&str>) {
         let Some(t) = self.transport() else {
-            self.toast("Not connected to iCloud yet");
+            self.toast(&tr("Not connected to iCloud yet"));
             return;
         };
-        let (tx, id, tag) = (self.tx.clone(), id.to_owned(), change_tag.map(str::to_owned));
-        std::thread::spawn(move || {
-            let result = CloudKit::connect(&*t).and_then(|ck| ck.restore_asset(&id, tag.as_deref()));
-            let _ = tx.send_blocking(Msg::Restored(id, result));
-        });
+        let (a, id, tag) = (self.clone(), id.to_owned(), change_tag.map(str::to_owned));
+        let asset = id.clone();
+        // A write, held as a delete is.
+        omui::background(
+            move || CloudKit::connect(&*t).and_then(|ck| ck.restore_asset(&asset, tag.as_deref())),
+            move |result| a.on_restored(&id, flatten(result)),
+        );
     }
 
     fn on_restored(self: &Rc<Self>, id: &str, result: Result<Modified>) {
@@ -853,15 +1025,15 @@ impl App {
                 let _ = self.cat.mark_restored(id, m.change_tag.as_deref());
                 self.load_snapshot();
                 self.update_status();
-                self.toast("Restored");
+                self.toast(&tr("Restored"));
             }
             Err(Error::CloudKit { code, .. }) if code == "CONFLICT" => {
-                self.toast(
+                self.toast(&tr(
                     "This photo changed on another device; it is still in Recently Deleted on your iPhone or Mac",
-                );
+                ));
                 self.sync();
             }
-            Err(e) => self.fail("Undo failed", &e),
+            Err(e) => self.fail(&tr("Undo failed"), &e),
         }
     }
 
@@ -885,13 +1057,20 @@ pub fn action(name: &str, f: Box<dyn Fn()>) -> gio::SimpleAction {
     act
 }
 
+/// A write's result from [`omui::background`]: a worker that panicked is an error like any other.
+fn flatten<T>(result: std::result::Result<Result<T>, String>) -> Result<T> {
+    result.unwrap_or_else(|crashed| Err(Error::Io(std::io::Error::other(crashed))))
+}
+
 /// The app's name, version, author, licence and website.
 fn about(window: &gtk::ApplicationWindow) {
     omui::about(
         window,
-        "Photos",
+        &tr("Photos"),
         env!("CARGO_PKG_VERSION"),
-        "Browse, download, upload and delete your iCloud photos, over the shared icloud-session sign-in.\n\nBy Ferdous Bhai. MIT License.",
+        &tr(
+            "Browse, download, upload and delete your iCloud photos, over the shared icloud-session sign-in.\n\nBy Ferdous Bhai. MIT License.",
+        ),
         Some("https://github.com/ferdousbhai/icloud-for-omarchy"),
     );
 }
@@ -927,7 +1106,7 @@ fn snapshot(cat: &Catalog, mut album: Option<String>, columns: usize) -> Snapsho
 /// matches come first, then local Recall's matches by meaning among the
 /// cached thumbnails; "~ query" asks for the matches by meaning alone.
 /// Without Recall (or cached thumbnails) it is a filename search.
-fn filter_snapshot(snap: &mut Snapshot, query: &str) -> String {
+fn filter_snapshot(snap: &mut Snapshot, query: &str) -> Notice {
     filter_snapshot_with(snap, query, |q, records| {
         crate::recall_client::rank("icloud-photos", q, records, 100)
     })
@@ -937,11 +1116,11 @@ fn filter_snapshot_with(
     snap: &mut Snapshot,
     query: &str,
     rank: impl FnOnce(&str, &[serde_json::Value]) -> Option<Vec<String>>,
-) -> String {
+) -> Notice {
     let meaning_only = query.starts_with('~');
     let q = if meaning_only { query[1..].trim() } else { query.trim() };
     if q.is_empty() {
-        return String::new();
+        return Notice::None;
     }
     let records: Vec<_> = snap
         .tiles
@@ -968,13 +1147,11 @@ fn filter_snapshot_with(
         .extend(ranked.iter().flatten().filter_map(|id| rest.remove(id)));
     let meaning = snap.tiles.len() - before;
     snap.rows = super::grid::rows_of(&snap.tiles, snap.columns);
-    let plural = |n: usize, one: &str| format!("{n} {one}{}", if n == 1 { "" } else { "es" });
-    match (ranked.is_some(), names, meaning) {
-        (true, 0, _) => "Matches by meaning · cached thumbnails only".into(),
-        (true, n, 0) => plural(n, "filename match"),
-        (true, n, m) => format!("{} · {m} by meaning", plural(n, "filename match")),
-        (false, _, _) if meaning_only => "Recall unavailable or warming up · filename matches".into(),
-        (false, _, _) => "Filename matches".into(),
+    match (ranked.is_some(), names) {
+        (true, 0) => Notice::MeaningOnly,
+        (true, names) => Notice::Filenames { names, meaning },
+        (false, _) if meaning_only => Notice::RecallUnavailable,
+        (false, _) => Notice::FilenamesOnly,
     }
 }
 
@@ -982,6 +1159,50 @@ fn filter_snapshot_with(
 mod tests {
     use super::*;
     use icloud_photos::cloudkit::Album;
+
+    /// The overlay and the README's table list the same keys.
+    #[test]
+    fn the_shortcuts_overlay_and_the_readme_agree() {
+        let readme = include_str!("../../README.md");
+        let table = readme
+            .split("### Keyboard shortcuts")
+            .nth(1)
+            .and_then(|rest| rest.split("\n\n").find(|part| part.trim_start().starts_with('|')))
+            .expect("the README has a table of shortcuts");
+        let mut documented: Vec<String> = table
+            .lines()
+            .filter_map(|line| line.split('|').nth(1))
+            .flat_map(|keys| {
+                keys.split('`')
+                    .skip(1)
+                    .step_by(2)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let mut overlay: Vec<String> = shortcut_sections()
+            .into_iter()
+            .flat_map(|section| section.keys.into_iter().map(|(key, _)| key))
+            // Keys that do the same share a row, as they do in the README.
+            .flat_map(|keys| keys.split(" / ").map(str::to_owned).collect::<Vec<_>>())
+            .collect();
+        documented.sort();
+        overlay.sort();
+        assert_eq!(documented, overlay);
+    }
+
+    #[test]
+    fn the_periodic_sync_waits_for_a_window_on_screen() {
+        assert!(timer_syncs(true, false));
+        assert!(!timer_syncs(true, true), "minimised or on another workspace");
+        assert!(!timer_syncs(false, false), "hidden");
+        // Coming back syncs once, when the timer's turn was missed, and not before a first sync has ended.
+        assert!(!stale_on_return(None));
+        assert!(!stale_on_return(Some(Instant::now())));
+        if let Some(long_ago) = Instant::now().checked_sub(FOCUS_SYNC_AFTER + Duration::from_secs(1)) {
+            assert!(stale_on_return(Some(long_ago)));
+        }
+    }
 
     #[test]
     fn semantic_without_cached_thumbnails_retains_filename_search() {
@@ -996,13 +1217,19 @@ mod tests {
             month: 1,
         };
         snap.tiles = vec![tile("a", "Holiday.jpg").into(), tile("b", "Work.jpg").into()];
-        assert!(filter_snapshot(&mut snap, "~ HOLIDAY").contains("filename matches"));
+        assert!(
+            filter_snapshot(&mut snap, "~ HOLIDAY")
+                .text()
+                .contains("filename matches")
+        );
         assert_eq!(snap.tiles.len(), 1);
         assert_eq!(snap.tiles[0].id, "a");
     }
 
     #[test]
     fn plain_search_lists_filename_matches_then_matches_by_meaning() {
+        // The plural forms are the catalog's.
+        omui::i18n::register("en", crate::ENGLISH);
         let cached = tempfile::NamedTempFile::new().unwrap();
         let cat = Catalog::open_in_memory().unwrap();
         let tile = |id: &str, filename: &str| {
@@ -1029,27 +1256,30 @@ mod tests {
 
         let mut snap = fresh();
         assert_eq!(
-            filter_snapshot_with(&mut snap, "beach", ranked),
+            filter_snapshot_with(&mut snap, "beach", ranked).text(),
             "1 filename match · 1 by meaning"
         );
         assert_eq!(ids(&snap), ["b", "c"]);
 
         let mut snap = fresh();
         assert_eq!(
-            filter_snapshot_with(&mut snap, "sunset", ranked),
+            filter_snapshot_with(&mut snap, "sunset", ranked).text(),
             "Matches by meaning · cached thumbnails only"
         );
         assert_eq!(ids(&snap), ["c", "b"]);
 
         let mut snap = fresh();
         assert_eq!(
-            filter_snapshot_with(&mut snap, "~ beach", ranked),
+            filter_snapshot_with(&mut snap, "~ beach", ranked).text(),
             "Matches by meaning · cached thumbnails only"
         );
         assert_eq!(ids(&snap), ["c", "b"]);
 
         let mut snap = fresh();
-        assert_eq!(filter_snapshot_with(&mut snap, "img", |_, _| None), "Filename matches");
+        assert_eq!(
+            filter_snapshot_with(&mut snap, "img", |_, _| None).text(),
+            "Filename matches"
+        );
         assert_eq!(ids(&snap), ["a", "c"]);
     }
 

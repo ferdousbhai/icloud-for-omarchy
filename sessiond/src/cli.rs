@@ -8,22 +8,25 @@
 //! webservices object)/`--ids-only`/`--count` choose. `skill` with no action
 //! prints the skill's Markdown as it is, in every mode.
 //!
-//! A failure is `{"ok":false,"error":{"code","message","hint"?}}` on stdout in
-//! a machine mode, `error:`/`hint:` lines on stderr in text mode, with a
-//! non-zero exit in the table every iCloud tool shares (`icloud_session::cli`):
+//! A failure is `{"ok":false,"error":{"code","message","hint"?}}` on one
+//! line of stderr in a machine mode, `error:`/`hint:` lines on stderr in text
+//! mode, so stdout only ever holds a result. Every failure exits 1, as every
+//! Omarchy command line does (`icloud_session::cli`); the `code` says which
+//! failure it was:
 //!
-//! - 1 error: a failure the daemon reported (`error`), `io`, a non-5xx
-//!   `http`, `skill_unmanaged`;
-//! - 2 usage;
-//! - 3 not signed in or credentials rejected: `sign_in_required`,
+//! - `usage`;
+//! - not signed in or credentials rejected: `sign_in_required`,
 //!   `sign_in_not_completed`, `find_my_auth_required`,
 //!   `find_my_auth_not_completed`, `password_rejected` (Apple refused the
 //!   password given to `set-password`), `session_rejected` (Apple keeps
-//!   answering 401/421 although the daemon still holds the sign-in); and
-//!   `status` while signed out (its result is still printed);
-//! - 5 a service unavailable: `session_service` (the daemon or the session
+//!   answering 401/421 although the daemon still holds the sign-in);
+//! - a service unavailable: `session_service` (the daemon or the session
 //!   bus unreachable), `keyring_unavailable`, `network`, `offline`,
-//!   `bad_response`, `http` 5xx.
+//!   `bad_response`, `http` 5xx;
+//! - anything else: a failure the daemon reported (`error`), `io`, another
+//!   `http`, `skill_unmanaged`.
+//!
+//! `status` while signed out prints its result and exits 1 too.
 //!
 //! Progress ("finish in the window", "checking the password") goes to stderr.
 
@@ -31,7 +34,7 @@ use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use icloud_session::cli::{EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_SIGN_IN};
+use icloud_session::cli::EXIT_ERROR;
 use icloud_session::output::{self, CliError, FIND_MY_AUTH_HINT, OutputFlags, Response, SIGN_IN_HINT};
 use icloud_session::{BUS_NAME, ERROR_PASSWORD_REJECTED, Error, INTERFACE, OBJECT_PATH, Session, Status};
 use serde::Serialize;
@@ -42,19 +45,18 @@ Output: short text on a terminal, a JSON envelope {\"ok\":true,\"data\",\"summar
 --json forces the envelope, --styled text, --quiet prints only the data (the status object, or
 validate's {dsid, apple_id, webservices}), --ids-only the webservice keys (validate) or the
 paths (skill install/remove), --count their number. Flags combine: ids-only > count > quiet >
-json > styled. `skill` alone prints the skill's Markdown in every mode. A failure is
-{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or error:/hint: lines on stderr
-in text mode.
+json > styled. `skill` alone prints the skill's Markdown in every mode. A failure prints nothing on stdout:
+it is {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on one line of stderr, or error:/hint:
+lines on stderr in text mode.
 
-Exit codes:
-  0 ok
-  1 error (a failure icloud-sessiond reported), io, http 4xx, skill_unmanaged
-  2 usage
-  3 not signed in or credentials rejected: sign_in_required, sign_in_not_completed,
-    find_my_auth_required, find_my_auth_not_completed, password_rejected, session_rejected;
-    also `status` while signed out (the status is still printed)
-  5 a service unavailable: session_service (icloud-sessiond unreachable),
-    keyring_unavailable, network, offline, bad_response, http 5xx";
+Exit codes: 0 ok, 1 any failure (also `status` while signed out, which still prints the status).
+The error's code says which failure it was:
+  usage
+  not signed in or credentials rejected: sign_in_required, sign_in_not_completed,
+    find_my_auth_required, find_my_auth_not_completed, password_rejected, session_rejected
+  a service unavailable: session_service (icloud-sessiond unreachable),
+    keyring_unavailable, network, offline, bad_response, http 5xx
+  anything else: error (a failure icloud-sessiond reported), io, http 4xx, skill_unmanaged";
 
 #[derive(Parser)]
 #[command(
@@ -78,14 +80,14 @@ enum Command {
     /// seconds; null for a sign-in without "Keep me signed in"), signing_in,
     /// find_my_authorized, find_my_password_stored, sign_out_reason (why the
     /// account was last signed out; null while signed in or never signed in).
-    /// Signed out, the status is still printed and the exit code is 3.
+    /// Signed out, the status is still printed and the exit code is 1.
     #[command(after_help = AFTER_HELP)]
     Status,
     /// Open the sign-in window and wait for it, then print status.
     ///
     /// Opens the sign-in window (Apple's page: password and 2FA, typed by a
-    /// person) and waits until it closes, then prints status. Exits 3
-    /// (sign_in_not_completed, no status printed) when the window closed
+    /// person) and waits until it closes, then prints status. Fails with
+    /// sign_in_not_completed (no status printed) when the window closed
     /// without a sign-in.
     #[command(after_help = AFTER_HELP)]
     SignIn {
@@ -96,8 +98,8 @@ enum Command {
     /// Open the sign-in window on Find My's password page, then print status.
     ///
     /// Opens the sign-in window on Find My, where Apple asks for the password
-    /// again, and waits until it closes, then prints status. Exits 3
-    /// (find_my_auth_not_completed, no status printed) when Find My is still
+    /// again, and waits until it closes, then prints status. Fails with
+    /// find_my_auth_not_completed (no status printed) when Find My is still
     /// not authorized, and at once, with no window (sign_in_required), when
     /// signed out.
     #[command(after_help = AFTER_HELP)]
@@ -111,11 +113,11 @@ enum Command {
     /// Stores the Apple ID password in the keyring (GNOME Keyring), so the
     /// daemon re-authorizes Find My by itself when it asks for the password
     /// again, then prints status. The password is checked with a Find My
-    /// sign-in first and not stored when Apple refuses it (exit 3,
-    /// password_rejected). When the check fails for another reason (Apple
-    /// unreachable, say) it is stored anyway and the failure reported
-    /// (exit 1). It is read from the terminal without echo, or from stdin
-    /// when that is not a terminal, e.g. from a password manager:
+    /// sign-in first and not stored when Apple refuses it
+    /// (password_rejected). When the check fails for another reason (Apple
+    /// unreachable, say) it is stored anyway and the failure reported. It is
+    /// read from the terminal without echo, or from stdin when that is not a
+    /// terminal, e.g. from a password manager:
     ///
     ///     bw get password "Apple ID" | icloud-session set-password
     ///     op read "op://Private/Apple ID/password" | icloud-session set-password
@@ -135,7 +137,7 @@ enum Command {
     ///
     /// The session's webservices: {dsid, apple_id, webservices} (the daemon
     /// validates first when older than 6 hours, and in the background when
-    /// older than 10 minutes). Exits 3 (sign_in_required) when Apple no
+    /// older than 10 minutes). Fails with sign_in_required when Apple no
     /// longer accepts the sign-in.
     #[command(after_help = AFTER_HELP)]
     Validate,
@@ -211,11 +213,12 @@ pub fn main() -> ExitCode {
             apps, dry_run: true, ..
         } => crate::leave::check(apps),
         Command::Leave { apps, yes, .. } => crate::leave::run(mode, apps, yes),
-        // Signed out: the status is still the result, with exit 3 (as
-        // `icloud-photos status` and `icloud-notes status`).
+        // Signed out: the status is still the result, and the exit is 1 (as
+        // `icloud-photos status` and `icloud-notes status`), so `if
+        // icloud-session status` reads as "is signed in".
         Command::Status => icloud_session::status()
             .map(|s| {
-                let exit = if s.signed_in { 0 } else { EXIT_SIGN_IN };
+                let exit = if s.signed_in { 0 } else { EXIT_ERROR };
                 status_response(&s, None).exit(exit)
             })
             .map_err(failure),
@@ -323,7 +326,7 @@ fn sign_in() -> Outcome {
         Some(reason) if reason.contains("keyring") => output::KEYRING_HINT,
         _ => "run `icloud-session sign-in` again and finish in the window",
     };
-    Err(CliError::new("sign_in_not_completed", EXIT_SIGN_IN, message).hint(hint))
+    Err(CliError::new("sign_in_not_completed", EXIT_ERROR, message).hint(hint))
 }
 
 fn authorize_find_my() -> Outcome {
@@ -341,7 +344,7 @@ fn authorize_find_my() -> Outcome {
             SIGN_IN_HINT,
         ),
     };
-    Err(CliError::new("find_my_auth_not_completed", EXIT_FIND_MY_AUTH, message).hint(hint))
+    Err(CliError::new("find_my_auth_not_completed", EXIT_ERROR, message).hint(hint))
 }
 
 /// `SignIn()` or `AuthorizeFindMy()`, then waits for the window to close
@@ -429,13 +432,12 @@ fn skill(action: SkillAction) -> Outcome {
 
 // ------------------------------------------------------------ errors
 
-/// A client-library error as the contract's code, exit code, message and
-/// hint: the shared mapping ([`output::session_failure`]), plus
+/// A client-library error as the contract's code, message and hint: the shared mapping ([`output::session_failure`]), plus
 /// `password_rejected` for Apple refusing the password given to set-password.
 fn failure(e: Error) -> CliError {
     match e {
         Error::Daemon { name, message } if name == ERROR_PASSWORD_REJECTED => {
-            CliError::new("password_rejected", EXIT_SIGN_IN, message)
+            CliError::new("password_rejected", EXIT_ERROR, message)
                 .hint("check the Apple ID password, then run `icloud-session set-password` again")
         }
         e => output::session_failure(&e),
@@ -451,7 +453,7 @@ fn set_password() -> Outcome {
     let Some(apple_id) = status.apple_id.filter(|_| status.signed_in) else {
         return Err(CliError::new(
             "sign_in_required",
-            EXIT_SIGN_IN,
+            EXIT_ERROR,
             "not signed in: the password is checked against the signed-in Apple ID",
         )
         .hint(SIGN_IN_HINT));
@@ -530,19 +532,19 @@ mod tests {
     /// What this CLI adds to the shared table (`session_failure`, tested in
     /// `session/src/output.rs`): the daemon's own errors.
     #[test]
-    fn the_daemons_errors_map_to_codes_and_exits() {
+    fn the_daemons_errors_map_to_codes_and_every_one_exits_1() {
         let daemon = |name: &str| Error::Daemon {
             name: name.into(),
             message: "why".into(),
         };
         let cases = [
-            (daemon("io.github.ferdousbhai.ICloudSession.Error.Failed"), "error", 1),
-            (daemon(ERROR_PASSWORD_REJECTED), "password_rejected", 3),
+            (daemon("io.github.ferdousbhai.ICloudSession.Error.Failed"), "error"),
+            (daemon(ERROR_PASSWORD_REJECTED), "password_rejected"),
         ];
-        for (e, code, exit) in cases {
+        for (e, code) in cases {
             let what = format!("{e:?}");
             let f = super::failure(e);
-            assert_eq!((f.code.as_str(), f.exit), (code, exit), "{what}");
+            assert_eq!((f.code.as_str(), f.exit), (code, 1), "{what}");
         }
         let f = super::failure(daemon(ERROR_PASSWORD_REJECTED));
         assert_eq!(f.message, "why");

@@ -2,11 +2,11 @@ Usage: icloud-notes leave [--yes]
 
 Leave iCloud for Omacloud (icloud-notes-sync leave): Omacloud must be installed, set up and
 syncing the vault's folder of home (else omacloud_missing, omacloud_not_set_up or
-omacloud_folder_off, exit 3, with the command that fixes it, and nothing changes); then one
+omacloud_folder_off, with the command that fixes it, and nothing changes); then one
 last sync (if it fails, nothing changes), and Omacloud syncs the folder. The engine's state
 moves to ~/.local/share/icloud-notes/left-icloud-state; iCloud keeps its copy as it was. Notes
 keeps working on the files; sync, pull, push, clone, history, diff and restore then refuse
-(left_icloud, exit 3). Asks on a terminal; without one, --yes is required. The Notes window
+(left_icloud). Asks on a terminal; without one, --yes is required. The Notes window
 must be closed (vault_busy otherwise).
 JSON: icloud-notes-sync's {folder, left_at, kept_state, omacloud_synced, already}
 
@@ -16,18 +16,19 @@ Output: text on a terminal; when piped (or with --json) the JSON envelope
 only data; --styled forces text; --ids-only prints one id per line (the note paths of list,
 search and read, the folder paths of folders, the path a change touched); --count the
 number of results. They combine: ids-only > count > quiet > json > styled. A failure is
-{"ok":false,"error":{"code","message","hint"?}} on stdout in those machine modes,
-`error:`/`hint:` lines on stderr in text mode. Key order is not part of the contract.
+{"ok":false,"error":{"code","message","hint"?}} on one line of stderr in those machine
+modes, `error:`/`hint:` lines on stderr in text mode; stdout holds only results. Key order
+is not part of the contract.
 Global options: --vault DIR (a vault other than ~/Documents/Notes), --wait SECS (how long to
 wait for the vault's lock; 30 when a background sync holds it, none while the Notes window
 holds it). Nothing asks without a terminal: delete, delete-folder, restore, detach and a write
 that empties a note or drops an attachment's link need --yes, and so does a push or sync that
 would delete most of the vault.
-Exit codes: 0 ok, 1 error, 2 usage or invalid request, 3 not signed in (sign_in_required,
-session_rejected: icloud-session sign-in) or not set up (not_cloned, account_mismatch, ...),
-4 not found, 5 unavailable (offline, network, session_service: icloud-sessiond unreachable,
-sync_tool_missing, iCloud trouble). push --dry-run and diff report their changes in the result
-and exit 0. A failed sync, pull, push or clone (or the sync of a change's --push) still prints
-its result, with the failure in it as error: {code, message, hint?} (the sync engine's own
-error and exit when it gave one; sync_failed, exit 1, when it did not), and exits with the
-failure's code. --version prints `icloud-notes VERSION` in every mode.
+Exit codes: 0 on success, 1 on any failure; the error's code says which: usage, exists,
+not_found, sign_in_required or session_rejected (icloud-session sign-in), not set up
+(not_cloned, account_mismatch, ...), unavailable (offline, network, session_service:
+icloud-sessiond unreachable, sync_tool_missing, iCloud trouble). push --dry-run and diff
+report their changes in the result and exit 0. A failed sync, pull, push or clone (or the
+sync of a change's --push) still prints its result, with the failure in it as error: {code,
+message, hint?} (the sync engine's own error when it gave one; sync_failed when it did not),
+and exits 1. --version prints `icloud-notes VERSION` in every mode.

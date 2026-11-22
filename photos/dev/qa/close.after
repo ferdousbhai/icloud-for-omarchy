@@ -1,0 +1,8 @@
+# What close.jsonl left (bin/qa runs this with QA_ROOT, the run's scratch root, and QA_FAKE_LOG, the fake's output):
+# the delete reached the fake, and the app was still there to mark the photo deleted in its catalog, which only its
+# handling of iCloud's answer does.
+set -euo pipefail
+grep -qx 'deleted .* (IMG_1120\.JPG)' "$QA_FAKE_LOG" ||
+  { echo "close.after: the fake has not deleted IMG_1120.JPG (did the app end before it was answered?)" >&2; exit 1; }
+deleted=$(sqlite3 "$QA_ROOT/data/icloud-photos/catalog.db" "SELECT deleted FROM assets WHERE filename = 'IMG_1120.JPG'")
+[[ $deleted == 1 ]] || { echo "close.after: the catalog still has IMG_1120.JPG (deleted=$deleted)" >&2; exit 1; }

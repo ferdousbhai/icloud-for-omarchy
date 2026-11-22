@@ -8,7 +8,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use shumate::prelude::*;
 
-use super::devices::device_icon;
+use super::devices::{device_icon, summary};
 use icloud_findmy::history::Point;
 use icloud_findmy::models::{Device, Fix};
 
@@ -20,6 +20,9 @@ pub struct DeviceMap {
     markers: shumate::MarkerLayer,
     /// The marker of each located device, by device id.
     by_id: RefCell<HashMap<String, DeviceMarker>>,
+    /// The devices the markers show, to write their tooltips again on a
+    /// switch of language.
+    devices: RefCell<Vec<Device>>,
     trail: shumate::PathLayer,
     on_marker: Rc<dyn Fn(&str)>,
 }
@@ -49,21 +52,43 @@ impl DeviceMap {
         }
 
         let trail = shumate::PathLayer::new(&viewport);
-        trail.set_stroke_color(Some(&gtk::gdk::RGBA::new(0.21, 0.52, 0.89, 0.85)));
         trail.set_stroke_width(5.0);
-        trail.set_outline_color(Some(&gtk::gdk::RGBA::new(1.0, 1.0, 1.0, 0.9)));
         trail.set_outline_width(1.5);
+        paint_trail(&trail);
+        // A layer is drawn by libshumate, out of the stylesheet's reach: its
+        // colours follow a theme switch from here.
+        if let Some(theme) = omui::Theme::get() {
+            let weak = trail.downgrade();
+            theme.on_change(&widget, move |_| {
+                if let Some(trail) = weak.upgrade() {
+                    paint_trail(&trail);
+                }
+            });
+        }
         let markers = shumate::MarkerLayer::new(&viewport);
         widget.add_overlay_layer(&trail);
         widget.add_overlay_layer(&markers);
 
-        Rc::new(Self {
+        let this = Rc::new(Self {
             widget,
             markers,
             by_id: RefCell::default(),
+            devices: RefCell::default(),
             trail,
             on_marker: Rc::new(on_marker),
-        })
+        });
+        let weak = Rc::downgrade(&this);
+        omui::i18n::on_change(&this.widget, move || {
+            let Some(this) = weak.upgrade() else { return };
+            let now = icloud_session::time::now_ms();
+            let markers = this.by_id.borrow();
+            for d in this.devices.borrow().iter() {
+                if let Some(m) = markers.get(&d.id) {
+                    style_badge(&m.badge, d, now);
+                }
+            }
+        });
+        this
     }
 
     /// Shows a marker per located device, the selected one highlighted.
@@ -94,6 +119,7 @@ impl DeviceMap {
             style_badge(&m.badge, d, now);
         }
         drop(markers);
+        *self.devices.borrow_mut() = devices.to_vec();
         self.set_selected(selected);
     }
 
@@ -168,5 +194,23 @@ impl DeviceMap {
 fn style_badge(badge: &gtk::Image, d: &Device, now_ms: i64) {
     badge.set_icon_name(Some(device_icon(d.class)));
     omui::set_class(badge, "stale", d.location.is_some_and(|f| f.is_old) || !d.online);
-    badge.set_tooltip_text(Some(&format!("{}\n{}", d.name, d.summary(now_ms))));
+    badge.set_tooltip_text(Some(&format!("{}\n{}", d.name, summary(d, now_ms))));
+}
+
+/// The trail in the theme's blue, outlined in its background so that it
+/// stands out on the tiles; without a theme (a test) in the blue Omarchy's
+/// fallback palette has.
+fn paint_trail(trail: &shumate::PathLayer) {
+    let theme = omui::Theme::get();
+    let colour = |key: &str, fallback: &str, alpha: f32| {
+        let mut rgba = theme
+            .as_ref()
+            .and_then(|t| t.color(key))
+            .and_then(|c| gtk::gdk::RGBA::parse(c.as_str()).ok())
+            .unwrap_or_else(|| gtk::gdk::RGBA::parse(fallback).expect("a colour"));
+        rgba.set_alpha(alpha);
+        rgba
+    };
+    trail.set_stroke_color(Some(&colour("blue", "#3584e4", 0.85)));
+    trail.set_outline_color(Some(&colour("background", "#ffffff", 0.9)));
 }

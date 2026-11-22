@@ -12,7 +12,8 @@ use std::process::Output;
 use std::sync::Arc;
 
 use icloud_app::testing::{
-    assert_cli_links_no_gtk, assert_no_command_runs_the_app, code, command, envelope, stderr, stdout, write_script,
+    assert_cli_links_no_gtk, assert_no_command_runs_the_app, code, command, envelope, failure, stderr, stdout,
+    write_script,
 };
 use icloud_reminders::cloudkit::Record;
 use icloud_reminders::model::{List, Parsed, Reminder};
@@ -75,11 +76,11 @@ impl Env {
         v["data"].clone()
     }
 
-    /// A failed run: its exit code and the `error` of the envelope on stdout.
+    /// A failed run: its exit code (1, as every failure's) and the `error`
+    /// of the object on stderr, stdout holding nothing.
     fn fails(&self, args: &[&str]) -> (i32, Value) {
         let out = self.run(args);
-        let v = envelope(&out.stdout);
-        assert_eq!(v["ok"], false, "{args:?}");
+        let v = failure(&out);
         (code(&out), v["error"].clone())
     }
 
@@ -917,13 +918,13 @@ fn signed_out_or_offline_sync_fails_with_its_code_and_leaves_the_files() {
     std::fs::write(&path, &text).unwrap();
     *env.state.signed_out.lock().unwrap() = true;
     let (exit, err) = env.fails(&["sync"]);
-    assert_eq!((exit, &err["code"]), (3, &json!("sign_in_required")), "{err}");
+    assert_eq!((exit, &err["code"]), (1, &json!("sign_in_required")), "{err}");
     assert!(
         err["hint"].as_str().unwrap().contains("icloud-session sign-in"),
         "{err}"
     );
     let out = env.run(&["sync", "--styled"]);
-    assert_eq!((code(&out), stdout(&out).as_str()), (3, ""));
+    assert_eq!((code(&out), stdout(&out).as_str()), (1, ""));
     let err = stderr(&out);
     assert!(
         err.starts_with("error: sign in to iCloud required") && err.contains("hint: run `icloud-session sign-in`"),
@@ -932,8 +933,7 @@ fn signed_out_or_offline_sync_fails_with_its_code_and_leaves_the_files() {
     *env.state.signed_out.lock().unwrap() = false;
     // Nothing listens on port 9.
     let out = run_at("http://127.0.0.1:9", env.dir.path(), &["sync"]);
-    assert_eq!(code(&out), 5, "{}", stderr(&out));
-    let err = &envelope(&out.stdout)["error"];
+    let err = &failure(&out)["error"];
     assert_eq!(err["code"], "offline");
     assert!(err["hint"].is_string(), "{err}");
     // The edit waits in the file, and the next sync that works sends it.
@@ -990,7 +990,8 @@ fn background_notifies_once_when_due() {
     assert_eq!(args[..6], ["--app-name", "Reminders", "-g", "󰢌", "-u", "normal"]);
     assert_eq!(args[6], "Bread");
     assert!(args[7].starts_with("Groceries · "), "{args:?}");
-    assert_eq!(args[8..], ["--exec", "icloud-reminders-app"]);
+    // A click opens the window through the one command on PATH.
+    assert_eq!(args[8..], ["--exec", "icloud-reminders", "open"]);
 
     // Once.
     assert_eq!(env.json(&["background", "--sync"])["notified"], json!([]));
@@ -1032,10 +1033,10 @@ fn usage_is_coded() {
     let env = start();
     for args in [&["frobnicate"][..], &["list"], &["add", "x"], &["sync", "--bogus"]] {
         let (exit, err) = env.fails(args);
-        assert_eq!((exit, &err["code"]), (2, &json!("usage")), "{args:?}: {err}");
+        assert_eq!((exit, &err["code"]), (1, &json!("usage")), "{args:?}: {err}");
         // Text mode: clap's message on stderr, the same exit code.
         let out = env.run(&[args, &["--styled"][..]].concat());
-        assert_eq!((code(&out), stdout(&out).as_str()), (2, ""), "{args:?}");
+        assert_eq!((code(&out), stdout(&out).as_str()), (1, ""), "{args:?}");
         assert!(!stderr(&out).is_empty(), "{args:?}");
     }
     let (_, err) = env.fails(&["frobnicate"]);
@@ -1058,6 +1059,63 @@ fn the_command_line_binary_does_not_link_gtk() {
 #[test]
 fn no_command_runs_the_app_beside_it() {
     assert_no_command_runs_the_app(env!("CARGO_BIN_EXE_icloud-reminders"), "icloud-reminders");
+}
+
+/// `icloud-reminders open` (the desktop entry's Exec) becomes the window's
+/// binary, the one `$ICLOUD_REMINDERS_APP` names here, with no arguments,
+/// in the same process; without one it fails as every command does.
+#[test]
+fn open_runs_the_app() {
+    let env = start();
+    let app = env.dir.path().join("icloud-reminders-app");
+    let marker = env.dir.path().join("ran");
+    write_script(
+        &app,
+        &format!("#!/bin/sh\necho \"$#\" > '{}'\nexit 7\n", marker.display()),
+    );
+    let out = command_at(&env.base, env.dir.path(), &["open"])
+        .env("ICLOUD_REMINDERS_APP", &app)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 7, "{}", stderr(&out));
+    assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "0");
+
+    let gone = env.dir.path().join("nowhere/icloud-reminders-app");
+    let out = command_at(&env.base, env.dir.path(), &["open", "--json"])
+        .env("ICLOUD_REMINDERS_APP", &gone)
+        .output()
+        .unwrap();
+    let err = failure(&out);
+    assert_eq!(err["error"]["code"], "error");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot open the app"),
+        "{err}"
+    );
+    assert!(env.ops().is_empty(), "open talked to iCloud: {:?}", env.ops());
+}
+
+/// Help and the version need no display: the command line loads no GTK, and
+/// lists `open` among its commands.
+#[test]
+fn help_and_version_work_without_a_display() {
+    let env = start();
+    for args in [&["--help"][..], &["help"], &["--version"]] {
+        let out = command_at(&env.base, env.dir.path(), args)
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .output()
+            .unwrap();
+        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
+        assert!(!stdout(&out).is_empty(), "{args:?}");
+    }
+    let help = env.ok(&["--help"]);
+    assert!(
+        help.lines().any(|l| l.trim_start().starts_with("open ")),
+        "open is not listed:\n{help}"
+    );
 }
 
 /// The folder of a test, written by a first background run:
@@ -2350,7 +2408,7 @@ fn leave_refuses_until_omacloud_can_take_the_folder() {
     assert!(dir.join(".nosync").is_file(), "iCloud's folder carries the marker");
     // not installed
     let (exit, e) = env.fails(&["leave", "--yes"]);
-    assert_eq!((exit, e["code"].as_str().unwrap()), (3, "omacloud_missing"));
+    assert_eq!((exit, e["code"].as_str().unwrap()), (1, "omacloud_missing"));
     assert!(
         e["hint"].as_str().unwrap().contains("omacloud.computer/install.sh"),
         "{e}"
@@ -2358,7 +2416,7 @@ fn leave_refuses_until_omacloud_can_take_the_folder() {
     // installed, but ~/Documents is not synced here
     fake_omacloud(&env, &["Work"]);
     let (exit, e) = env.fails(&["leave", "--yes"]);
-    assert_eq!((exit, e["code"].as_str().unwrap()), (3, "omacloud_folder_off"));
+    assert_eq!((exit, e["code"].as_str().unwrap()), (1, "omacloud_folder_off"));
     assert!(
         e["hint"].as_str().unwrap().contains("omacloud folders add ~/Documents"),
         "{e}"
@@ -2366,7 +2424,7 @@ fn leave_refuses_until_omacloud_can_take_the_folder() {
     // ready, but nobody to ask and no --yes
     fake_omacloud(&env, &["Documents"]);
     let (exit, e) = env.fails(&["leave"]);
-    assert_eq!((exit, e["code"].as_str().unwrap()), (2, "usage"));
+    assert_eq!((exit, e["code"].as_str().unwrap()), (1, "usage"));
     // nothing changed
     assert!(!env.left_file().exists());
     assert!(dir.join(".nosync").is_file());
@@ -2400,7 +2458,7 @@ fn leave_syncs_a_last_time_then_hands_the_folder_to_omacloud() {
     // From now on nothing talks to iCloud.
     let before = env.ops().len();
     let (exit, e) = env.fails(&["sync"]);
-    assert_eq!((exit, e["code"].as_str().unwrap()), (3, "left_icloud"));
+    assert_eq!((exit, e["code"].as_str().unwrap()), (1, "left_icloud"));
     let out = env.json(&["background", "--sync"]);
     assert_eq!(
         (out["left"].clone(), out["synced"].clone()),

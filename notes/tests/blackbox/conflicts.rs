@@ -23,7 +23,7 @@ fn resolve_takes_a_side_for_each_block() {
         format!("{BETA_HEAD}mine 1\nmiddle\nmine 2\ntheirs 2\n")
     );
     assert_eq!(w.json(["read", "beta"]).ok()["flags"], json!([]));
-    let (message, hint) = w.json(["resolve", "beta", "--all", "remote"]).fails(1, "no_conflicts");
+    let (message, hint) = w.json(["resolve", "beta", "--all", "remote"]).fails("no_conflicts");
     assert_eq!(
         (message.as_str(), hint.as_str()),
         ("Work/Beta.md has no conflict to resolve", "")
@@ -61,7 +61,7 @@ fn resolve_wants_one_valid_choice_per_block() {
         vec!["resolve", "beta"],
         vec!["resolve", "beta", "--all", "local", "--choices", "local,local"],
     ] {
-        let said = w.json(&args).fails(2, "usage");
+        let said = w.json(&args).fails("usage");
         assert_eq!(
             (said.0.as_str(), said.1.as_str()),
             (
@@ -75,13 +75,13 @@ fn resolve_wants_one_valid_choice_per_block() {
         (vec!["--all", "theirs"], "theirs"),
         (vec!["--all", "LOCAL"], "LOCAL"),
     ] {
-        let (message, _) = w.json(["resolve", "beta"].into_iter().chain(args)).fails(2, "usage");
+        let (message, _) = w.json(["resolve", "beta"].into_iter().chain(args)).fails("usage");
         assert_eq!(message, format!("a choice is local, remote or both, not \"{bad}\""));
     }
     for (choices, given) in [("local", 1), ("local,remote,both", 3), (",", 0)] {
         let (message, hint) = w
             .json(["resolve", "beta", "--choices", choices])
-            .fails(2, "choices_mismatch");
+            .fails("choices_mismatch");
         assert_eq!(
             message,
             format!("Work/Beta.md has 2 conflict blocks, and {given} choices were given")
@@ -90,7 +90,7 @@ fn resolve_wants_one_valid_choice_per_block() {
     }
     let (message, hint) = w
         .json(["resolve", "tangle", "--all", "local"])
-        .fails(1, "conflicts_unreadable");
+        .fails("conflicts_unreadable");
     assert_eq!(
         message,
         "Work/Tangle.md has conflict markers the version picker cannot read"
@@ -99,9 +99,8 @@ fn resolve_wants_one_valid_choice_per_block() {
         hint,
         "Use `icloud-notes recover NOTE --strip` (keep every line) or --synced (the last synced text)."
     );
-    w.json(["resolve", "alpha", "--all", "local"]).fails(1, "no_conflicts");
-    w.json(["resolve", "no such note", "--all", "local"])
-        .fails(4, "not_found");
+    w.json(["resolve", "alpha", "--all", "local"]).fails("no_conflicts");
+    w.json(["resolve", "no such note", "--all", "local"]).fails("not_found");
     assert_eq!(w.read("Work/Beta.md"), original);
 }
 
@@ -110,7 +109,7 @@ fn resolve_refuses_a_read_only_note() {
     let Some(w) = World::seeded() else { return };
     let conflicted = "---\napple-note-id: id-g\n---\n# Grid\n<<<<<<< local\na\n=======\nb\n>>>>>>> remote\n";
     w.write("Work/Grid.md", conflicted);
-    let (message, _) = w.json(["resolve", "grid", "--all", "local"]).fails(1, "read_only");
+    let (message, _) = w.json(["resolve", "grid", "--all", "local"]).fails("read_only");
     assert_eq!(message, "This note is read-only here. Resolve it in Apple Notes.");
     assert_eq!(w.read("Work/Grid.md"), conflicted);
 }
@@ -151,7 +150,7 @@ fn recover_strip_keeps_every_line_after_a_backup() {
     );
     // The backup is no note.
     assert_eq!(w.run(["list", "--count"]).out, "7\n");
-    let (message, hint) = w.json(["recover", "tangle", "--strip"]).fails(1, "no_conflicts");
+    let (message, hint) = w.json(["recover", "tangle", "--strip"]).fails("no_conflicts");
     assert_eq!(
         (message.as_str(), hint.as_str()),
         ("This note has no unreadable conflict markers.", "")
@@ -197,21 +196,21 @@ fn recover_refuses_what_it_cannot_recover() {
         vec!["recover", "tangle"],
         vec!["recover", "tangle", "--strip", "--synced"],
     ] {
-        let said = w.json(&args).fails(2, "usage");
+        let said = w.json(&args).fails("usage");
         assert_eq!(
             (said.0.as_str(), said.1.as_str()),
             ("recover needs --strip or --synced", USAGE_HINT)
         );
     }
     // Blocks the picker can read are resolve's.
-    w.json(["recover", "beta", "--strip"]).fails(1, "no_conflicts");
-    w.json(["recover", "alpha", "--synced"]).fails(1, "no_conflicts");
+    w.json(["recover", "beta", "--strip"]).fails("no_conflicts");
+    w.json(["recover", "alpha", "--synced"]).fails("no_conflicts");
     // Unreadable markers, but nothing synced to go back to.
     w.write(
         "Notes/Alpha.md",
         "---\napple-note-id: id-a\n---\n# Alpha\n<<<<<<< local\n<<<<<<< local\nb\n",
     );
-    let (message, hint) = w.json(["recover", "alpha", "--synced"]).fails(1, "no_synced_copy");
+    let (message, hint) = w.json(["recover", "alpha", "--synced"]).fails("no_synced_copy");
     assert_eq!(
         (message.as_str(), hint.as_str()),
         ("There is no last synced version of this note.", "")
@@ -220,7 +219,7 @@ fn recover_refuses_what_it_cannot_recover() {
         "Work/Grid.md",
         "---\napple-note-id: id-g\n---\n# Grid\n>>>>>>> remote\n",
     );
-    let (message, _) = w.json(["recover", "grid", "--strip"]).fails(1, "read_only");
+    let (message, _) = w.json(["recover", "grid", "--strip"]).fails("read_only");
     assert_eq!(message, "This note is read-only here. Resolve it in Apple Notes.");
     assert!(
         !w.exists(".icloud-notes/conflict-backups"),

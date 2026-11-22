@@ -149,7 +149,7 @@ check "an up-to-date app gets no update hint" not grep -q 'newer version is avai
 check "with icloud-contacts installed, the way to Cloud Contacts is given" grep -qF 'Contacts moved to Cloud Contacts (iCloud and Google together): curl -fsSL https://ferdousbhai.com/cloud-contacts/install.sh | sudo bash' "$work/out"
 status=0
 bash install.sh icloud-contacts >/dev/null 2>&1 || status=$?
-check "icloud-contacts is no longer a package here" [ "$status" = 64 ]
+check "icloud-contacts is no longer a package here" [ "$status" = 1 ]
 
 # ARM's update helper removes the old [omarchy] block before appending
 # a restricted replacement. A trailing Include must survive that rewrite.
@@ -194,7 +194,7 @@ check "named packages override the default" [ "$(installed)" = "icloud-session i
 setup
 status=0
 bash install.sh icloud-nope >/dev/null 2>&1 || status=$?
-check "an unknown package exits 64" [ "$status" = 64 ]
+check "an unknown package exits 1" [ "$status" = 1 ]
 check "an unknown package changes nothing" [ ! -e /etc/pacman.d/icloud-for-omarchy.conf ]
 
 # The pin names the primary key: as a subkey's fingerprint, or next to a

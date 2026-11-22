@@ -10,9 +10,17 @@ publish = false
 [lib]
 name = "icloud_app_ui"
 
+[features]
+# What an app's `qa` feature turns on here too: omui's scripted QA, whose
+# `language` and `close` commands the apps' scripts use.
+qa = ["omui/qa"]
+
 [dependencies]
 # The workspace's session/ crate.
 icloud-session.workspace = true
 gtk.workspace = true
 omui.workspace = true
 async-channel.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

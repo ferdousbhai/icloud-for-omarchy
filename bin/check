@@ -5,7 +5,8 @@
 #   bin/check          what this change touches: the files changed since origin/main (commits and
 #                      the working tree) pick the crates to lint and test (plus the crates that depend
 #                      on them), Notes' black-box suite, the installer tests and the packaging tests.
-#   bin/check --all    everything routine (the packages' check() in CI runs the same Rust tests).
+#   bin/check --all    everything routine (.github/workflows/check.yml runs it on every push, and the packages'
+#                      check() runs the same Rust tests on a release).
 #   bin/check --deep   --all plus the random-exploration suites (model-based and property tests),
 #                      marked #[ignore = "deep: ..."]: for hunting bugs after a big change, not for
 #                      every push. Raise their case counts with each suite's *_CASES variable.
@@ -96,6 +97,16 @@ else
   echo "Rust: nothing changed, skipped" >&2
 fi
 
+# Notes' black-box suite (notes/tests/blackbox/) is one of icloud-notes' tests, and fails without a binary to drive:
+# whenever that crate is tested, the binary and the real engine behind the stub one are built first and named.
+notes_bin="$(realpath -m "${CARGO_TARGET_DIR:-target}")/debug/icloud-notes"
+blackbox_ran=0
+if [[ ${pkgs[0]:-} == --workspace || " ${crates[*]} " == *" icloud-notes "* ]]; then
+  cargo build --locked -p icloud-notes -p icloud-notes-sync --bins
+  export ICLOUD_NOTES_BIN=$notes_bin
+  blackbox_ran=1
+fi
+
 if ((${#pkgs[@]})); then
   cargo clippy --locked "${pkgs[@]}" --all-targets -- -D warnings
   # The sign-in window needs webkitgtk-6.0; the daemon tests without it.
@@ -117,14 +128,13 @@ if ((${#pkgs[@]})); then
   fi
 fi
 
-# Notes' black-box suite drives the icloud-notes binary as a separate
-# process, with the real engine behind the stub one, so either changing runs
-# it (the binary links session/ and app/ too); only here is it given a
-# binary to drive.
-if ((all || all_rust)) || touched '^(notes|notes-sync|session|app)/'; then
+# The suite drives the icloud-notes binary as a separate process, with the real engine behind the stub one, so a
+# change to the engine alone runs it too (the binary links session/ and app/, whose changes test icloud-notes, above).
+if ((blackbox_ran)); then
+  :
+elif touched '^(notes|notes-sync|session|app)/'; then
   cargo build --locked -p icloud-notes -p icloud-notes-sync --bins
-  ICLOUD_NOTES_BIN="$(realpath "${CARGO_TARGET_DIR:-target}")/debug/icloud-notes" \
-    cargo test --locked -p icloud-notes --test blackbox
+  ICLOUD_NOTES_BIN=$notes_bin cargo test --locked -p icloud-notes --test blackbox
 else
   echo "Notes black-box suite: unchanged, skipped" >&2
 fi

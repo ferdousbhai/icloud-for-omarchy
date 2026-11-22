@@ -10,6 +10,7 @@ use gtk::{gdk, glib, prelude::*};
 use icloud_notes::backend::Backend;
 use icloud_notes::notetree::{self, TreeNote};
 use omui::icons::name;
+use omui::tr;
 
 /// What a row of any list stands for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,12 +24,13 @@ pub enum Item {
     },
 }
 
-/// A folder's label: its last part, or All Notes for the vault itself.
-pub fn folder_label(folder: &str) -> &str {
+/// A folder's label: its last part, as the user named it, or All Notes for
+/// the vault itself.
+pub fn folder_label(folder: &str) -> String {
     if folder.is_empty() {
-        "All Notes"
+        tr("All Notes")
     } else {
-        folder.rsplit('/').next().unwrap_or(folder)
+        folder.rsplit('/').next().unwrap_or(folder).to_string()
     }
 }
 
@@ -38,29 +40,30 @@ pub fn note_label(file: &str) -> &str {
     name.strip_suffix(".md").unwrap_or(name)
 }
 
-/// A modification time as the lists show it, the locale's short date.
+/// A modification time as the lists show it, the language's short date.
 pub fn short_date(ms: i64) -> String {
     glib::DateTime::from_unix_local(ms / 1000)
-        .and_then(|date| date.format("%x"))
-        .map(String::from)
+        .map(|date| omui::i18n::format_date(&date))
         .unwrap_or_default()
 }
 
-/// A note's badges: [label, omui badge class], from its flags.
-fn badges(flags: &[&str]) -> Vec<(&'static str, &'static str)> {
+/// A badge: its label, and its omui badge class.
+pub type Badge = (String, &'static str);
+
+/// A note's badges, from its flags.
+fn badges(flags: &[&str]) -> Vec<Badge> {
     flags
         .iter()
-        .map(|flag| match *flag {
-            "conflict" => ("conflict", "error"),
-            "new" => ("new", "success"),
-            "missing-id" => ("no id", "warning"),
-            "foreign-id" => ("foreign id", "warning"),
-            "conflict-copy" => ("Syncthing copy, not synced", "warning"),
-            "tables" => ("tables", "muted"),
-            "read-only" => ("read-only", "muted"),
-            _ => ("", "muted"),
+        .filter_map(|flag| match *flag {
+            "conflict" => Some((tr("conflict"), "error")),
+            "new" => Some((tr("new"), "success")),
+            "missing-id" => Some((tr("no id"), "warning")),
+            "foreign-id" => Some((tr("foreign id"), "warning")),
+            "conflict-copy" => Some((tr("Syncthing copy, not synced"), "warning")),
+            "tables" => Some((tr("tables"), "muted")),
+            "read-only" => Some((tr("read-only"), "muted")),
+            _ => None,
         })
-        .filter(|(label, _)| !label.is_empty())
         .collect()
 }
 
@@ -182,6 +185,8 @@ fn while_updating(list: &gtk::ListBox, f: impl FnOnce()) {
 /// changed, and the rows stay as they are. A list that is rebuilt keeps its
 /// scroll, and the keyboard on the row of the same item.
 fn refill(list: &gtk::ListBox, shown: String, fill: impl FnOnce()) {
+    // The rows' words and dates are in a language too.
+    let shown = format!("{}\n{shown}", omui::i18n::language());
     // SAFETY: only a String is stored under this key.
     if unsafe { list.data::<String>("shown") }.is_some_and(|was| *unsafe { was.as_ref() } == shown) {
         return;
@@ -290,8 +295,8 @@ pub fn fill_folders(list: &gtk::ListBox, b: &Backend, handlers: &Rc<Handlers>) {
             } else {
                 name::FOLDER
             };
-            let count = (count > 0).then(|| count.to_string());
-            let row = omui::sidebar_row(folder, Some(icon), folder_label(folder), count.as_deref());
+            let count = (count > 0).then(|| omui::i18n::format_int(count));
+            let row = omui::sidebar_row(folder, Some(icon), &folder_label(folder), count.as_deref());
             let depth = folder.matches('/').count();
             if let Some(content) = row.child() {
                 content.set_margin_start(depth as i32 * 14);
@@ -305,7 +310,7 @@ pub fn fill_folders(list: &gtk::ListBox, b: &Backend, handlers: &Rc<Handlers>) {
 }
 
 /// One note's row: its title, its date and the start of its text, and its badges.
-fn note_row(title: &str, date: &str, snippet: &str, badges: &[(&str, &str)]) -> gtk::ListBoxRow {
+fn note_row(title: &str, date: &str, snippet: &str, badges: &[Badge]) -> gtk::ListBoxRow {
     let column = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(3)
@@ -369,12 +374,7 @@ pub struct Hit {
 
 /// Fills the note list: the current folder's notes, newest first, or the
 /// search's results.
-pub fn fill_notes(
-    list: &gtk::ListBox,
-    b: &Backend,
-    hits: Option<&[Hit]>,
-    extra: &dyn Fn(&str) -> Vec<(&'static str, &'static str)>,
-) {
+pub fn fill_notes(list: &gtk::ListBox, b: &Backend, hits: Option<&[Hit]>, extra: &dyn Fn(&str) -> Vec<Badge>) {
     let folder = b.current_folder();
     let shown = match hits {
         None => b
@@ -423,7 +423,7 @@ pub fn fill_notes(
             for hit in hits {
                 if hit.related && !related_shown {
                     related_shown = true;
-                    let header = omui::label("Related by meaning", "heading");
+                    let header = omui::label(&tr("Related by meaning"), "heading");
                     header.add_css_class("related-header");
                     let row = gtk::ListBoxRow::builder()
                         .child(&header)
@@ -433,11 +433,11 @@ pub fn fill_notes(
                     list.append(&row);
                 }
                 let place = if hit.folder.is_empty() {
-                    "All Notes"
+                    tr("All Notes")
                 } else {
-                    &hit.folder
+                    hit.folder.clone()
                 };
-                let row = note_row(&hit.title, place, &hit.snippet, &[]);
+                let row = note_row(&hit.title, &place, &hit.snippet, &[]);
                 let item = Item::Note {
                     folder: hit.folder.clone(),
                     file: hit.file.clone(),
@@ -520,13 +520,20 @@ fn tree_row(
         .build();
     // The chevron folds and unfolds alone; the rest of the row opens.
     let chevron = gtk::Button::builder()
-        .icon_name(if row.expanded { name::DOWN } else { name::FORWARD })
+        .icon_name(if row.expanded {
+            name::DOWN
+        } else if gtk::Widget::default_direction() == gtk::TextDirection::Rtl {
+            // A folded folder's chevron points into the row, which reads from the right.
+            name::BACK
+        } else {
+            name::FORWARD
+        })
         .css_classes(["flat", "chevron"])
         .can_focus(false)
         .opacity(if row.expandable { 1.0 } else { 0.0 })
         .sensitive(row.expandable)
         .build();
-    chevron.set_tooltip_text(Some(if row.expanded { "Fold" } else { "Unfold" }));
+    chevron.set_tooltip_text(Some(&if row.expanded { tr("Fold") } else { tr("Unfold") }));
     let folder = row.folder.clone();
     let toggle = toggle.clone();
     chevron.connect_clicked(move |_| toggle(&folder));
@@ -540,15 +547,11 @@ fn tree_row(
             };
             content.append(&omui::icon(icon));
             let count = if row.count > 0 {
-                row.count.to_string()
+                omui::i18n::format_int(row.count)
             } else {
                 String::new()
             };
-            (
-                Item::Folder(row.folder.clone()),
-                folder_label(&row.folder).to_string(),
-                count,
-            )
+            (Item::Folder(row.folder.clone()), folder_label(&row.folder), count)
         }
         Some(note) => {
             let title = if note.title.is_empty() {

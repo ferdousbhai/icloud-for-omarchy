@@ -630,6 +630,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "gdk4-wayland"
+version = "0.11.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99cc5266dc4e8745a4c4683b26a0c54977a452809d572c940e39c6844663c0ec"
+dependencies = [
+ "gdk4",
+ "gdk4-wayland-sys",
+ "gio",
+ "glib",
+ "libc",
+]
+
+[[package]]
+name = "gdk4-wayland-sys"
+version = "0.11.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb55bc5225519d34fdf1412db3755af88d1388a1c2a053d92e6751db13d96e68"
+dependencies = [
+ "glib-sys",
+ "libc",
+ "system-deps 9.0.0",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -916,6 +940,7 @@ dependencies = [
  "gtk4",
  "icloud-session",
  "omui",
+ "tempfile",
 ]
 
 [[package]]
@@ -961,6 +986,7 @@ dependencies = [
  "cairo-rs",
  "gtk4",
  "icloud-app",
+ "icloud-app-ui",
  "icloud-session",
  "icu_collator",
  "icu_locale_core",
@@ -1006,6 +1032,7 @@ dependencies = [
  "clap",
  "gtk4",
  "icloud-app",
+ "icloud-app-ui",
  "icloud-session",
  "jpeg-encoder",
  "libc",
@@ -1067,6 +1094,7 @@ dependencies = [
  "clap",
  "icloud-app",
  "icloud-session",
+ "omui",
  "rpassword",
  "rusqlite",
  "serde",
@@ -1452,9 +1480,10 @@ dependencies = [
 
 [[package]]
 name = "omui"
-version = "0.5.7"
-source = "git+https://github.com/ferdousbhai/omui?rev=d5796183fdcc1dab218c7af5343bc0f29389db0e#d5796183fdcc1dab218c7af5343bc0f29389db0e"
+version = "0.6.0"
+source = "git+https://github.com/ferdousbhai/omui?rev=40737b7a74567654fc3fa7ac8c1037b42255afd4#40737b7a74567654fc3fa7ac8c1037b42255afd4"
 dependencies = [
+ "gdk4-wayland",
  "glib-build-tools",
  "gtk4",
  "serde_json",

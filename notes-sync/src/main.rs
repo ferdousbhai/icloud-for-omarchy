@@ -16,16 +16,16 @@
 //! `--quiet`, `--styled` forces text,
 //! `--ids-only` / `--count` where a command lists something. A failure is
 //! the contract error object `{"ok":false,"error":{"code","message","hint"?}}`
-//! on stdout in a machine mode, `error:` / `hint:` on stderr in text mode.
-//! Status lines and machine progress (`icloud-notes:progress:...`) go to
-//! stderr in a machine mode.
+//! on one line of stderr in a machine mode (its last line, after any status
+//! lines), `error:` / `hint:` on stderr in text mode: stdout only ever holds a
+//! result. Status lines and machine progress (`icloud-notes:progress:...`)
+//! go to stderr in a machine mode.
 //!
-//! Exit codes: 0 ok, 1 error, 2 usage, 3 not signed in / not set up, 4 not
-//! found, 5 a service unavailable (the table every iCloud tool shares;
-//! `cmd::errors`). `status`, `push --dry-run` and `diff` report their
-//! changes in the result and exit 0; a `push` that had a change refused
-//! reports its result and exits 1; `sync` reports both halves in its data
-//! and exits with its worse half, a sign-in above all.
+//! Exit codes are Omarchy's: 0 on success, 1 on any failure; the error's
+//! `code` tells failures apart (`cmd::errors`). `status`, `push --dry-run`
+//! and `diff` report their changes in the result and exit 0; a `push` that
+//! had a change refused reports its result and exits 1; `sync` reports both
+//! halves in its data and exits 1 when either failed.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -52,19 +52,19 @@ use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
                   vault-info notes) and --ids-only their files (status, push, restore) or snapshot ids \
                   (history). The flags combine: ids-only > count > quiet > json > styled. In those machine \
                   modes stdout is one JSON document; status lines and progress (icloud-notes:progress:...) \
-                  go to stderr, and a failure is \
-                  {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout (text mode: error: and \
-                  hint: lines on stderr).\n\
-                  Exit codes: 0 ok, 1 error, 2 usage (also ambiguous_tracked_file, already_cloned_directory, \
-                  too_many_deletions: most of the vault's note files are gone, and push --yes deletes the notes), \
-                  3 not signed in or not set up (sign_in_required, session_rejected: icloud-session sign-in; \
-                  not_cloned_directory, account_mismatch, notes_unavailable, ...: the error code tells them apart), \
-                  4 not found (untracked_file, unknown_version_snapshot), 5 a service unavailable (offline, network, \
-                  session_service, keyring_unavailable, bad_response, iCloud failing a request; an HTTP 4xx \
-                  cloudkit_request_failed is 1). status, push --dry-run and diff \
+                  go to stderr too, and a failure is \
+                  {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on the last line of stderr (text \
+                  mode: error: and hint: lines on stderr); stdout holds only a result.\n\
+                  Exit codes: 0 on success, 1 on any failure. The error's code says which: usage, \
+                  ambiguous_tracked_file, already_cloned_directory, too_many_deletions (most of the vault's note \
+                  files are gone, and push --yes deletes the notes); sign_in_required, session_rejected \
+                  (icloud-session sign-in); not_cloned_directory, account_mismatch, notes_unavailable, ... (not set \
+                  up for this account); untracked_file, unknown_version_snapshot (not found); offline, network, \
+                  session_service, keyring_unavailable, bad_response, cloudkit_request_failed (a service \
+                  unavailable or failing). status, push --dry-run and diff \
                   report their changes in the result and exit 0.\n\
                   clone, pull, push, sync, restore and a background that syncs take the vault's lock, shared with the Notes app (icloud-notes); \
-                  a busy lock is the error vault_busy (exit 1).",
+                  a busy lock is the error vault_busy.",
     version
 )]
 struct Cli {
@@ -103,20 +103,19 @@ enum Command {
         /// Report what would be pushed without changing anything
         #[arg(long)]
         dry_run: bool,
-        /// Delete the notes whose files are gone even when that is most of the vault (otherwise too_many_deletions, exit 2)
+        /// Delete the notes whose files are gone even when that is most of the vault (otherwise the error too_many_deletions)
         #[arg(long)]
         yes: bool,
     },
     /// Push, then pull, in one run over one connection (what the Notes app does)
     #[command(
         after_help = "data is {\"push\": HALF, \"pull\": HALF or null, \"vault_info\": vault-info's \
-                      answer or null}, even when a half failed; HALF is {\"ok\", \"exit_code\", \"result\" (push's or \
+                      answer or null}, even when a half failed; HALF is {\"ok\", \"exit_code\" (0 or 1), \"result\" (push's or \
                       pull's own data), \"lines\" (its human report)} or {\"ok\", \"exit_code\", \"error\" \
                       ({\"code\",\"message\",\"hint\"?})}. A failed half is reported only there: no separate error \
-                      object. A push that ran but had a change refused (push_rejected, exit 1) carries its result \
+                      object. A push that ran but had a change refused (push_rejected) carries its result \
                       and lines as well as the error. The pull runs unless the push found the sign-in gone or iCloud out of reach (null \
-                      then). Exit code: 3 if either half exited 3 (sign-in required, or the vault not set up for this \
-                      account), else the higher of the two halves' codes (5 unavailable, 4 not found, 2 usage, 1 error)."
+                      then). Exit code: 0 when both halves worked, else 1; each failed half's error code says why."
     )]
     Sync {
         directory: Option<PathBuf>,
@@ -160,13 +159,13 @@ enum Command {
     /// Leave iCloud for Omacloud: a last sync, then Omacloud syncs the folder and nothing here talks to iCloud
     #[command(
         after_help = "Needs Omacloud installed, set up and syncing the vault's folder of home (omacloud_missing, \
-                      omacloud_not_set_up, omacloud_folder_off, exit 3, each with the command that fixes it; \
+                      omacloud_not_set_up, omacloud_folder_off, each with the command that fixes it; \
                       nothing changes). Then a sync as sync does (never deleting most of the vault); if it fails, \
                       nothing changes. Then the vault's state (.icloud-notes) moves to \
                       $XDG_DATA_HOME/icloud-notes/left-icloud-state/, the .nosync marker leaves the vault, and \
                       omacloud sync runs (a failure there is a warning). iCloud keeps its copy as it was. From \
                       then on clone, pull, push, sync, status, restore, history and diff refuse with left_icloud \
-                      (exit 3) and background skips (step left). Asks on a terminal; otherwise needs --yes. Run \
+                      and background skips (step left). Asks on a terminal; otherwise needs --yes. Run \
                       again, it finishes a leave cut short.\n\
                       data is {\"folder\", \"left_at\" (seconds since the epoch), \"kept_state\", \
                       \"omacloud_synced\", \"already\"}."

@@ -1,0 +1,57 @@
+# Notes on a scratch vault and the stub engine: the window follows a switch of language, and lists its shortcuts.
+{"do":"wait","role":"list-item","name":"Notes","visible":true}
+{"do":"wait","role":"label","name":"Ready.","visible":true}
+{"do":"key","keys":"Down"}
+{"do":"key","keys":"Right"}
+{"do":"key","keys":"Down"}
+{"do":"key","keys":"Down"}
+{"do":"key","keys":"Return"}
+{"do":"wait","role":"text-box","name":"Note","focused":true,"text":"# Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
+
+# A made-up language (icloud-app-ui's feature qa): the fixed labels, the status line, the lists' words and the
+# search box take it at once. Folder and note names are the user's, and stay as they are.
+{"do":"language","code":"da","made_up":true}
+{"do":"wait","role":"button","name":"[da] Bold (Ctrl+B)","visible":true}
+{"do":"wait","role":"label","name":"[da] Ready.","visible":true}
+{"do":"wait","role":"list-item","name":"[da] All Notes","visible":true}
+{"do":"wait","role":"list-item","name":"Trip ideas","visible":true}
+{"do":"wait","role":"search-box","name":"[da] Search notes","visible":true}
+{"do":"wait","role":"text-box","name":"[da] Note","text":"# Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
+{"do":"click","role":"button","name":"[da] More"}
+{"do":"wait","role":"menu-item","name":"[da] Sync log","visible":true}
+{"do":"key","keys":"Escape"}
+{"do":"wait","role":"menu-item","name":"[da] Sync log","visible":false}
+{"do":"shot","path":"language-da.png"}
+
+# Right to left: the panes and the toolbar mirror.
+{"do":"language","code":"ar","made_up":true}
+{"do":"wait","role":"label","name":"[ar] Ready.","visible":true}
+{"do":"shot","path":"language-ar.png"}
+
+# And back.
+{"do":"language","code":"en"}
+{"do":"wait","role":"button","name":"Bold (Ctrl+B)","visible":true}
+{"do":"wait","role":"list-item","name":"All Notes","visible":true}
+
+# The shortcuts, on F1 from the note's text (Notes is typed into, so `?` is a character), and on Ctrl+? too. The
+# key that opened it closes it, as Escape does.
+{"do":"focus","role":"text-box","name":"Note"}
+{"do":"key","keys":"F1"}
+{"do":"wait","dialog":"Keyboard shortcuts"}
+{"do":"wait","role":"label","name":"Toggle the checkbox of the line","visible":true}
+{"do":"shot","path":"shortcuts.png"}
+{"do":"key","keys":"F1"}
+{"do":"wait","dialog":null}
+{"do":"key","keys":"<Control>question"}
+{"do":"wait","dialog":"Keyboard shortcuts"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"wait","role":"text-box","name":"Note","text":"# Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
+
+# More's menu opens them too.
+{"do":"click","role":"button","name":"More"}
+{"do":"click","role":"menu-item","name":"Keyboard shortcuts"}
+{"do":"wait","dialog":"Keyboard shortcuts"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"quit"}

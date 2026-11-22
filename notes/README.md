@@ -88,7 +88,7 @@ rust and gtk4):
 
 ```bash
 bin/build icloud-notes
-target/release/icloud-notes
+target/release/icloud-notes open
 ```
 
 ## First run
@@ -145,6 +145,36 @@ without asking.
   the last 30 days; older ones are dropped as new ones arrive. Throwing away a note's local edits is a deliberate terminal
   step (`icloud-notes restore`, see
   [If something looks wrong](#if-something-looks-wrong)), never a click.
+
+### Keyboard shortcuts
+
+Notes is typed into, so every shortcut is on Ctrl or a function key; the
+arrow keys walk the panes when the keyboard is in a list. `F1` (or
+`Ctrl+?`, or **Keyboard shortcuts** in the More menu) lists them in the
+window.
+
+| Key | Does |
+|---|---|
+| `Ctrl+N` | New note |
+| `Ctrl+F` | Search the notes |
+| `Ctrl+S` | Save now, asking first when a guardrail has flagged the edit |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo in the note |
+| `Ctrl+B` / `Ctrl+I` / `Ctrl+K` | Bold / italic / link |
+| `Ctrl+Enter` | Toggle the checkbox of the line (in the note) |
+| `Ctrl+V` | Paste; a copied image or file becomes an attachment |
+| `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Zoom the note's text in / out / back |
+| `Up` / `Down` | Pick a folder or note, opening it |
+| `Right` / `Enter` | Step deeper: the note list, then the note (in the tree, `Right` unfolds a folder) |
+| `Left` / `Escape` | Step back out (in the tree, `Left` folds a folder) |
+| `Home` / `End` / `PageUp` / `PageDown` | Jump inside a list |
+| `Ctrl+W` / `Ctrl+Q` | Close the window and quit |
+| `F1` / `Ctrl+?` | Show or hide the shortcuts |
+
+Closing saves what is not written yet. Edits that cannot be saved (a
+guardrail holds them, or another program's sync has the notes) are never
+dropped unseen: Notes asks **Discard your unsaved edits?**, and only
+**Discard and Close** loses them. Escape, Enter and **Keep Editing** leave
+the window open with the edits in the editor.
 
 ## Syncing
 
@@ -285,13 +315,15 @@ systemctl --user enable --now icloud-notes-background.timer
 
 ## Command line
 
-`icloud-notes <command>` does from a terminal (or an agent) whatever the
-window does, with no window and no display: the same rules (read-only
+`icloud-notes open` opens the window (the app launcher's Notes runs it;
+plain `icloud-notes` does too). `icloud-notes <command>` does from a
+terminal (or an agent) whatever the window does, with no window and no display: the same rules (read-only
 notes, the save checks, trash semantics, the version picker), through the
 same code. `icloud-notes help` lists the commands and `icloud-notes
 COMMAND --help` describes one, with its JSON.
 
 ```bash
+icloud-notes open                         # the window
 icloud-notes status                       # vault, sign-in, lock holder, flagged notes
 icloud-notes list [--folder F] [--flag conflict]
 icloud-notes read "Groceries"             # a path in the vault, an apple-note-id, or a unique title

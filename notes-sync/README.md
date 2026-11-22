@@ -42,18 +42,18 @@ $ icloud-notes-sync --quiet vault-info
 $ icloud-notes-sync --quiet background [--every SECS]
 ```
 
-Exit codes, the table the other iCloud tools share
-([docs/CLI.md](../docs/CLI.md)); the JSON `code` tells errors with the same
-exit apart:
+Exit codes are Omarchy's, as in every iCloud tool
+([docs/CLI.md](../docs/CLI.md)): 0 on success (`status`, `push --dry-run`
+and `diff` report their changes in the result), 1 on any failure. The
+error's `code` says which failure it was:
 
-| exit | meaning | codes |
-|---|---|---|
-| 0 | ok (`status`, `push --dry-run` and `diff` report their changes in the result) | |
-| 1 | error | `internal`, `io` (a file or disk failure), `error` (a failure icloud-sessiond itself reported; icloud-session's errors read as in every iCloud tool), `vault_busy`, `vault_lock`, `vault_needs_update`, `vault_from_newer_tool`, `unsupported_vault_layout`, `corrupt_state_file`, `version_content_unavailable`, `cloudkit_request_failed` for an HTTP 4xx (iCloud refused the request) |
-| 2 | usage | `usage`, `ambiguous_tracked_file`, `already_cloned_directory`, `too_many_deletions` (most of the vault's note files are gone: nothing is pushed until `push --yes` or `sync --yes`) |
-| 3 | not signed in, or the vault isn't set up for this account | `sign_in_required` (sign in with icloud-session), `session_rejected` (iCloud keeps answering 401/421 although icloud-sessiond still holds the sign-in: sign in again), `not_cloned_directory`, `unbound_account`, `account_mismatch`, `requested_account_mismatch`, `notes_unavailable` |
-| 4 | not found | `untracked_file`, `unknown_version_snapshot`, `cloudkit_zone_fetch_failed` for a `ZONE_NOT_FOUND` zone |
-| 5 | a service unavailable | `offline`, `network`, `session_service` (icloud-sessiond unreachable), `keyring_unavailable`, `bad_response` (an answer that cannot be read), `cloudkit_request_failed` (an HTTP 5xx or a transport failure), `cloudkit_zone_fetch_failed` |
+| kind | codes |
+|---|---|
+| error | `internal`, `io` (a file or disk failure), `error` (a failure icloud-sessiond itself reported; icloud-session's errors read as in every iCloud tool), `vault_busy`, `vault_lock`, `vault_needs_update`, `vault_from_newer_tool`, `unsupported_vault_layout`, `corrupt_state_file`, `version_content_unavailable`, `cloudkit_request_failed` for an HTTP 4xx (iCloud refused the request) |
+| usage | `usage`, `ambiguous_tracked_file`, `already_cloned_directory`, `too_many_deletions` (most of the vault's note files are gone: nothing is pushed until `push --yes` or `sync --yes`) |
+| not signed in, or the vault isn't set up for this account | `sign_in_required` (sign in with icloud-session), `session_rejected` (iCloud keeps answering 401/421 although icloud-sessiond still holds the sign-in: sign in again), `not_cloned_directory`, `unbound_account`, `account_mismatch`, `requested_account_mismatch`, `notes_unavailable` |
+| not found | `untracked_file`, `unknown_version_snapshot`, `cloudkit_zone_fetch_failed` for a `ZONE_NOT_FOUND` zone |
+| a service unavailable | `offline`, `network`, `session_service` (icloud-sessiond unreachable), `keyring_unavailable`, `bad_response` (an answer that cannot be read), `cloudkit_request_failed` (an HTTP 5xx or a transport failure), `cloudkit_zone_fetch_failed` |
 
 Output follows the contract every iCloud tool shares
 ([icloud_session::output](../session/src/output.rs)): text on a terminal;
@@ -66,9 +66,10 @@ reads); `--styled` forces text; `--count` prints how many entries
 those machine modes stdout is exactly one JSON document, and status lines
 and progress go to stderr. A failure is
 `{"ok":false,"error":{"code":"sign_in_required","message":…,"hint":…}}`
-on stdout in a machine mode, pretty-printed (`code` is the error's class in
-snake case; `hint`, when present, says how to fix it), and `error: …` /
-`hint: …` on stderr in text mode.
+on one line of stderr in a machine mode, its last line (`code` is the
+error's class in snake case; `hint`, when present, says how to fix it), and
+`error: …` / `hint: …` on stderr in text mode: stdout only ever holds a
+result.
 
 `sync` is for the Notes app: push, then pull, in one run
 over one connection (one icloud-sessiond `Session()` call, one TLS
@@ -78,13 +79,13 @@ is `{"push": HALF, "pull": HALF|null, "vault_info": …}` even when a half
 failed, HALF being `{ok, exit_code, result, lines}` (the command's own data
 and its human report) or `{ok, exit_code, error}` (`{code, message,
 hint?}`); a failed half is reported only there, with no separate error
-object. It exits 3 if either half exited 3, else with the higher of the two halves'
-codes. No network is the error `offline` (nothing reachable at all:
-icloud-session says so at once) or `network`, exit 5.
+object; each half's `exit_code` is 0 or 1. It exits 1 when either half
+failed, else 0. No network is the error `offline` (nothing reachable at all:
+icloud-session says so at once) or `network`.
 
 clone, pull, push, sync and restore take the vault's lock, the one the Notes app
 holds while it is open (`--wait SECS` to wait for it; busy is the error
-`vault_busy`, exit 1); status, history, diff and push --dry-run only read and
+`vault_busy`); status, history, diff and push --dry-run only read and
 take none.
 
 A vault keeps the engine's state in `.icloud-notes/` (vault layout 4):

@@ -1,0 +1,65 @@
+name: Check
+# Every push runs what bin/check --all runs on a developer's machine: the backends' and command lines' tests, Notes'
+# black-box suite on the binary built here, and the windows driven through their QA scripts on a headless display,
+# where any GLib warning fails the run. Packages are built by packages.yml, on a release.
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  # The installers run against a stubbed pacman in a user namespace, which a container does not hand out: there
+  # tests/install_test.sh skips its runs, so they are made here, on the runner itself, as packages.yml makes them.
+  scripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          cargo fmt --all -- --check
+          tests/install_test.sh
+          python3 tests/packaging_test.py
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Arch, as the packages are built on: its gtk4 and webkitgtk-6.0 are the ones the apps ship against.
+    container: archlinux:base-devel
+    steps:
+      # The build dependencies of packaging/PKGBUILD (makedepends), and what the tests run beside them: git and
+      # python for the packaging tests, node for the sign-in page's script, sqlite for the catalog, and a font, without
+      # which the windows have no text to lay out. gtk4 brings gtk4-broadwayd, the QA scripts' display.
+      - name: Install what the build and the tests need
+        run: |
+          pacman -Syu --noconfirm --needed rust git dbus gtk4 libshumate webkitgtk-6.0 \
+            sqlite python nodejs util-linux procps-ng ttf-dejavu
+      - uses: actions/checkout@v4
+      - name: Cache Cargo downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            dist/cargo-check/registry/index
+            dist/cargo-check/registry/cache
+            dist/cargo-check/git/db
+          key: check-cargo-downloads-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            check-cargo-downloads-
+      # Compiled dependencies, as in packages.yml: a stale cache only costs time, each run saves under its own key,
+      # and the newest restores.
+      - name: Cache compiled crates
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: check-cargo-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            check-cargo-target-${{ hashFiles('Cargo.lock') }}-
+            check-cargo-target-
+      # As a regular user, as the packages' check() runs: root passes the permission checks some tests rely on.
+      # CI is named to the tests, so Notes' black-box suite cannot be left out: bin/check builds its binary first.
+      - name: Run bin/check --all
+        run: |
+          useradd -m builder
+          chown -R builder:builder .
+          runuser -u builder -- env CI=true HOME=/home/builder CARGO_HOME="$PWD/dist/cargo-check" bin/check --all

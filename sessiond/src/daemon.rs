@@ -204,10 +204,39 @@ enum LoginBlock {
     Until(Instant),
 }
 
+/// The `code` of the error the sign-in window ends with when Apple refuses
+/// the password it filled in (`--autofill`): it exits 1, as every failure
+/// does, and says which failure on the last line of its stderr.
+pub const PASSWORD_REJECTED: &str = "password_rejected";
+
+/// What a sign-in window prints: its stdout (the capture), and the reader of
+/// its stderr, which ends with the `code` of the error it failed with.
+struct WindowOutput {
+    stdout: ChildStdout,
+    failure: thread::JoinHandle<Option<String>>,
+}
+
+/// Passes the window's stderr on to the daemon's (the journal keeps both),
+/// line by line as it comes, and gives the `code` of the last error object
+/// among those lines.
+fn window_failure(stderr: impl Read) -> Option<String> {
+    use std::io::BufRead;
+    let mut code = None;
+    for line in std::io::BufReader::new(stderr).lines() {
+        let Ok(line) = line else { break };
+        eprintln!("{line}");
+        if let Some(error) = icloud_session::output::error_line(line.as_bytes()) {
+            code = error["error"]["code"].as_str().map(str::to_owned);
+        }
+    }
+    code
+}
+
 /// How an automatic Find My sign-in failed.
 #[derive(Debug)]
 enum LoginError {
-    /// Apple said the password is wrong (the autofill window exits 3). Not
+    /// Apple said the password is wrong (the autofill window fails with
+    /// [`PASSWORD_REJECTED`]). Not
     /// worth retrying until the password changes.
     Rejected,
     /// No answer, another status, an answer without Find My's cookie.
@@ -1919,15 +1948,15 @@ impl Daemon {
 
     /// Starts a sign-in window with `args`, parked in `slot` under `key`
     /// (the value `current` reads from the state now, or a SignOut has
-    /// cancelled it already), and counts it in: its stdin, its stdout, and
-    /// the count's guard for [`Daemon::finish_window`].
+    /// cancelled it already), and counts it in: its stdin, what it prints,
+    /// and the count's guard for [`Daemon::finish_window`].
     fn spawn_window(
         &self,
         slot: &Mutex<Option<(u64, Child)>>,
         key: u64,
         current: impl FnOnce(&State) -> u64,
         args: &[&str],
-    ) -> Result<(ChildStdin, ChildStdout, Window<'_>), WindowError> {
+    ) -> Result<(ChildStdin, WindowOutput, Window<'_>), WindowError> {
         let bin = &self.cfg.signin_bin;
         // Spawned under the slot's lock, so a SignOut either sees the
         // child (and kills it) or has already moved `key` on.
@@ -1939,24 +1968,31 @@ impl Daemon {
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| WindowError::Failed(spawn_error(bin, &e)))?;
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
+        let stderr = child.stderr.take().expect("stderr is piped");
         *slot = Some((key, child));
-        Ok((stdin, stdout, self.window_opened()))
+        let output = WindowOutput {
+            stdout,
+            failure: thread::spawn(move || window_failure(stderr)),
+        };
+        Ok((stdin, output, self.window_opened()))
     }
 
     /// Reads all a window prints, then takes it back out of its slot and
-    /// waits for it: how it exited, and what it printed.
+    /// waits for it: how it exited, what it printed, and the `code` of the
+    /// error it ended with, if it said why it failed.
     fn finish_window(
         &self,
         slot: &Mutex<Option<(u64, Child)>>,
         key: u64,
-        mut stdout: ChildStdout,
+        output: WindowOutput,
         window: Window<'_>,
-    ) -> Result<(ExitStatus, Vec<u8>), WindowError> {
+    ) -> Result<(ExitStatus, Vec<u8>, Option<String>), WindowError> {
+        let WindowOutput { mut stdout, failure } = output;
         let mut out = Vec::new();
         let read = stdout.read_to_end(&mut out);
         let mut child = take_window(slot, key)?;
@@ -1965,7 +2001,9 @@ impl Daemon {
             .map_err(|e| WindowError::Failed(format!("waiting for {}: {e}", self.cfg.signin_bin.display())))?;
         drop(window);
         read.map_err(|e| WindowError::Failed(format!("reading the sign-in window's output: {e}")))?;
-        Ok((status, out))
+        // The window has exited, so its stderr is closed and the reader ends.
+        let failure = failure.join().unwrap_or_default();
+        Ok((status, out, failure.filter(|_| !status.success())))
     }
 
     /// Runs the sign-in window hidden in `--find --autofill` mode: it signs
@@ -1979,7 +2017,7 @@ impl Daemon {
         let cookies = self.window_cookies();
         let slot = &self.autofill_child;
         let args = ["--find", "--autofill", "--cookies"];
-        let (mut stdin, stdout, window) = self.spawn_window(slot, generation, |st| st.generation, &args)?;
+        let (mut stdin, output, window) = self.spawn_window(slot, generation, |st| st.generation, &args)?;
         {
             let mut input = Zeroizing::new(format!("{}{apple_id}\n{password}\n", *cookies));
             let written = stdin.write_all(input.as_bytes());
@@ -1990,9 +2028,9 @@ impl Daemon {
                 return Err(failed(format!("giving the sign-in window the password: {e}")));
             }
         }
-        let (status, out) = self.finish_window(slot, generation, stdout, window)?;
+        let (status, out, failure) = self.finish_window(slot, generation, output, window)?;
         crash::point("captured", "autofill");
-        if status.code() == Some(3) {
+        if failure.as_deref() == Some(PASSWORD_REJECTED) {
             return Err(LoginError::Rejected);
         }
         if !status.success() {
@@ -2014,11 +2052,11 @@ impl Daemon {
         let cookies = self.window_cookies();
         let slot = &self.signin_child;
         let args: &[&str] = if find { &["--find", "--cookies"] } else { &["--cookies"] };
-        let (mut stdin, stdout, window) = self.spawn_window(slot, seq, |st| st.signin_seq, args)?;
+        let (mut stdin, output, window) = self.spawn_window(slot, seq, |st| st.signin_seq, args)?;
         // A window that ends without reading them needed none.
         let _ = stdin.write_all(cookies.as_bytes());
         drop(stdin);
-        let (status, out) = self.finish_window(slot, seq, stdout, window)?;
+        let (status, out, _) = self.finish_window(slot, seq, output, window)?;
         crash::point("captured", if find { "find-my" } else { "sign-in" });
         if !status.success() {
             return Err(NotKept::Closed(format!(

@@ -95,8 +95,10 @@ fn a_first_argument_that_is_no_command_goes_to_the_app_with_the_rest() {
 
 #[test]
 fn a_command_stays_here_and_the_app_is_not_run() {
+    // With no display either: the command line never needs one.
     for args in [
         &["--version"][..],
+        &["--help"],
         &["help"],
         &["--json", "status"],
         &["list", "--bogus"],
@@ -114,6 +116,39 @@ fn a_command_stays_here_and_the_app_is_not_run() {
 }
 
 #[test]
+fn open_runs_the_app_with_nothing_after_it() {
+    for args in [&["open"][..], &["open", "--json", "list"]] {
+        let (out, ran) = beside_an_app(args);
+        assert_eq!(out.status.code(), Some(7), "{args:?}: {out:?}");
+        assert_eq!(
+            ran.trim_end_matches('\n'),
+            "",
+            "{args:?}: the app is given no arguments"
+        );
+    }
+}
+
+/// The package puts the window in /usr/lib/icloud-notes/, beside nothing on
+/// `PATH`: the command finds it there, from its own directory.
+#[test]
+fn open_finds_the_app_where_the_package_puts_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (bin, lib) = (tmp.path().join("bin"), tmp.path().join("lib/icloud-notes"));
+    fs::create_dir_all(&bin).unwrap();
+    fs::create_dir_all(&lib).unwrap();
+    let copy = bin.join("icloud-notes");
+    fs::copy(CLI, &copy).unwrap();
+    let ran = tmp.path().join("ran");
+    write_script(
+        &lib.join("icloud-notes-app"),
+        &format!("#!/bin/sh\necho opened > '{}'\nexit 7\n", ran.display()),
+    );
+    let out = run(&copy, &["open"], tmp.path());
+    assert_eq!(out.status.code(), Some(7), "{out:?}");
+    assert_eq!(fs::read_to_string(ran).unwrap(), "opened\n");
+}
+
+#[test]
 fn export_pdf_is_laid_out_by_the_app_once_its_arguments_are_right() {
     // The whole command goes over, as it was given.
     let args = ["--json", "--vault", "/nowhere", "export-pdf", "Some note"];
@@ -122,8 +157,9 @@ fn export_pdf_is_laid_out_by_the_app_once_its_arguments_are_right() {
     assert_eq!(ran.lines().collect::<Vec<_>>(), args);
     // A usage error is this binary's own, and so is the help.
     let (out, ran) = beside_an_app(&["--json", "export-pdf"]);
-    assert_eq!((out.status.code(), ran.as_str()), (Some(2), ""), "{out:?}");
-    assert!(String::from_utf8_lossy(&out.stdout).contains("usage: icloud-notes export-pdf NOTE"));
+    assert_eq!((out.status.code(), ran.as_str()), (Some(1), ""), "{out:?}");
+    assert!(out.stdout.is_empty(), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("usage: icloud-notes export-pdf NOTE"));
     let (out, ran) = beside_an_app(&["export-pdf", "--help"]);
     assert_eq!((out.status.code(), ran.as_str()), (Some(0), ""), "{out:?}");
 }
@@ -133,8 +169,8 @@ fn a_failure_keeps_its_exit_code_when_nobody_reads_stderr() {
     // `icloud-notes … 2>&1 | head -1`, once head has gone.
     let tmp = tempfile::tempdir().unwrap();
     for (args, code) in [
-        (&["--styled", "list", "--nope"][..], 2),
-        (&["--styled", "read", "no such note"], 3),
+        (&["--styled", "list", "--nope"][..], 1),
+        (&["--styled", "read", "no such note"], 1),
         (&["--ids-only", "status"], 0),
     ] {
         let (reader, writer) = std::io::pipe().unwrap();
@@ -162,16 +198,28 @@ fn without_an_app_the_binary_says_so() {
         said.ends_with("run `icloud-notes help` for the command line\n"),
         "{said}"
     );
+    // open says the same.
+    let out = run(&copy, &["open"], tmp.path());
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let said = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        said.starts_with("icloud-notes: cannot open the app (icloud-notes-app: "),
+        "{said}"
+    );
+    assert!(
+        said.ends_with("run `icloud-notes help` for the command line\n"),
+        "{said}"
+    );
     // export-pdf: the contract's failure, in the mode asked for.
     let out = run(&copy, &["--json", "export-pdf", "Some note"], tmp.path());
     assert_eq!(
-        (out.status.code(), out.stderr.as_slice()),
+        (out.status.code(), out.stdout.as_slice()),
         (Some(1), &b""[..]),
         "{out:?}"
     );
-    let said = String::from_utf8(out.stdout).unwrap();
+    let said = String::from_utf8(out.stderr).unwrap();
     assert!(
-        said.starts_with("{\n    \"ok\": false,\n    \"error\": {\n        \"code\": \"error\","),
+        said.starts_with("{\"ok\":false,\"error\":{\"code\":\"error\","),
         "{said}"
     );
     assert!(

@@ -39,7 +39,7 @@ fn a_terminal_gets_text_without_being_asked() {
     // A failure is the error: and hint: lines.
     assert_eq!(
         on_a_terminal(&w, &["list", "--folder", "Nope"], ""),
-        (4, "error: no folder \"Nope\"\nhint: `icloud-notes folders` lists them; `icloud-notes new-folder` makes one.\n".into())
+        (1, "error: no folder \"Nope\"\nhint: `icloud-notes folders` lists them; `icloud-notes new-folder` makes one.\n".into())
     );
     // The flags still pick a machine mode.
     let (code, out) = on_a_terminal(&w, &["folders", "--count"], "");
@@ -85,8 +85,8 @@ fn delete_asks_and_takes_only_a_yes() {
         (0, "Moved Notes/Twin.md to the trash\n".into())
     );
     let (code, out) = on_a_terminal(&w, &["--json", "delete", "beta"], "y\n");
-    assert_eq!(code, 2);
-    assert!(out.contains("\"code\": \"usage\"") && w.exists("Work/Beta.md"), "{out}");
+    assert_eq!(code, 1);
+    assert!(out.contains("\"code\":\"usage\"") && w.exists("Work/Beta.md"), "{out}");
 }
 
 #[test]

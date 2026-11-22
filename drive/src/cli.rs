@@ -2,8 +2,9 @@
 //! reading or writing files: only `status`, a sync on demand, and turning
 //! the background service on and off. Output follows the shared product
 //! contract ([`icloud_session::output`]): text on a terminal, the JSON
-//! envelope when piped. Exit codes are the table every iCloud tool shares
-//! (docs/CLI.md).
+//! envelope when piped. Exit codes are Omarchy's, shared by every iCloud
+//! tool (docs/CLI.md): 0 ok and 1 any failure, the JSON `code` naming the
+//! kind, with the error on stderr so stdout holds only results.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
 use icloud_app::leave::{self, Left};
-use icloud_session::cli::{EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE};
+use icloud_session::cli::EXIT_ERROR;
 use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
 use icloud_session::time::rfc3339;
 use serde_json::json;
@@ -47,19 +48,21 @@ moves the folder into one Omacloud already syncs instead.
 Output: text on a terminal, a JSON envelope {\"ok\":true,\"data\",\"summary\"}
 when piped. --json forces the envelope, --styled text, --quiet prints only
 the data, --ids-only one line per change a sync made, --count their number. A
-failure is {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or
-error:/hint: lines on stderr in text mode.
+failure prints nothing on stdout: it is
+{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on one line of
+stderr, or error:/hint: lines on stderr in text mode.
 
-Exit codes:
-  0 ok
-  1 error (io, error, busy, http 4xx), or a sync that left some items for later
-  2 usage; too_many_deletions (run `icloud-drive sync --yes` after checking
-    `icloud-drive sync --dry-run`); other_account; other_folder; other_top
-  3 sign_in_required, session_rejected, drive_unavailable; status while signed out;
-    left_icloud (sync, start or leave after leaving); omacloud_missing,
+Exit codes: 0 ok; 1 any failure, a sync that left some items for later, or
+status while signed out (the status is printed all the same). The error's
+code says what failed:
+  usage, too_many_deletions (run `icloud-drive sync --yes` after checking
+    `icloud-drive sync --dry-run`), other_account, other_folder, other_top
+  sign_in_required, session_rejected, drive_unavailable
+  left_icloud (sync, start or leave after leaving); omacloud_missing,
     omacloud_not_set_up, omacloud_folder_off (leave: what Omacloud lacks)
-  4 folder_missing
-  5 offline, network, session_service, keyring_unavailable, bad_response, http 5xx";
+  folder_missing
+  offline, network, session_service, keyring_unavailable, bad_response, http
+  io, error, busy";
 
 #[derive(Parser)]
 #[command(
@@ -148,7 +151,7 @@ pub fn run() -> u8 {
     let result = match args.command {
         Cmd::Start | Cmd::Stop | Cmd::Leave { .. } if own_folder => Err(CliError::new(
             "usage",
-            EXIT_USAGE,
+            EXIT_ERROR,
             "the background sync keeps ~/iCloud Drive only; --dir does not apply to start, stop and leave",
         )
         .hint("sync another folder by hand: `icloud-drive --dir DIR --state-dir DIR sync`")),
@@ -184,25 +187,26 @@ fn failure(e: &engine::Error) -> CliError {
     use engine::Error as E;
     match e {
         E::Remote(remote::Error::Session(e)) => output::session_failure(e),
-        E::Remote(remote::Error::NotOffered(_)) => CliError::new("drive_unavailable", EXIT_SIGN_IN, e.to_string())
-            .hint("turn on iCloud Drive for this Apple ID"),
+        E::Remote(remote::Error::NotOffered(_)) => {
+            CliError::new("drive_unavailable", EXIT_ERROR, e.to_string()).hint("turn on iCloud Drive for this Apple ID")
+        }
         E::Remote(remote::Error::Listing { .. } | remote::Error::Partial { .. }) => {
-            CliError::new("bad_response", EXIT_UNAVAILABLE, e.to_string())
+            CliError::new("bad_response", EXIT_ERROR, e.to_string())
                 .hint("iCloud gave an incomplete answer; nothing was changed. Try again later")
         }
-        E::FolderMissing(folder) => CliError::new("folder_missing", EXIT_NOT_FOUND, e.to_string()).hint(format!(
+        E::FolderMissing(folder) => CliError::new("folder_missing", EXIT_ERROR, e.to_string()).hint(format!(
             "put {} back (mount its disk, or move it back); nothing is removed in iCloud while it is missing",
             folder.display()
         )),
-        E::TooManyDeletions { .. } => CliError::new("too_many_deletions", EXIT_USAGE, e.to_string())
+        E::TooManyDeletions { .. } => CliError::new("too_many_deletions", EXIT_ERROR, e.to_string())
             .hint("see them with `icloud-drive sync --dry-run`, then run `icloud-drive sync --yes`"),
-        E::OtherAccount { .. } => CliError::new("other_account", EXIT_USAGE, e.to_string()).hint(
+        E::OtherAccount { .. } => CliError::new("other_account", EXIT_ERROR, e.to_string()).hint(
             "sign in to that account again, or sync this one into a folder of its own: \
              `icloud-drive --dir DIR --state-dir DIR sync`",
         ),
-        E::OtherFolder { .. } => CliError::new("other_folder", EXIT_USAGE, e.to_string())
+        E::OtherFolder { .. } => CliError::new("other_folder", EXIT_ERROR, e.to_string())
             .hint("give this folder a state of its own: `icloud-drive --dir DIR --state-dir DIR sync`"),
-        E::OtherTop { .. } => CliError::new("other_top", EXIT_USAGE, e.to_string()).hint(
+        E::OtherTop { .. } => CliError::new("other_top", EXIT_ERROR, e.to_string()).hint(
             "give this folder of iCloud Drive a local folder and a state of its own: \
              `icloud-drive --top ID --dir DIR --state-dir DIR sync`",
         ),
@@ -313,7 +317,7 @@ fn leave_icloud(
             if fs::read_dir(&to).is_ok_and(|mut d| d.next().is_some()) {
                 return Err(CliError::new(
                     "exists",
-                    EXIT_USAGE,
+                    EXIT_ERROR,
                     format!(
                         "{} is not empty; the folder moves only into an empty or new one",
                         to.display()
@@ -323,7 +327,7 @@ fn leave_icloud(
             if !to.parent().is_some_and(Path::is_dir) {
                 return Err(CliError::new(
                     "folder_missing",
-                    EXIT_NOT_FOUND,
+                    EXIT_ERROR,
                     format!("{} is not there to move into", to.parent().unwrap_or(&to).display()),
                 ));
             }
@@ -615,7 +619,8 @@ fn status(paths: &Paths) -> Result<Response, CliError> {
         (None, true, _) => format!("iCloud Drive sync is on, {files} files in sync"),
         (None, false, _) => "iCloud Drive sync is off".to_string(),
     };
-    let exit = if signed_in == Some(false) { EXIT_SIGN_IN } else { 0 };
+    // Signed out, the status is still the answer, but a script checking the exit status learns it cannot sync.
+    let exit = if signed_in == Some(false) { EXIT_ERROR } else { 0 };
     Ok(Response::new(data, summary).human(text.join("\n")).exit(exit))
 }
 

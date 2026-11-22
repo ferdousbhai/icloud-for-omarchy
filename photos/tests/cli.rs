@@ -161,8 +161,7 @@ fn leave_hands_the_library_to_omacloud() {
     };
     let missing = env.root.join("no-omacloud");
     let r = with(&["leave", "--yes"], &missing);
-    assert_eq!(r.code, 3, "{}", r.stdout);
-    assert_eq!(r.doc()["error"]["code"], "omacloud_missing");
+    assert_eq!(error_doc(&r)["error"]["code"], "omacloud_missing");
     assert!(!library.exists() || std::fs::read_dir(&library).unwrap().next().is_none());
 
     // Omacloud syncs one whole folder holding the data directory
@@ -178,7 +177,7 @@ fn leave_hands_the_library_to_omacloud() {
     let omacloud = env.root.join("bin/omacloud");
     // nobody to ask and no --yes: nothing happens
     let r = with(&["leave"], &omacloud);
-    assert_eq!(r.code, 2, "{}", r.stdout);
+    assert_eq!(error_doc(&r)["error"]["code"], "usage");
     assert_eq!(env.json(&["status"])["downloaded"], 0);
 
     let r = with(&["leave", "--yes"], &omacloud);
@@ -212,8 +211,7 @@ fn leave_hands_the_library_to_omacloud() {
     // afterwards: what reaches iCloud refuses; status and the catalog answer
     for args in [&["sync"][..], &["download", "--all"], &["thumb", "X"]] {
         let r = with(args, &omacloud);
-        assert_eq!(r.code, 3, "{args:?}: {}", r.stdout);
-        assert_eq!(r.doc()["error"]["code"], "left_icloud", "{args:?}");
+        assert_eq!(error_doc(&r)["error"]["code"], "left_icloud", "{args:?}");
     }
     assert!(env.json(&["status"])["left"]["folder"].is_string());
     assert_eq!(env.json(&["list"]).as_array().unwrap().len(), 4);
@@ -253,7 +251,10 @@ fn usage_help_and_exit_codes() {
         assert!(help.stdout.contains(cmd), "--help lists {cmd}");
         let own = env.bare(&[cmd, "--help"]);
         assert_eq!(own.code, 0, "{cmd} --help");
-        assert!(own.stdout.contains("Exit codes"), "{cmd} --help names the exit codes");
+        assert!(
+            own.stdout.contains("Exit codes: 0 ok, 1 any failure"),
+            "{cmd} --help names the exit codes"
+        );
     }
     // The --ids-only line names every command that sets ids, as docs/CLI.md does.
     for part in [
@@ -263,32 +264,32 @@ fn usage_help_and_exit_codes() {
         assert!(help.stdout.contains(part), "--help says {part}");
     }
     assert_eq!(env.bare(&["--version"]).code, 0);
-    assert_eq!(env.bare(&["frobnicate"]).code, 2);
-    assert_eq!(env.run(&["list", "--kind", "painting"]).code, 2);
-    assert_eq!(env.run(&["list", "--since", "last tuesday"]).code, 2);
-    assert_eq!(env.run(&["download"]).code, 2, "an id or --all is required");
-    assert_eq!(env.run(&["upload"]).code, 2);
+    assert_eq!(env.bare(&["frobnicate"]).code, 1);
+    assert_eq!(env.run(&["list", "--kind", "painting"]).code, 1);
+    assert_eq!(env.run(&["list", "--since", "last tuesday"]).code, 1);
+    assert_eq!(env.run(&["download"]).code, 1, "an id or --all is required");
+    assert_eq!(env.run(&["upload"]).code, 1);
 
-    // Not found: exit 4, and with --json the error object on stdout.
+    // Not found: exit 1, and with --json the error object on stderr.
     let r = env.run(&["--json", "info", "NO-SUCH-ID"]);
-    assert_eq!(r.code, 4);
+    assert_eq!(r.code, 1);
     let err = error_doc(&r);
     assert_eq!(err["error"]["code"], "not_found");
     assert!(err["error"]["message"].as_str().unwrap().contains("NO-SUCH-ID"));
     assert!(err["error"]["hint"].as_str().unwrap().contains("icloud-photos sync"));
     // A usage error with --json is JSON too, with a --help hint.
     let r = env.run(&["--json", "list", "--kind", "painting"]);
-    assert_eq!(r.code, 2);
+    assert_eq!(r.code, 1);
     let err = error_doc(&r);
     assert_eq!(err["error"]["code"], "usage");
     assert_eq!(err["error"]["hint"], "run `icloud-photos --help`");
     // In text mode clap's own message, on stderr.
     let r = env.styled(&["list", "--kind", "painting"]);
-    assert_eq!(r.code, 2);
+    assert_eq!(r.code, 1);
     assert!(r.stdout.is_empty() && r.stderr.starts_with("error:"), "{}", r.stderr);
     // An unknown id is not found before delete asks anything.
     let r = env.run(&["--json", "delete", "NO-SUCH-ID"]);
-    assert_eq!(r.code, 4, "the id is checked first: {}", r.stderr);
+    assert_eq!(r.code, 1, "the id is checked first: {}", r.stderr);
 }
 
 #[test]
@@ -300,13 +301,46 @@ fn no_arguments_runs_the_app_in_its_place() {
     std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
     let r = env.bare_with(&[], &[("ICLOUD_PHOTOS_APP", &app)]);
     assert_eq!((r.code, r.stdout.trim()), (7, "app args:0"), "{}", r.stderr);
+    // `open` with no id is the same (the desktop entry's `Exec=icloud-photos open`), whatever the output flags.
+    for args in [&["open"][..], &["--json", "open"]] {
+        let r = env.bare_with(args, &[("ICLOUD_PHOTOS_APP", &app)]);
+        assert_eq!((r.code, r.stdout.trim()), (7, "app args:0"), "{args:?}: {}", r.stderr);
+    }
     // Without it, the app binary beside this one (cargo builds both).
     let beside = Path::new(env!("CARGO_BIN_EXE_icloud-photos")).with_file_name("icloud-photos-app");
     assert_eq!(beside, Path::new(env!("CARGO_BIN_EXE_icloud-photos-app")));
-    // A missing app is an error, not a hang.
+    // A missing app is an error, not a hang: on stderr, exit 1, as JSON in a machine mode.
     let r = env.bare_with(&[], &[("ICLOUD_PHOTOS_APP", &env.root.join("nope"))]);
     assert_eq!(r.code, 1);
     assert!(r.stderr.contains("cannot open the app"), "{}", r.stderr);
+    let r = env.bare_with(&["--json", "open"], &[("ICLOUD_PHOTOS_APP", &env.root.join("nope"))]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.is_empty(), "{}", r.stdout);
+    let err = error_doc(&r);
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot open the app"),
+        "{err}"
+    );
+    // --medium needs an item to open.
+    let r = env.bare_with(&["--json", "open", "--medium"], &[("ICLOUD_PHOTOS_APP", &app)]);
+    assert_eq!(
+        (r.code, error_doc(&r)["error"]["code"].as_str()),
+        (1, Some("usage")),
+        "{}",
+        r.stderr
+    );
+    // Help and the version need no display (none is set here) and never start the app.
+    for args in [&["--help"][..], &["--version"], &["open", "--help"]] {
+        let r = env.bare_with(args, &[("ICLOUD_PHOTOS_APP", &app)]);
+        assert_eq!(r.code, 0, "{args:?}: {}", r.stderr);
+        assert!(!r.stdout.contains("app args"), "{args:?} started the app");
+    }
+    let help = env.bare(&["open", "--help"]).stdout;
+    assert!(help.contains("Open the Photos window"), "{help}");
+    assert!(env.bare(&["--help"]).stdout.contains("Open the Photos window"));
 }
 
 #[test]
@@ -427,7 +461,7 @@ fn albums_list_and_info() {
     assert_eq!(env.ids(&["--since", cutoff]).len(), 10);
     let day = &cutoff[..10];
     assert!(env.ids(&["--since", day]).len() >= 10);
-    assert_eq!(env.run(&["list", "--album", "NOPE"]).code, 4);
+    assert_eq!(env.run(&["list", "--album", "NOPE"]).code, 1);
 
     let human = env.styled(&["list", "--limit", "1"]);
     let cols: Vec<&str> = human.stdout.trim_end().split('\t').collect();
@@ -539,8 +573,8 @@ fn thumb_and_download() {
     assert_eq!(got, vec![ids[3].as_str(), ids[0].as_str(), ids[3].as_str()]);
     assert_eq!(many[0]["path"], many[2]["path"]);
 
-    assert_eq!(env.run(&["download", "NO-SUCH-ID"]).code, 4);
-    assert_eq!(env.run(&["thumb", "NO-SUCH-ID"]).code, 4);
+    assert_eq!(env.run(&["download", "NO-SUCH-ID"]).code, 1);
+    assert_eq!(env.run(&["thumb", "NO-SUCH-ID"]).code, 1);
     // Nothing escaped the sandbox.
     assert!(!env.root.join("home/Pictures").exists());
 }
@@ -667,7 +701,7 @@ fn open_downloads_then_hands_the_file_to_the_default_app() {
     // An opener that fails is an error; an unknown id is not_found.
     let r = run(&["open", "NO-SUCH-ID"]);
     let err = error_doc(&r);
-    assert_eq!((r.code, err["error"]["code"].as_str()), (4, Some("not_found")));
+    assert_eq!((r.code, err["error"]["code"].as_str()), (1, Some("not_found")));
     env.stub("xdg-open", "exit 1");
     assert_eq!(run(&["open", &photo]).code, 1);
 }
@@ -721,7 +755,7 @@ fn copy_and_wallpaper_use_the_viewers_image() {
     for cmd in ["copy", "wallpaper"] {
         let r = run(&[cmd, &video]);
         let err = error_doc(&r);
-        assert_eq!((r.code, err["error"]["code"].as_str()), (2, Some("usage")), "{cmd}");
+        assert_eq!((r.code, err["error"]["code"].as_str()), (1, Some("usage")), "{cmd}");
         let r = run(&[cmd, "NO-SUCH-ID"]);
         assert_eq!(error_doc(&r)["error"]["code"], "not_found", "{cmd}");
     }
@@ -794,7 +828,7 @@ fn upload_then_sync_into_the_catalog() {
     assert_eq!(env.ids(&[]).len(), 12);
     assert_eq!(env.json(&["sync"])["assets"], 1);
 
-    assert_eq!(env.run(&["upload", a.to_str().unwrap(), "--album", "NOPE"]).code, 4);
+    assert_eq!(env.run(&["upload", a.to_str().unwrap(), "--album", "NOPE"]).code, 1);
 }
 
 #[test]
@@ -824,12 +858,12 @@ fn delete_asks_refuses_or_moves_to_recently_deleted() {
     // Nobody can be asked here (not a terminal, or a machine mode): without
     // --yes, nothing happens.
     let r = env.run(&["delete", one]);
-    assert_eq!(r.code, 2);
+    assert_eq!(r.code, 1);
     let err = error_doc(&r);
     assert_eq!(err["error"]["code"], "usage");
     assert!(err["error"]["hint"].as_str().unwrap().contains("--yes"), "{err}");
     let r = env.styled(&["delete", one]);
-    assert_eq!(r.code, 2);
+    assert_eq!(r.code, 1);
     assert!(
         r.stderr.starts_with("error:") && r.stderr.contains("--yes"),
         "{}",
@@ -868,7 +902,7 @@ fn delete_asks_refuses_or_moves_to_recently_deleted() {
     assert_eq!(v, serde_json::json!([{ "id": four, "deleted": true, "already": true }]));
     assert_eq!(env.json(&["info", four])["deleted"], true);
 
-    assert_eq!(env.run(&["delete", "NO-SUCH-ID", "--yes"]).code, 4);
+    assert_eq!(env.run(&["delete", "NO-SUCH-ID", "--yes"]).code, 1);
     assert_eq!(env.json(&["sync"])["mode"], "incremental");
     assert_eq!(env.ids(&[]).len(), 6);
 }
@@ -931,9 +965,12 @@ fn restore_undoes_delete() {
     assert_eq!(v, serde_json::json!([{ "id": one, "restored": true, "already": true }]));
     // One that was never deleted is a mistake.
     let r = env.run(&["restore", one, &ids[2]]);
-    assert_eq!(r.code, 1, "never deleted");
-    assert!(r.stdout.contains("is not deleted"), "{}", r.stdout);
-    assert_eq!(env.run(&["restore", "NO-SUCH-ID"]).code, 4);
+    let err = error_doc(&r);
+    assert!(
+        err["error"]["message"].as_str().unwrap().contains("is not deleted"),
+        "{err}"
+    );
+    assert_eq!(env.run(&["restore", "NO-SUCH-ID"]).code, 1);
     assert_eq!(env.json(&["sync"])["mode"], "incremental");
     assert_eq!(env.ids(&[]).len(), 6);
 }
@@ -1026,14 +1063,14 @@ fn a_failed_resync_still_reports_what_was_deleted_or_restored() {
 }
 
 #[test]
-fn a_sign_in_that_lapses_part_way_keeps_the_report_and_exits_3() {
+fn a_sign_in_that_lapses_part_way_keeps_the_report_and_exits_1() {
     let env = Env::synced("restore-lapse", 4);
     let ids = env.ids(&[]);
     env.json(&["delete", &ids[0], &ids[1], &ids[2], "--yes"]);
     // The first restore goes through, then the account is signed out.
     env.server.sign_out_after_modifies(1);
     let r = env.run(&["--json", "restore", &ids[0], &ids[1], &ids[2]]);
-    assert_eq!(r.code, 3, "{}", r.stdout);
+    assert_eq!(r.code, 1, "{}", r.stdout);
     let v = r.json();
     let got: Vec<Option<bool>> = (0..3).map(|i| v[i]["restored"].as_bool()).collect();
     assert_eq!(got, [Some(true), Some(false), Some(false)], "{v}");
@@ -1044,7 +1081,7 @@ fn a_sign_in_that_lapses_part_way_keeps_the_report_and_exits_3() {
     env.run(&["sign-in"]);
     env.server.sign_out_after_modifies(1);
     let r = env.styled(&["restore", &ids[1], &ids[2]]);
-    assert_eq!(r.code, 3, "{}", r.stderr);
+    assert_eq!(r.code, 1, "{}", r.stderr);
     assert_eq!(r.stdout.trim(), format!("{}\trestored", ids[1]));
     assert!(
         r.stderr.starts_with("error:") && r.stderr.contains("\nhint: run `icloud-session sign-in`"),
@@ -1067,7 +1104,7 @@ fn an_upload_cut_short_by_a_lapsed_sign_in_lists_the_files_not_sent() {
     let mut args = vec!["--json", "upload"];
     args.extend(files.iter().map(|f| f.to_str().unwrap()));
     let r = env.run(&args);
-    assert_eq!(r.code, 3, "{}", r.stdout);
+    assert_eq!(r.code, 1, "{}", r.stdout);
     let v = r.json();
     assert_eq!(
         (v["uploaded"].as_i64(), v["failed"].as_i64()),
@@ -1102,13 +1139,13 @@ fn prune_cache_drops_renditions_of_deleted_items() {
 }
 
 #[test]
-fn signed_out_exits_3_until_sign_in() {
+fn signed_out_is_sign_in_required_until_sign_in() {
     let env = Env::synced("signin", 4);
     let id = env.ids(&[]).remove(0);
     env.server.sign_out();
 
     let s = env.run(&["--json", "status"]);
-    assert_eq!(s.code, 3);
+    assert_eq!(s.code, 1);
     assert_eq!(s.json()["signed_in"], false);
     for args in [
         vec!["sync"],
@@ -1116,7 +1153,7 @@ fn signed_out_exits_3_until_sign_in() {
         vec!["delete", id.as_str(), "--yes"],
     ] {
         let r = env.styled(&args);
-        assert_eq!(r.code, 3, "{args:?}: {}", r.stderr);
+        assert_eq!(r.code, 1, "{args:?}: {}", r.stderr);
         assert!(r.stdout.is_empty(), "{args:?}: {}", r.stdout);
         assert!(
             r.stderr.starts_with("error:") && r.stderr.contains("\nhint: run `icloud-session sign-in`"),
@@ -1125,7 +1162,7 @@ fn signed_out_exits_3_until_sign_in() {
         );
     }
     let r = env.run(&["--json", "sync"]);
-    assert_eq!(r.code, 3, "{}", r.stderr);
+    assert_eq!(r.code, 1, "{}", r.stderr);
     let err = error_doc(&r);
     assert_eq!(err["error"]["code"], "sign_in_required");
     assert!(
@@ -1141,7 +1178,7 @@ fn signed_out_exits_3_until_sign_in() {
     );
     let f = env.root.join("X.JPG");
     std::fs::write(&f, b"\xFF\xD8 x").unwrap();
-    assert_eq!(env.run(&["upload", f.to_str().unwrap()]).code, 3);
+    assert_eq!(env.run(&["upload", f.to_str().unwrap()]).code, 1);
     // Local-only commands still work, and so do content downloads (signed
     // URLs on Apple's content hosts carry no session).
     assert_eq!(env.run(&["list"]).code, 0);
@@ -1153,17 +1190,20 @@ fn signed_out_exits_3_until_sign_in() {
     assert_eq!(env.run(&["sync"]).code, 0);
 }
 
-/// A machine-mode failure: stdout is exactly one JSON document, the
-/// contract's error object `{"ok":false,"error":{"code","message","hint"?}}`
-/// with `ok` first, and stderr is empty.
+/// A machine-mode failure: it exits 1, stdout (which holds only results) is
+/// empty, and the last line of stderr is the contract's error object
+/// `{"ok":false,"error":{"code","message","hint"?}}` with `ok` first, on one
+/// line so a caller can tell it from progress lines before it.
 fn error_doc(r: &Run) -> Value {
-    assert!(r.stderr.is_empty(), "stderr: {}", r.stderr);
+    assert_eq!(r.code, 1, "a failure exits 1: {}", r.stderr);
+    assert!(r.stdout.is_empty(), "stdout: {}", r.stdout);
+    let last = r.stderr.lines().last().unwrap_or_default();
     assert!(
-        r.stdout.trim_start().starts_with("{\n  \"ok\": false,"),
-        "ok first: {}",
-        r.stdout
+        last.starts_with("{\"ok\":false,"),
+        "ok first, on the last line: {}",
+        r.stderr
     );
-    let v = r.doc();
+    let v: Value = serde_json::from_str(last).unwrap_or_else(|e| panic!("not JSON ({e}): {last}"));
     // Map order depends on serde_json's preserve_order (feature unification).
     let mut top: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
     top.sort();
@@ -1179,7 +1219,7 @@ fn error_doc(r: &Run) -> Value {
 }
 
 #[test]
-fn no_network_exits_5_offline() {
+fn no_network_is_offline() {
     let env = Env::new("offline", 1);
     let data = env.data();
     // Nothing listens on port 1: the connect is refused, which is offline.
@@ -1188,7 +1228,7 @@ fn no_network_exits_5_offline() {
         let mut all = vec!["--json", "--data-dir", data.to_str().unwrap()];
         all.extend_from_slice(&args);
         let r = env.bare_at(dead, &all, &[]);
-        assert_eq!(r.code, 5, "{args:?}: {}", r.stderr);
+        assert_eq!(r.code, 1, "{args:?}: {}", r.stderr);
         let err = error_doc(&r);
         assert_eq!(err["error"]["code"], "offline", "{err}");
         assert!(err["error"]["hint"].is_string(), "{err}");
@@ -1198,12 +1238,12 @@ fn no_network_exits_5_offline() {
         let mut all = vec!["--data-dir", data.to_str().unwrap(), "sync"];
         all.extend(flag);
         let r = env.bare_at(dead, &all, &[]);
-        assert_eq!(r.code, 5, "{flag:?}");
+        assert_eq!(r.code, 1, "{flag:?}");
         assert_eq!(error_doc(&r)["error"]["code"], "offline", "{flag:?}");
     }
-    // Text mode: the same exit code, `error:` and `hint:` on stderr.
+    // Text mode: the same exit code, 1, with `error:` and `hint:` on stderr.
     let r = env.bare_at(dead, &["--styled", "--data-dir", data.to_str().unwrap(), "sync"], &[]);
-    assert_eq!(r.code, 5, "{}", r.stderr);
+    assert_eq!(r.code, 1, "{}", r.stderr);
     assert!(r.stdout.is_empty(), "{}", r.stdout);
     assert!(
         r.stderr.starts_with("error:") && r.stderr.contains("offline") && r.stderr.contains("\nhint: "),
@@ -1407,13 +1447,13 @@ fn errors_go_where_the_mode_says() {
         &["list", "--album", "NOPE"],
     ] {
         let r = env.run(args);
-        assert_eq!(r.code, 4, "{args:?}");
+        assert_eq!(r.code, 1, "{args:?}");
         let err = error_doc(&r);
         assert_eq!(err["error"]["code"], "not_found", "{args:?}");
         assert!(err["error"]["hint"].is_string(), "{args:?}");
     }
     let r = env.styled(&["info", "NOPE"]);
-    assert_eq!(r.code, 4);
+    assert_eq!(r.code, 1);
     assert!(r.stdout.is_empty(), "{}", r.stdout);
     assert!(
         r.stderr

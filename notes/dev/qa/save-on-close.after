@@ -1,0 +1,5 @@
+# What save-on-close.jsonl left: both edits in the note, the second written by the close.
+set -euo pipefail
+note=$QA_ROOT/vault/Notes/Trip\ ideas.md
+grep -q '^# Trip ideas$' "$note" || { echo "save-on-close: the note lost its title:"; cat "$note"; exit 1; }
+grep -qx 'Osaka too. And Nara. ' "$note" || { echo "save-on-close: the edits are not on disk:"; cat "$note"; exit 1; }

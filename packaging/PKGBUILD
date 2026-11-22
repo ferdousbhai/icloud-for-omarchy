@@ -83,20 +83,26 @@ _refuse_link() {
   fi
 }
 
+# One name for an app (icloud-photos): its command, its package, its desktop
+# entry, its icon and its windows' Wayland app id, as Omarchy names apps. The
+# window's binary is no command of its own: it lives in /usr/lib/<name>/,
+# and `<name> open` (the desktop entry's Exec) runs it. /usr/bin/<name>-app
+# stays as a link to it, for key bindings and scripts written before.
 _package_gtk_app() {
-  local app=${pkgname#icloud-} desktop=com.ferdousbhai.$1 binary
+  local app=${pkgname#icloud-}
   cd "$srcdir/icloud-for-omarchy"
-  for binary in "$pkgname" "$pkgname-app"; do
-    _release_bin "$binary" "usr/bin/$binary"
-  done
-  install -Dm644 "$app/data/$desktop.desktop" "$pkgdir/usr/share/applications/$desktop.desktop"
-  install -Dm644 "$app/data/$desktop.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/$desktop.svg"
+  _release_bin "$pkgname" "usr/bin/$pkgname"
+  _release_bin "$pkgname-app" "usr/lib/$pkgname/$pkgname-app"
+  ln -s "../lib/$pkgname/$pkgname-app" "$pkgdir/usr/bin/$pkgname-app"
+  install -Dm644 "$app/data/$pkgname.desktop" "$pkgdir/usr/share/applications/$pkgname.desktop"
+  install -Dm644 "$app/data/$pkgname.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/$pkgname.svg"
   install -Dm644 "$app/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
   _install_licenses
 }
 
 package_icloud-session() {
   pkgdesc='D-Bus service, sign-in window and CLI that own one iCloud web sign-in for all apps'
+  license=('MIT' 'ISC')  # ISC: the Lucide icons omui compiles into the sign-in window (NOTICE)
   depends=('gtk4' 'webkitgtk-6.0' 'gst-plugins-good' 'glib2' 'gcc-libs' 'glibc' 'org.freedesktop.secrets')
   cd "$srcdir/icloud-for-omarchy"
   local bin
@@ -105,12 +111,15 @@ package_icloud-session() {
   done
   # One executable: run as icloud-session it is the CLI.
   ln -s icloud-sessiond "$pkgdir/usr/bin/icloud-session"
+  # The sign-in window has omui's look, which cannot share a process with libadwaita.
+  _refuse_link usr/bin/icloud-session-signin libadwaita-1
   # D-Bus activation, no systemd unit: the bus starts the daemon on the
   # first call and it exits when idle.
   install -Dm644 sessiond/data/io.github.ferdousbhai.ICloudSession.service \
     "$pkgdir/usr/share/dbus-1/services/io.github.ferdousbhai.ICloudSession.service"
-  install -Dm644 sessiond/data/io.github.ferdousbhai.ICloudSession.desktop \
-    "$pkgdir/usr/share/applications/io.github.ferdousbhai.ICloudSession.desktop"
+  # The sign-in window's name and icon in bars and docks, under its Wayland app id; the D-Bus name above is what
+  # the apps address, and stays.
+  install -Dm644 sessiond/data/icloud-session.desktop "$pkgdir/usr/share/applications/icloud-session.desktop"
   install -Dm644 session/README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   _install_licenses
 }
@@ -121,16 +130,16 @@ package_icloud-photos() {
   depends=('gtk4' "icloud-session>=$pkgver" 'hicolor-icon-theme' 'sqlite')
   optdepends=('wl-clipboard: icloud-photos copy (clipboard)'
               'xdg-utils: icloud-photos open (default app)')
-  _package_gtk_app IcloudPhotos
-  _refuse_link usr/bin/icloud-photos-app libadwaita-1
+  _package_gtk_app
+  _refuse_link usr/lib/icloud-photos/icloud-photos-app libadwaita-1
 }
 
 package_icloud-findmy() {
   pkgdesc='Find My devices on Omarchy: locate, play a sound, Lost Mode, history trail'
   license=('MIT' 'ISC')  # ISC: the Lucide icons omui compiles into the window (NOTICE)
   depends=('gtk4' 'libshumate' "icloud-session>=$pkgver" 'hicolor-icon-theme' 'sqlite')
-  _package_gtk_app IcloudFindMy
-  _refuse_link usr/bin/icloud-findmy-app libadwaita-1
+  _package_gtk_app
+  _refuse_link usr/lib/icloud-findmy/icloud-findmy-app libadwaita-1
 }
 
 package_icloud-notes() {
@@ -141,9 +150,9 @@ package_icloud-notes() {
   replaces=('icloud-notes-sync')
   conflicts=('icloud-notes-sync')
   # The command line and the timer's sync link no toolkit; the window (and
-  # export-pdf, which lays out a page) is icloud-notes-app, found beside it.
-  _package_gtk_app IcloudNotes
-  _refuse_link usr/bin/icloud-notes-app libadwaita-1
+  # export-pdf, which lays out a page) is icloud-notes-app, in /usr/lib/icloud-notes/.
+  _package_gtk_app
+  _refuse_link usr/lib/icloud-notes/icloud-notes-app libadwaita-1
   # The engine, run by the app and by `icloud-notes`; not a command of its own.
   _release_bin icloud-notes-sync usr/lib/icloud-notes/icloud-notes-sync
   install -Dm644 notes-sync/README.md "$pkgdir/usr/share/doc/$pkgname/notes-sync.md"
@@ -168,8 +177,8 @@ package_icloud-reminders() {
   pkgdesc='iCloud Reminders on Omarchy: lists, due dates and desktop notifications'
   license=('MIT' 'ISC')  # ISC: the Lucide icons omui compiles into the window (NOTICE)
   depends=('gtk4' "icloud-session>=$pkgver" 'hicolor-icon-theme')
-  _package_gtk_app IcloudReminders
-  _refuse_link usr/bin/icloud-reminders-app libadwaita-1
+  _package_gtk_app
+  _refuse_link usr/lib/icloud-reminders/icloud-reminders-app libadwaita-1
   # Sync and due-time notifications every minute, window open or not.
   _install_background_timer reminders/data
 }

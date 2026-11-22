@@ -10,21 +10,21 @@
 //! JSON envelope when piped, `--json`/`--styled`/`--quiet`/`--ids-only`/
 //! `--count` to choose.
 //!
-//! Exit codes are the table every iCloud tool shares (docs/CLI.md,
-//! `icloud_session::cli`): 0 ok; 1 error, or a `sync` whose folder step
-//! reported a problem (with the data); 2 usage; 3 not signed in, or iCloud
-//! still refusing the session (`session_rejected`, HTTP 401/421); 4 not
-//! found; 5 offline, the keyring locked, an unreadable answer or an iCloud
-//! server error (HTTP 5xx). The JSON `code` tells them apart. A failure in
-//! a machine mode is `{"ok":false,"error":{"code","message","hint"?}}` on
-//! stdout; in text mode `error:`/`hint:` lines on stderr.
+//! Exit codes are Omarchy's, shared by every iCloud tool (docs/CLI.md,
+//! `icloud_session::cli`): 0 ok, 1 any failure, including a `sync` whose
+//! folder step reported a problem (with the data). What kind of failure it
+//! was is the JSON `code` (`usage`, `sign_in_required`, `not_found`,
+//! `offline`, …), so a script needs the exit status alone to know whether a
+//! call worked. A failure in a machine mode is
+//! `{"ok":false,"error":{"code","message","hint"?}}` on one line of stderr;
+//! in text mode `error:`/`hint:` lines on stderr. Stdout holds only results.
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use icloud_app::cli::{no_data_dir, other, session_failure, warn, warning};
 use icloud_app::leave::{self, Left};
-use icloud_session::cli::{EXIT_ERROR, EXIT_NOT_FOUND};
+use icloud_session::cli::EXIT_ERROR;
 use icloud_session::output::{self, CliError, Mode, OutputFlags, Response};
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
@@ -62,24 +62,25 @@ Output: human-readable text on a terminal, a JSON envelope
 envelope, --styled text, --quiet prints only the data, --ids-only the ids
 (background: the notified reminders'), --count the number of results
 (changed records for sync; notified for background). Flags combine:
-ids-only > count > quiet > json > styled. A failure is
-{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or
-error:/hint: lines on stderr in text mode.
+ids-only > count > quiet > json > styled. A failure prints nothing on stdout: it is
+{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on one line of
+stderr, or error:/hint: lines on stderr in text mode.
 
-Exit codes:
-  0 ok
-  1 error (error, http 4xx), or sync's folder step reported a problem
-    (the data says which: folder.restored, folder.warnings)
-  2 usage
-  3 sign_in_required (icloud-session sign-in), session_rejected (iCloud
-    keeps refusing the session although icloud-sessiond still holds it:
-    sign in again), left_icloud (the reminders left iCloud on this
-    computer: change the files), and leave's omacloud_missing,
-    omacloud_not_set_up, omacloud_folder_off (the hint names the command)
-  4 not_found
-  5 offline, keyring_unavailable (the keyring holding the session is
-    locked: unlock it), bad_response (iCloud answered with something
-    unreadable), http 5xx";
+Exit codes: 0 ok; 1 any failure, or a sync whose folder step reported a
+problem (the data says which: folder.restored, folder.warnings). The error's
+code says what failed:
+  usage                 bad arguments
+  sign_in_required      run icloud-session sign-in
+  session_rejected      iCloud keeps refusing the session although
+                        icloud-sessiond still holds it: sign in again
+  left_icloud           the reminders left iCloud on this computer: change
+                        the files
+  omacloud_missing, omacloud_not_set_up, omacloud_folder_off
+                        leave: what Omacloud lacks (the hint names the command)
+  not_found             the reminder or list is gone
+  offline, keyring_unavailable (unlock the keyring holding the session),
+  bad_response (iCloud answered with something unreadable), http (a 5xx
+  says iCloud has trouble; a 4xx no hint), error";
 
 #[derive(Parser)]
 #[command(
@@ -100,6 +101,14 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Open the Reminders window (what running with no command does too).
+    ///
+    /// Runs icloud-reminders-app in this process's place, from
+    /// /usr/lib/icloud-reminders/ (or beside this command in a build, or
+    /// $ICLOUD_REMINDERS_APP); the desktop entry and a click on a due
+    /// reminder's notification run this. Prints nothing; fails, exit 1, only
+    /// when the window cannot be started.
+    Open,
     /// Sync with iCloud and apply the files' edits now.
     ///
     /// Fetches what changed in iCloud, then runs the folder step the timer
@@ -160,7 +169,7 @@ enum Command {
     },
 }
 
-/// A failure: the contract's error object and exit code.
+/// A failure: the contract's error object; its process exits 1.
 type Failure = CliError;
 
 type Outcome = Result<Response, Failure>;
@@ -170,13 +179,13 @@ fn file(e: std::io::Error) -> Failure {
     other(e.to_string())
 }
 
-/// A Reminders failure as the contract's code, exit code, message and hint:
+/// A Reminders failure as the contract's code, message and hint:
 /// icloud-session's failures as every iCloud tool reports them.
 fn cloud_error(e: cloudkit::Error) -> Failure {
     use cloudkit::Error as C;
     match e {
         C::Session(e) => session_failure(&e),
-        C::Gone(_) => CliError::new("not_found", EXIT_NOT_FOUND, e.to_string()),
+        C::Gone(_) => CliError::new("not_found", EXIT_ERROR, e.to_string()),
         C::CloudKit { .. } | C::Other(_) => other(e.to_string()),
     }
 }
@@ -188,6 +197,10 @@ pub fn run() -> u8 {
         Err(code) => return code,
     };
     let mode = args.out.mode();
+    // Needs no data directory or time zone: the window finds its own.
+    if let Command::Open = args.command {
+        return icloud_app::cli::open_app("icloud-reminders").report(mode);
+    }
     let transport = SessionTransport::default();
     let result = (|| {
         let dir = args.data_dir.or_else(Store::default_dir).ok_or_else(no_data_dir)?;
@@ -214,6 +227,8 @@ impl Cli<'_> {
     fn dispatch(&self, command: Command) -> Outcome {
         let left = self.svc.store.left().map_err(file)?;
         match (command, left) {
+            // Run before a `Cli` is made (`run`).
+            (Command::Open, _) => Err(icloud_app::cli::open_app("icloud-reminders")),
             (Command::Leave { yes }, left) => self.leave(yes, left),
             (Command::Sync { .. }, Some(left)) => Err(leave::left_error("Reminders", &left)),
             (Command::Background { .. }, Some(left)) => self.background_files(&left.folder),
@@ -709,19 +724,19 @@ mod tests {
     }
 
     #[test]
-    fn failures_use_the_shared_codes_exits_and_hints() {
+    fn failures_use_the_shared_codes_and_hints_and_all_exit_1() {
         use icloud_session::Error as S;
         let code = |e: cloudkit::Error| {
             let f = cloud_error(e);
             (f.code, f.exit)
         };
         // icloud-session's failures read as in every iCloud tool.
-        assert_eq!(code(S::Network("x".into()).into()), ("network".into(), 5));
+        assert_eq!(code(S::Network("x".into()).into()), ("network".into(), 1));
         let rejected = cloud_error(cloudkit::Error::from(S::Http {
             status: 421,
             body: String::new(),
         }));
-        assert_eq!((rejected.code.as_str(), rejected.exit), ("session_rejected", 3));
+        assert_eq!((rejected.code.as_str(), rejected.exit), ("session_rejected", 1));
         assert_eq!(rejected.hint, Some(icloud_app::cli::sign_in_hint()));
         // Reminders' own.
         let refused = cloudkit::Error::CloudKit {
@@ -729,7 +744,7 @@ mod tests {
             reason: "y".into(),
         };
         assert_eq!(code(refused), ("error".into(), 1));
-        assert_eq!(code(cloudkit::Error::Gone("x".into())), ("not_found".into(), 4));
+        assert_eq!(code(cloudkit::Error::Gone("x".into())), ("not_found".into(), 1));
         assert_eq!(code(cloudkit::Error::Other("x".into())), ("error".into(), 1));
     }
 }

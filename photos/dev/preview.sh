@@ -55,7 +55,8 @@ settle=${ICLOUD_PHOTOS_PREVIEW_SETTLE:-3}
 size=${ICLOUD_PHOTOS_PREVIEW_SIZE:-1100x760}
 [[ $size =~ ^[0-9]+x[0-9]+$ ]] || { echo "preview: ICLOUD_PHOTOS_PREVIEW_SIZE is <width>x<height>" >&2; exit 2; }
 # `action:<name>[=<string>]` activates the window's action <name> over the scratch session bus, as its menu or a tile
-# would; `text:` types (an underscore is a space); the rest are keys. The file chooser takes a path typed into it.
+# would; `text:` types (an underscore is a space); the rest are keys. An upload is given its file by path
+# (`upload-file`): the file chooser is the desktop portal's, which the scratch session bus has none of.
 # A narrow window opens on the albums. The keyboard's first stop is the first of them, All Photos, which opens.
 photos=""
 (( ${size%x*} >= 640 )) || photos="Tab"
@@ -65,7 +66,7 @@ declare -A keys=(
   [viewer]="$photos action:open-asset=$newest"
   [prefs]="action:preferences"
   [about]="action:about"
-  [upload]="action:upload text:UPLOAD Return"
+  [upload]="action:upload-file=UPLOAD"
   [delete]="$photos action:open-asset=$newest action:viewer-delete"
   [deleted]="$photos action:open-asset=$newest action:viewer-delete Tab Return"
   [banner]=""

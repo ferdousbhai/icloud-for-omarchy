@@ -144,11 +144,11 @@ fn history_and_diff_are_the_engines_own_answers() {
     assert_eq!(history.code, 0);
     assert_eq!(history.doc()["mode"], "epochs");
     assert!(history.doc()["epochs"].is_array());
-    // An unknown version: the engine's error document and exit code.
+    // An unknown version: the engine's error document (on stderr) and exit code.
     let diff = replay(&w, &["--json", "diff", "Test Note", "no-such-id"], "tiny-lookup.json");
-    assert_eq!(diff.code, 4);
+    assert_eq!(diff.code, 1);
     assert_eq!(
-        (&diff.doc()["ok"], &diff.doc()["error"]["code"]),
+        (&diff.error_doc()["ok"], &diff.error_doc()["error"]["code"]),
         (&json!(false), &json!("unknown_version_snapshot"))
     );
 }
@@ -164,7 +164,7 @@ fn a_vault_of_another_account_is_refused_by_the_engine_and_is_no_sign_in() {
     )
     .unwrap();
     let sync = replay(&w, &["sync"], "tiny-pull-noop.json");
-    assert_eq!((sync.code, sync.err.as_str()), (3, ""));
+    assert_eq!((sync.code, sync.err.as_str()), (1, ""));
     let data = sync.data();
     assert_eq!(
         (&data["ok"], &data["error"]["code"]),
@@ -172,7 +172,7 @@ fn a_vault_of_another_account_is_refused_by_the_engine_and_is_no_sign_in() {
     );
     assert!(data["error"]["hint"].is_string());
     // The push had nothing to send and asked iCloud nothing; the pull is
-    // the half that met the other account. Exit 3, and yet no sign-in.
+    // the half that met the other account. A failure, and yet no sign-in.
     let runs = data["runs"].as_array().unwrap();
     assert_eq!(runs.len(), 2);
     assert_eq!((&runs[0]["command"], &runs[0]["ok"]), (&json!("push"), &json!(true)));
@@ -182,7 +182,7 @@ fn a_vault_of_another_account_is_refused_by_the_engine_and_is_no_sign_in() {
             &runs[1]["exit_code"],
             &runs[1]["result"]["error"]["code"]
         ),
-        (&json!(false), &json!(3), &json!("account_mismatch"))
+        (&json!(false), &json!(1), &json!("account_mismatch"))
     );
     assert_eq!(w.session.reports(), 0);
 }

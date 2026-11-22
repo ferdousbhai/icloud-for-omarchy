@@ -2987,11 +2987,11 @@ fn a_sync_whose_second_push_fails_keeps_what_the_first_one_did() {
     let fake = Fake::start(zone);
     let place = Place::copy_of(&start.place);
     let synced = run(&fake, &place, "sync", &Crash::default());
-    assert_eq!(synced.status.code(), Some(5), "{}", says(&synced));
+    assert_eq!(synced.status.code(), Some(1), "{}", says(&synced));
     let result: Value = serde_json::from_slice(&synced.stdout).unwrap();
     let push = &result["data"]["push"];
     assert_eq!(push["ok"], false, "{}", says(&synced));
-    assert_eq!(push["exit_code"], 5);
+    assert_eq!(push["exit_code"], 1);
     assert_eq!(push["error"]["code"], "cloudkit_request_failed");
     let entries = push["result"]["entries"].as_array().unwrap();
     assert!(

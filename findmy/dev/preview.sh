@@ -193,7 +193,8 @@ press() {
   local key
   for key in $1; do
     if [[ $key == action:* ]]; then
-      # The app's one window, as GtkApplication exports it on the session bus. A device action is enabled once the
+      # The app's one window, as GtkApplication exports it on the session bus: under the GApplication id, which
+      # kept its dotted name when the app took its one name. A device action is enabled once the
       # first refresh has selected a device; activating it before then would do nothing.
       local window=(--session --dest com.ferdousbhai.IcloudFindMy --object-path /com/ferdousbhai/IcloudFindMy/window/1)
       for _ in {1..100}; do
@@ -239,6 +240,11 @@ shoot() {
   kill -0 "$app_pid" 2>/dev/null || { echo "preview: the app exited" >&2; sed -n '1,40p' "$root/app.log" >&2; exit 1; }
   # A picture of an output the window is not on would be blank, and look like a result.
   on_output || { echo "preview: the app's window is not on the output being captured" >&2; hyprctl clients >&2; exit 1; }
+  # The window's Wayland app id is the app's one name, which Hyprland's rules and the desktop entry's StartupWMClass
+  # match; GTK alone would give it the GApplication id.
+  local class
+  class=$(hyprctl clients -j | jq -r 'first(.[] | select(.mapped) | .class)')
+  [[ $class == icloud-findmy ]] || { echo "preview: the window's class is $class, not icloud-findmy" >&2; exit 1; }
   # Hyprland's own notices (it says it was started without its wrapper) would cover the header.
   hyprctl dismissnotify >/dev/null
   /usr/bin/grim -o preview "$picture"

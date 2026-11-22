@@ -1,37 +1,26 @@
 //! `icloud-photos`: the command-line interface (`src/cli.rs`), with no GTK
 //! linked in, so a command starts in milliseconds instead of loading the
 //! toolkit's hundred-odd shared libraries. With no arguments it opens the
-//! app by running `icloud-photos-app` (`src/app.rs`) in its place.
+//! app, as `icloud-photos open` does, by running `icloud-photos-app`
+//! (`src/app.rs`) in its place: the package installs that under
+//! `/usr/lib/icloud-photos/`, so that `icloud-photos` is the one command
+//! (`icloud_app::cli::app_binary` says where it is looked for, and
+//! `$ICLOUD_PHOTOS_APP` names another).
 
 mod cli;
 
-use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
 
-/// The window's binary, installed next to this one.
-const APP_BIN: &str = "icloud-photos-app";
+/// The app's one name: the command, the package, the desktop entry, the
+/// icon, and the window's Wayland app id.
+const NAME: &str = "icloud-photos";
 
 fn main() -> ExitCode {
     if std::env::args_os().len() > 1 {
         return cli::main();
     }
-    let app = app_binary();
     // Only returns on failure; on success the app replaces this process.
-    let e = Command::new(&app).arg0(APP_BIN).exec();
-    eprintln!("icloud-photos: cannot open the app ({}): {e}", app.display());
+    let err = icloud_app::cli::open_app(NAME);
+    eprintln!("{NAME}: {}; run `{NAME} help` for the command line", err.message);
     ExitCode::FAILURE
-}
-
-/// `$ICLOUD_PHOTOS_APP` (tests, development), else `icloud-photos-app`
-/// beside this executable, else whichever one is on `PATH`.
-fn app_binary() -> PathBuf {
-    if let Some(p) = std::env::var_os("ICLOUD_PHOTOS_APP").filter(|p| !p.is_empty()) {
-        return p.into();
-    }
-    std::env::current_exe()
-        .ok()
-        .map(|exe| exe.with_file_name(APP_BIN))
-        .filter(|p| p.is_file())
-        .unwrap_or_else(|| APP_BIN.into())
 }

@@ -16,13 +16,13 @@ pub use client::Database;
 pub use transport::{LiveTransport, ReplayTransport, Transport};
 pub use types::*;
 
-/// Errors from the CloudKit layer. Exit-code mapping lives in
-/// `cmd::errors`: `SignInRequired` and `SessionRejected` are exit 3;
-/// `ZoneFetchFailed` and `RequestFailed` are icloud-md's known
-/// `CloudKit*Error`s, exit 5 (iCloud failed the request; a `ZONE_NOT_FOUND`
-/// zone is exit 4, an HTTP 4xx other than 401/421 exit 1); `Network`,
+/// Errors from the CloudKit layer. Each is a failure of the command line
+/// (exit 1); its error code lives in `cmd::errors`: `SignInRequired` and
+/// `SessionRejected` are fixed by signing in; `ZoneFetchFailed` and
+/// `RequestFailed` are icloud-md's known `CloudKit*Error`s (iCloud failed
+/// the request, or for an HTTP 4xx other than 401/421 refused it); `Network`,
 /// `Offline`, `SessionService`, `KeyringUnavailable` and
-/// `UnexpectedResponse` (`bad_response`) exit 5.
+/// `UnexpectedResponse` (`bad_response`) are a service out of reach.
 ///
 /// There is no `Conflict` variant: a changeTag conflict is not an error
 /// in icloud-md - it arrives per record inside an HTTP 200 and is returned as
@@ -41,13 +41,14 @@ pub enum CkError {
     /// `CloudKitRequestFailedError`, with icloud-md's message verbatim, e.g.
     /// `changes/zone request failed (private db): HTTP 500` or
     /// `Attachment download failed: HTTP 403`; `status` is the HTTP status
-    /// when there was one (a 4xx is exit 1, anything else exit 5).
+    /// when there was one (a 4xx is iCloud refusing the request, anything
+    /// else iCloud failing it).
     #[error("{message}")]
     RequestFailed { message: String, status: Option<u16> },
     /// ckdatabasews kept answering 401/421 although icloud-sessiond still
     /// holds the sign-in (icloud-session's `Http` 401/421, which it only
     /// returns after the daemon confirmed the session and one retry):
-    /// `session_rejected`, exit 3, fixed by signing in again.
+    /// `session_rejected`, fixed by signing in again.
     #[error("Apple refused the iCloud session although icloud-sessiond still holds it (HTTP {status})")]
     SessionRejected { status: u16 },
     /// A non-2xx answer as the transport saw it, before the client wraps it
@@ -56,12 +57,12 @@ pub enum CkError {
     Http { status: u16, body: String },
     /// A response whose shape icloud-md rejects ("Unexpected response shape
     /// from ..."), message verbatim, or one that is not JSON at all:
-    /// `bad_response`, exit 5.
+    /// `bad_response`.
     #[error("{0}")]
     UnexpectedResponse(String),
     /// `NotesUnavailableError`: the session's webservices have no
     /// `ckdatabasews`. `cmd::errors` should map it to its own
-    /// `Error::NotesUnavailable` (exit 3, with the hint).
+    /// `Error::NotesUnavailable` (with the hint).
     #[error("Authenticated, but the account reported no ckdatabasews host - can't reach Notes.")]
     NotesUnavailable,
     #[error("network: {0}")]
@@ -85,7 +86,7 @@ pub enum CkError {
     /// Any other icloud-session failure (`Daemon`, say), kept as it is so
     /// the command line reports it exactly as every iCloud tool does
     /// (`icloud_session::output::session_failure`: `Daemon` is code
-    /// `error`, exit 1).
+    /// `error`).
     #[error(transparent)]
     Session(icloud_session::Error),
     #[error("{0}")]
@@ -93,7 +94,7 @@ pub enum CkError {
 }
 
 impl CkError {
-    /// [`CkError::RequestFailed`] without an HTTP status (exit 5).
+    /// [`CkError::RequestFailed`] without an HTTP status (iCloud failing it).
     pub fn request_failed(message: impl Into<String>) -> CkError {
         CkError::RequestFailed {
             message: message.into(),

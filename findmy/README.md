@@ -61,6 +61,21 @@ uninstalling.
   sign-in window, the banner reads "Finish in the Apple window…" while
   it is open, and the devices are located again once Find My answers.
 
+### Keyboard shortcuts
+
+| Key | Does |
+|---|---|
+| `Up` / `Down` | Select the previous or next device in the list |
+| `Enter` | Center the map on the selected device |
+| `Ctrl+R` / `F5` | Refresh, asking your devices for a fresh position |
+| `?` / `F1` | Show or hide the shortcuts |
+| `Ctrl+W` | Close the window |
+| `Ctrl+Q` | Quit |
+
+The window follows Omarchy's language (Setup > Region > Language) as it
+runs; only English is shipped so far. Your devices' names and the models'
+are shown as they are.
+
 ### History
 
 Positions are kept only on this computer, in
@@ -76,10 +91,13 @@ with every refresh that is stored. The directory is readable only by you
 ## Command line
 
 `icloud-findmy` given a command runs it without the window, with the
-same Find My client and history as the app; with no command it opens the
-app, `icloud-findmy-app` (which the desktop entry runs directly):
+same Find My client and history as the app; `icloud-findmy open` (what
+the desktop entry, `icloud-findmy.desktop`, runs) or no command opens the
+app, `icloud-findmy-app`, which the package keeps in
+`/usr/lib/icloud-findmy/`:
 
 ```console
+$ icloud-findmy open                     # the window
 $ icloud-findmy devices                  # name, model, battery, online, last fix
 $ icloud-findmy devices --locate --coords
 $ icloud-findmy locate "Dous iPhone 15 Pro" --wait 60
@@ -102,7 +120,7 @@ the repository root:
 
 ```bash
 bin/build icloud-findmy
-target/release/icloud-findmy-app      # the app; icloud-findmy is the command line
+target/release/icloud-findmy open     # the app (target/release/icloud-findmy-app)
 ```
 
 ### Running without an Apple account
@@ -132,7 +150,13 @@ curl -s http://127.0.0.1:8765/fake/actions
 `POST /fake/find-my-password` as wanting the Apple password, until the
 app's button signs in again. `dev/preview.sh <out-dir> [theme-dir ...]`
 takes pictures of the window on the fake in a nested Hyprland, with a
-private home, session bus and Omarchy theme.
+private home, session bus and Omarchy theme. `dev/qa/*.jsonl` drive the
+window headless (`bin/qa findmy`, after building with `--features
+icloud-findmy/qa`): the devices and their actions, the shortcut overlay
+and a switch of language (`language.jsonl`), and the app ending by itself
+once its window is closed, at once with nothing on its way (`idle.jsonl`)
+and only after Apple has answered a Lost Mode that was (`close.jsonl`: the
+fake answers the phone number `+1 555 0199` two seconds late).
 
 `tests/cli.rs` runs the built binary this way for every command.
 

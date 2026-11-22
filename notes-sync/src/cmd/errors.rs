@@ -2,31 +2,17 @@
 //! error classes.
 //!
 //! Exit codes, shared with the other iCloud tools (icloud-session,
-//! icloud-notes, icloud-photos, icloud-findmy; docs/CLI.md):
-//!
-//! - 0 ok. `status`, `push --dry-run` and `diff` report their changes in the
-//!   result and exit 0.
-//! - 1 error: anything not below (`internal`, `io`, `error` (a failure
-//!   icloud-sessiond reported), `vault_busy`,
-//!   `vault_lock`, `vault_needs_update`, `vault_from_newer_tool`,
-//!   `unsupported_vault_layout`, `corrupt_state_file`, a
-//!   `cloudkit_request_failed` that is an HTTP 4xx, …).
-//! - 2 usage: `usage`, `ambiguous_tracked_file`, `already_cloned_directory`,
-//!   `too_many_deletions` (most of the vault's note files are gone: `push
-//!   --yes` deletes the notes).
-//! - 3 not signed in / not set up for this account: `sign_in_required`,
-//!   `not_cloned_directory`, `unbound_account`, `account_mismatch`,
-//!   `requested_account_mismatch`, `notes_unavailable`, `session_rejected`
-//!   (ckdatabasews keeps answering 401/421 although icloud-sessiond still
-//!   holds the sign-in). The JSON `code` tells them apart; only
-//!   `sign_in_required` and `session_rejected` are fixed by signing in.
-//! - 4 not found: `untracked_file`, `unknown_version_snapshot`, a
-//!   `cloudkit_zone_fetch_failed` whose zone is `ZONE_NOT_FOUND`.
-//! - 5 a service unavailable: `network`, `offline`, `session_service`
-//!   (icloud-sessiond unreachable), `keyring_unavailable`, `bad_response`
-//!   (an answer that cannot be read), and iCloud failing a request
-//!   (`cloudkit_request_failed` other than a 4xx,
-//!   `cloudkit_zone_fetch_failed`).
+//! icloud-notes, icloud-photos, icloud-findmy; docs/CLI.md), are Omarchy's:
+//! 0 on success and 1 on any failure. `status`, `push --dry-run` and `diff`
+//! report their changes in the result and exit 0. What kind of failure it
+//! was is the stable `code` of the error object (on stderr), which callers
+//! branch on: the Notes app reads it there to tell a sign-in
+//! (`sign_in_required`, `session_rejected`) from a vault not set up for this
+//! account (`not_cloned_directory`, `unbound_account`, `account_mismatch`,
+//! `requested_account_mismatch`, `notes_unavailable`), iCloud out of reach
+//! (`network`, `offline`), iCloud failing a request
+//! (`cloudkit_request_failed`, `cloudkit_zone_fetch_failed`, `bad_response`)
+//! and the rest.
 //!
 //! Hints for situations every iCloud tool shares (sign-in, network,
 //! icloud-sessiond, keyring, iCloud trouble) are icloud-session's
@@ -45,9 +31,7 @@ use icloud_session::output::{
     CliError, KEYRING_HINT, NETWORK_HINT, SERVICE_TROUBLE_HINT, SESSION_SERVICE_HINT, SIGN_IN_HINT, session_failure,
 };
 
-pub use icloud_session::cli::{
-    EXIT_ERROR, EXIT_INTERNAL, EXIT_NOT_FOUND, EXIT_OK, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE,
-};
+pub use icloud_session::cli::{EXIT_ERROR, EXIT_OK};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -95,7 +79,7 @@ pub enum Error {
     UnknownVersionSnapshot { id: String, file: String },
     #[error("Can't complete this operation: {0}.")]
     VersionContentUnavailable(String),
-    /// Sign-in required: exit 3. The command line adds why, when
+    /// Sign-in required. The command line adds why, when
     /// icloud-sessiond knows (`cmd::output`).
     #[error("sign in to iCloud required")]
     SignInRequired,
@@ -115,7 +99,7 @@ pub enum Error {
     VaultLock { path: String, reason: String },
     #[error(transparent)]
     CloudKit(CkError),
-    /// Anything else (a plain `Error` in icloud-md): exit 1.
+    /// Anything else (a plain `Error` in icloud-md).
     #[error("{0}")]
     Internal(String),
     #[error(transparent)]
@@ -143,53 +127,10 @@ impl Error {
         }
     }
 
+    /// The exit code of a run that ends with this error: 1, as for every
+    /// failure. The kind is [`Error::code`], not a number.
     pub fn exit_code(&self) -> u8 {
-        if let Some(failure) = self.session_failure() {
-            return failure.exit;
-        }
-        match self {
-            Error::SignInRequired
-            | Error::NotClonedDirectory { .. }
-            | Error::UnboundAccount { .. }
-            | Error::AccountMismatch { .. }
-            | Error::RequestedAccountMismatch { .. }
-            | Error::NotesUnavailable => EXIT_SIGN_IN,
-            Error::AmbiguousTrackedFile { .. }
-            | Error::AlreadyClonedDirectory { .. }
-            | Error::TooManyDeletions { .. } => EXIT_USAGE,
-            Error::UntrackedFile { .. } | Error::UnknownVersionSnapshot { .. } => EXIT_NOT_FOUND,
-            Error::CloudKit(CkError::ZoneFetchFailed { server_error_code, .. })
-                if server_error_code == "ZONE_NOT_FOUND" =>
-            {
-                EXIT_NOT_FOUND
-            }
-            Error::CloudKit(CkError::SessionRejected { .. }) => EXIT_SIGN_IN,
-            // iCloud refused this request (an expired asset URL, say): not
-            // a service outage.
-            Error::CloudKit(CkError::RequestFailed {
-                status: Some(400..=499),
-                ..
-            }) => EXIT_ERROR,
-            Error::CloudKit(
-                CkError::Network(_)
-                | CkError::Offline(_)
-                | CkError::SessionService(_)
-                | CkError::KeyringUnavailable(_)
-                | CkError::UnexpectedResponse(_)
-                | CkError::ZoneFetchFailed { .. }
-                | CkError::RequestFailed { .. },
-            ) => EXIT_UNAVAILABLE,
-            Error::Io(_)
-            | Error::Internal(_)
-            | Error::CloudKit(_)
-            | Error::UnsupportedVaultLayout { .. }
-            | Error::VaultFromNewerTool { .. }
-            | Error::VaultNeedsUpdate { .. }
-            | Error::CorruptStateFile(_)
-            | Error::VersionContentUnavailable(_)
-            | Error::VaultBusy { .. }
-            | Error::VaultLock { .. } => EXIT_ERROR,
-        }
+        EXIT_ERROR
     }
 
     /// iCloud couldn't be reached (no network, or the connection failed):

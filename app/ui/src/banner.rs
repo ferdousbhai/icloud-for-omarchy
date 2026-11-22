@@ -18,15 +18,56 @@ use std::rc::Rc;
 use gtk::glib;
 use gtk::prelude::*;
 
-use omui::background;
+use omui::{background, i18n, tr};
 
-const SIGNING_IN: &str = "Signing in…";
-const BUTTON: &str = "Sign In";
-const FIND_MY_TITLE: &str = "Find My needs your Apple password";
+/// Marks `text`, an app's ask for [`SignInBanner::new`], as a string of the
+/// app's catalogs: the app's catalog test ([`crate::catalog_check`]) finds
+/// it there, and the banner shows it translated. Returns it as it is.
+pub fn sign_in_ask(text: &'static str) -> &'static str {
+    text
+}
+
+fn signing_in_title() -> String {
+    tr("Signing in…")
+}
+fn button() -> String {
+    tr("Sign In")
+}
+fn find_my_title() -> String {
+    tr("Find My needs your Apple password")
+}
 /// The same when no password is stored for the daemon to use by itself.
-const FIND_MY_TITLE_HINT: &str = "Find My needs your Apple password (to stop being asked: icloud-session set-password)";
-const FIND_MY_WAITING: &str = "Finish in the Apple window…";
-const FIND_MY_BUTTON: &str = "Enter Password";
+fn find_my_title_hint() -> String {
+    tr("Find My needs your Apple password (to stop being asked: icloud-session set-password)")
+}
+fn find_my_waiting() -> String {
+    tr("Finish in the Apple window…")
+}
+fn find_my_button() -> String {
+    tr("Enter Password")
+}
+
+/// Why the account was signed out, as the daemon says it (its
+/// `SignOutReason`s, in English), in the language in use.
+fn reason_text(reason: &str) -> String {
+    match reason {
+        "Signed out of iCloud" => tr("Signed out of iCloud"),
+        "Apple ended the iCloud session (it expired, the password was changed, or it was signed out on another device)" => {
+            tr(
+                "Apple ended the iCloud session (it expired, the password was changed, or it was signed out on another device)",
+            )
+        }
+        "The iCloud session was removed from the keyring" => tr("The iCloud session was removed from the keyring"),
+        "The iCloud session in the keyring was damaged" => tr("The iCloud session in the keyring was damaged"),
+        "The keyring held another Apple ID's iCloud session" => {
+            tr("The keyring held another Apple ID's iCloud session")
+        }
+        "The iCloud account file could not be read" => tr("The iCloud account file could not be read"),
+        // One with a detail of its own ("The last sign-in could not be
+        // kept: …") stays as the daemon wrote it.
+        other => i18n::translate(other),
+    }
+}
 
 /// What the banner's button does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +95,7 @@ struct State {
 #[derive(Debug, PartialEq, Eq)]
 struct View {
     title: String,
-    button: Option<(&'static str, Action)>,
+    button: Option<(String, Action)>,
 }
 
 impl State {
@@ -73,25 +114,25 @@ impl State {
         let signing_in = self.status.as_ref().is_some_and(|s| s.signing_in);
         let find_my = self.find_my_needed && signed_in != Some(false);
         if signing_in {
-            let title = if find_my { FIND_MY_WAITING } else { SIGNING_IN };
-            return Some(View {
-                title: title.into(),
-                button: None,
-            });
+            let title = if find_my { find_my_waiting() } else { signing_in_title() };
+            return Some(View { title, button: None });
         }
         if signed_in == Some(false) || self.sign_in_needed {
+            let ask = i18n::translate(self.title);
+            let reason = self.status.as_ref().and_then(|s| s.sign_out_reason.as_deref());
             return Some(View {
-                title: self
-                    .status
-                    .as_ref()
-                    .map_or(self.title.into(), |s| s.sign_in_prompt(self.title)),
-                button: Some((BUTTON, Action::SignIn)),
+                title: match reason {
+                    // Two sentences: why, then what to do about it.
+                    Some(reason) => tr!("{}. {}", reason_text(reason), ask),
+                    None => ask,
+                },
+                button: Some((button(), Action::SignIn)),
             });
         }
         let stored = self.status.as_ref().is_some_and(|s| s.find_my_password_stored);
-        find_my.then_some(View {
-            title: if stored { FIND_MY_TITLE } else { FIND_MY_TITLE_HINT }.into(),
-            button: Some((FIND_MY_BUTTON, Action::AuthorizeFindMy)),
+        find_my.then(|| View {
+            title: if stored { find_my_title() } else { find_my_title_hint() },
+            button: Some((find_my_button(), Action::AuthorizeFindMy)),
         })
     }
 
@@ -134,17 +175,15 @@ impl Core {
     /// The banner's button: asks the daemon for the window its view names.
     fn clicked(&self, on_error: Rc<dyn Fn(String)>) {
         let action = self.state.borrow().view().and_then(|v| v.button).map(|(_, a)| a);
-        let (open, what): (fn() -> icloud_session::Result<()>, _) = match action {
-            Some(Action::AuthorizeFindMy) => (
-                icloud_session::authorize_find_my,
-                "Could not open Find My's password page",
-            ),
-            _ => (icloud_session::sign_in, "Could not start signing in"),
+        let (open, what): (fn() -> icloud_session::Result<()>, bool) = match action {
+            Some(Action::AuthorizeFindMy) => (icloud_session::authorize_find_my, true),
+            _ => (icloud_session::sign_in, false),
         };
         background(open, move |result| {
             let msg = match result {
                 Ok(Ok(())) => return,
-                Ok(Err(e)) => format!("{what}: {e}"),
+                Ok(Err(e)) if what => tr!("Could not open Find My's password page: {}", e),
+                Ok(Err(e)) => tr!("Could not start signing in: {}", e),
                 Err(e) => e,
             };
             on_error(msg);
@@ -155,7 +194,8 @@ impl Core {
         let view = self.state.borrow().view();
         if let Some(view) = &view {
             self.banner.set_title(&view.title);
-            self.banner.set_button_label(view.button.map(|(label, _)| label));
+            self.banner
+                .set_button_label(view.button.as_ref().map(|(label, _)| label.as_str()));
         }
         self.banner.set_revealed(view.is_some());
     }
@@ -167,8 +207,9 @@ pub struct SignInBanner {
 }
 
 impl SignInBanner {
-    /// `title` is the app's ask ("Sign in to iCloud to see your
-    /// reminders"). `on_signed_in` runs when the account turns signed in
+    /// `title` is the app's ask, in English and marked for its catalogs
+    /// (`sign_in_ask("Sign in to iCloud to see your reminders")`): the
+    /// banner shows it in the language of the moment. `on_signed_in` runs when the account turns signed in
     /// after being signed out (the window then syncs); `on_error` gets a
     /// message for a toast.
     pub fn new(title: &'static str, on_signed_in: impl Fn() + 'static, on_error: impl Fn(String) + 'static) -> Self {
@@ -189,7 +230,7 @@ impl SignInBanner {
 
     /// Follows the daemon's status for as long as the process lives.
     fn build(state: State, on_signed_in: impl Fn() + 'static, on_error: impl Fn(String) + 'static) -> Self {
-        let banner = omui::Banner::new(state.title, Some(BUTTON));
+        let banner = omui::Banner::new(&i18n::translate(state.title), Some(&button()));
         banner.set_button_suggested(true);
         let widget = banner.widget.clone().upcast();
         let core = Rc::new(Core {
@@ -210,6 +251,13 @@ impl SignInBanner {
                 if change != Change::None {
                     on_signed_in();
                 }
+            }
+        });
+        // In the language of the moment, after every switch.
+        let weak = Rc::downgrade(&core);
+        i18n::on_change(&core.banner.widget, move || {
+            if let Some(core) = weak.upgrade() {
+                core.render();
             }
         });
         let (weak, on_error) = (Rc::downgrade(&core), Rc::new(on_error));
@@ -278,8 +326,8 @@ mod tests {
         assert_eq!(
             state.view(),
             Some(View {
-                title: FIND_MY_TITLE.into(),
-                button: Some((FIND_MY_BUTTON, Action::AuthorizeFindMy)),
+                title: find_my_title(),
+                button: Some((find_my_button(), Action::AuthorizeFindMy)),
             })
         );
         // The window is open.
@@ -287,13 +335,13 @@ mod tests {
         assert_eq!(
             state.view(),
             Some(View {
-                title: FIND_MY_WAITING.into(),
+                title: find_my_waiting(),
                 button: None
             })
         );
         // Closed without finishing: offered again.
         state.update(status(true, false, false));
-        assert_eq!(state.view().unwrap().title, FIND_MY_TITLE);
+        assert_eq!(state.view().unwrap().title, find_my_title());
         state.update(status(true, true, false));
         // Authorized: hidden, and the window refreshes.
         assert_eq!(state.update(status(true, false, true)), Change::FindMyAuthorized);
@@ -310,7 +358,7 @@ mod tests {
             state.view(),
             Some(View {
                 title: TITLE.into(),
-                button: Some((BUTTON, Action::SignIn)),
+                button: Some((button(), Action::SignIn)),
             })
         );
         state.update(icloud_session::Status {
@@ -319,7 +367,7 @@ mod tests {
         });
         assert_eq!(state.view().unwrap().title, format!("Signed out of iCloud. {TITLE}"));
         state.update(status(false, true, false));
-        assert_eq!(state.view().unwrap().title, SIGNING_IN);
+        assert_eq!(state.view().unwrap().title, signing_in_title());
         assert_eq!(state.update(status(true, false, false)), Change::SignedIn);
         // A new session: the refresh the sign-in starts says whether Find
         // My wants its password.
@@ -344,7 +392,7 @@ mod tests {
         assert_eq!(state.update(status(true, false, true)), Change::None);
         // Signing in is.
         state.update(status(false, false, false));
-        assert_eq!(state.view().unwrap().button, Some((BUTTON, Action::SignIn)));
+        assert_eq!(state.view().unwrap().button, Some((button(), Action::SignIn)));
         assert_eq!(state.update(status(true, false, false)), Change::SignedIn);
     }
 
@@ -363,8 +411,8 @@ mod tests {
             ..status(true, false, false)
         });
         state.find_my_needed = true;
-        assert_eq!(state.view().unwrap().title, FIND_MY_TITLE_HINT);
+        assert_eq!(state.view().unwrap().title, find_my_title_hint());
         state.update(status(true, false, false));
-        assert_eq!(state.view().unwrap().title, FIND_MY_TITLE);
+        assert_eq!(state.view().unwrap().title, find_my_title());
     }
 }

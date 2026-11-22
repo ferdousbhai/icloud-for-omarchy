@@ -17,7 +17,8 @@ Cargo workspace (`Cargo.toml`):
   (cloud-calendar pins it by git `rev`), so keep its API stable.
 - `sessiond/` — `icloud-sessiond`: the daemon (`daemon.rs`), Apple auth (`apple.rs`), keyring
   (`secrets.rs`), cookies, the WebKitGTK sign-in window (`src/bin/signin.rs`, the default
-  feature), D-Bus activation files in `data/`.
+  feature, its chrome themed by omui; `tests/links.rs` keeps GTK out of the daemon binary), D-Bus
+  activation files in `data/`.
 - `notes-sync/` — `icloud-notes-sync`, the Notes sync engine (Rust port of icloud-md): CloudKit
   (`cloudkit/`), Markdown (`md/`), vault (`vault/`), commands (`cmd/`). Recorded scenarios and
   golden corpora live in `tests/`; regenerate with `ICLOUD_NOTES_SYNC_REGEN=1 cargo test -p
@@ -28,27 +29,31 @@ Cargo workspace (`Cargo.toml`):
   the vault's lock (`lock.rs`), runs of the engine as a separate process (`engine.rs`, `sync.rs`),
   and the command line and the timer's `--sync` (`cli.rs`, `main.rs`), which print the bytes the Qt
   app that came before printed (`json.rs` is QJsonDocument's layout, `files.rs` its text decoding).
-  Started with no command (or a first word that is none), the `icloud-notes` binary runs
-  `icloud-notes-app` beside it; so does `export-pdf`, which lays out a page. The window is that
+  Started with `open`, no command, or a first word that is none, the `icloud-notes` binary runs
+  `icloud-notes-app` (`icloud_app::cli::app_binary`: `/usr/lib/icloud-notes/` in the package, beside it in a
+  cargo build); so does `export-pdf`, which lays out a page. The window is that
   binary (`src/bin/app/`, GTK 4 on omui behind the default `ui` feature, so the command line links
   no GTK), one per vault (its GApplication id; with no session bus, an app lock beside the vault's),
   keeping its layout in `$XDG_CONFIG_HOME/icloud-notes/window.json`; `dev/preview.sh` takes pictures of it on a seeded
   vault and the stub engine. `tests/blackbox/` holds the binary to its behaviour: the command line
   driven as a separate process, the window on a Broadway display of the test's own, whichever binary
-  `ICLOUD_NOTES_BIN` names (`bin/check` and the PKGBUILD's `check()` name the one cargo built;
-  without the variable the tests run nothing). `tests/fixtures/syncmodel.json` pins what no command
+  `ICLOUD_NOTES_BIN` names (`bin/check`, CI and the PKGBUILD's `check()` name the one cargo built;
+  without the variable the tests fail, unless `ICLOUD_NOTES_BLACKBOX=skip` leaves them out of a local run). `tests/fixtures/syncmodel.json` pins what no command
   reaches (the merge of unsaved edits, the sidebar tree) as calls and the answers the Qt app's C++
   gave (`tests/syncmodel.rs`); `tests/backend.rs` holds the window's save path and search,
   `tests/cli.rs` what the binary links and hands to the app.
 - `app/` — `icloud-app`, what the GTK apps share (Notes, Photos, Find My, Reminders, and Cloud Contacts by git), with no GTK in it: the command lines'
   helpers on top of `icloud_session::output` (`cli.rs`: confirm, the "or Sign In in the app" hint,
-  `session_failure`, warnings, name folding, the launcher that turns `icloud-<app>` with no command
-  into `icloud-<app>-app`), an app's data directory, its `flock` and JSON files replaced whole
+  `session_failure`, warnings, name folding, the launcher that turns `icloud-<app> open` or no command
+  into `icloud-<app>-app`, found in `/usr/lib/icloud-<app>/` or beside the command), an app's data directory, its `flock` and JSON files replaced whole
   (`store.rs`), the lazily connected `SessionTransport` (`transport.rs`), and what the apps'
   `tests/cli.rs` share (`testing.rs`, feature `testing`, dev-dependencies only). `app/ui/` —
-  `icloud-app-ui`, the GTK half: the sign-in banner (`banner.rs`, with Find My's password ask),
-  drawn by [omui](https://github.com/ferdousbhai/omui), whose `main`, `application` and
-  `background` the windows take. Both are internal: no binary, in
+  `icloud-app-ui`, the GTK half: `application`, omui's with the app's catalogs and app/ui's registered (omui
+  gives every window the app's short name as its Wayland app id; `name_window` is `omui::name_window`, kept for
+  callers), the catalog test (`catalog_check`), the sign-in banner (`banner.rs`, with Find
+  My's password ask, translated, its strings in `app/ui/src/i18n/en.json`), and feature `qa`, which turns on
+  omui's scripted QA (whose `language`, `close` and `picker` commands the scripts use); drawn by
+  [omui](https://github.com/ferdousbhai/omui), whose `main`, `background` and `hold` the windows take. Both are internal: no binary, in
   no package. Put here what two or more of the apps would otherwise copy. Not here: anything
   every iCloud tool shares, GTK app or not (that is `icloud-session`, whose API is frozen), what
   one app alone needs (it stays in that app), and any GTK in `icloud-app` itself, not even
@@ -96,7 +101,7 @@ Cargo workspace (`Cargo.toml`):
 
 ```sh
 bin/check                      # what changed since origin/main: clippy + tests of those crates and their dependents, Notes' black-box suite, the windows' QA scripts, and the installer/packaging tests it touches (the pre-push hook)
-bin/check --all                # everything routine: rustfmt, clippy -D warnings, all Rust tests, Notes' black-box suite, the QA scripts, installer + packaging tests (CI runs the same on release, but the QA scripts)
+bin/check --all                # everything routine: rustfmt, clippy -D warnings, all Rust tests, Notes' black-box suite, the QA scripts, installer + packaging tests (CI runs it on every push; a release's package build runs the same but the QA scripts)
 bin/check --deep               # --all plus the random-exploration suites (#[ignore = "deep: ..."]): bug hunting after big changes, not every push
 bin/build [icloud-photos ...] # release binaries into target/release/
 cargo test -p icloud-findmy   # one crate
@@ -109,8 +114,10 @@ without it `bin/check` tests sessiond with `--no-default-features`); Notes' wind
 gtk4's `gtk4-broadwayd`. GitHub's Ubuntu runners use `bin/arch-run` with `arch-install-scripts` to build
 in a disposable native Arch chroot; local package builds run directly as a regular
 Arch user. Release installer checks also use fresh chroots, never the host.
-CI (`.github/workflows/packages.yml`) runs fmt, the installer (which syntax-checks the scripts) and
-packaging tests, then native x86_64/aarch64 package builds.
+CI: every push runs `.github/workflows/check.yml`, which is `bin/check --all` in an Arch container (as a regular
+user, with `CI` set, so Notes' black-box suite cannot be skipped) plus the installer and packaging tests on the
+runner itself, where user namespaces work. On a release, `.github/workflows/packages.yml` runs fmt, the installer
+(which syntax-checks the scripts) and packaging tests, then native x86_64/aarch64 package builds.
 
 ## Conventions and gotchas
 
@@ -119,11 +126,13 @@ packaging tests, then native x86_64/aarch64 package builds.
   `notes/src/cli.rs`): text on a terminal, the envelope `{"ok":true,"data","summary","meta"?}`
   when piped or with `--json`; `--styled`, `--quiet` (data only), `--ids-only`, `--count`, combinable
   (ids-only > count > quiet > json > styled). Failures are `{"ok":false,"error":{"code","message",
-  "hint"?}}` on stdout in machine modes, `error:`/`hint:` on stderr in text mode; remediation goes in
-  `hint`. Data plus a non-zero exit (`Response::exit`) for partial failures and signed-out
-  `status`. Exit codes 0 ok / 1 other failure / 2 usage, ambiguous, exists, or a destructive
-  command without `--yes` / 3 not signed in, credentials rejected, or not set up (the JSON `code`
-  tells them apart) / 4 not found / 5 a service unavailable (network, daemon, keyring, iCloud 5xx).
+  "hint"?}}` on one line of stderr in machine modes, `error:`/`hint:` on stderr in text mode, so stdout
+  only ever holds a result; remediation goes in `hint`. Exit codes are Omarchy's: 0 on success, 1 on any
+  failure (`icloud_session::cli::EXIT_ERROR`; the old `EXIT_USAGE`/`EXIT_SIGN_IN`/`EXIT_NOT_FOUND`/
+  `EXIT_UNAVAILABLE` are deprecated aliases of 1, kept for the crates pinned by `rev`): the stable JSON
+  `code` is what tells failures apart, so nothing in the repository branches on an exit number. A program
+  that runs one of the tools reads the error with `icloud_session::output::error_line(stderr)`. Data plus
+  exit 1 (`Response::exit`) for partial failures and signed-out `status`.
   `push --dry-run` and `diff` report their changes and exit 0. Nothing prompts outside text mode on
   a TTY. New commands must follow this and be added to docs/CLI.md and the skill.
 - No app signs in by itself: everything goes through icloud-sessiond. Tests never touch the real
@@ -135,6 +144,6 @@ packaging tests, then native x86_64/aarch64 package builds.
   crates.io publication is a separate explicit `cargo publish --locked -p icloud-session`.
 - The installer pins `add_signed_repo` in `tests/add_signed_repo.sha256`; update the hash
   deliberately when changing the function. Ghost has removed its old copy.
-- The Notes, Photos, Find My and Reminders windows hold omui's Strata-derived code and Lucide
-  icons: a change of the omui `rev` keeps `NOTICE` (installed by the PKGBUILD) true.
+- The Notes, Photos, Find My and Reminders windows and the sign-in window hold omui's Strata-derived
+  code and Lucide icons: a change of the omui `rev` keeps `NOTICE` (installed by the PKGBUILD) true.
 - `/target`, `/dist` and makepkg dirs are gitignored build output.

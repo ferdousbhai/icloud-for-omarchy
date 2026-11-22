@@ -4,23 +4,25 @@
 //! ([`icloud_session::output`]): text on a terminal, the JSON envelope when
 //! piped, `--json`/`--styled`/`--quiet`/`--ids-only`/`--count` to choose.
 //!
-//! Exit codes are the table every iCloud tool shares (docs/CLI.md,
-//! `icloud_session::cli`): 0 ok; 1 error; 2 usage, an ambiguous name, or an
-//! action without `--yes` when nobody can be asked; 3 not signed in, Find My
-//! needs the Apple password (after `icloud-session`'s own re-authorization
-//! with a stored password failed), Find My not enabled, or iCloud still
-//! refusing the session (`session_rejected`, HTTP 401/421); 4 not found; 5 offline, no network,
-//! `icloud-sessiond` unreachable, the keyring locked, an unreadable answer or
-//! an iCloud server error (HTTP 5xx). The JSON `code` tells them apart. A
-//! failure in a machine mode is `{"ok":false,"error":{"code","message","hint"?}}`
-//! on stdout; in text mode `error:`/`hint:` lines on stderr.
+//! Exit codes are Omarchy's, as in every iCloud tool (docs/CLI.md,
+//! `icloud_session::cli`): 0 ok and 1 for any failure. The JSON `code`
+//! tells the failures apart: `usage`, `ambiguous` (also an action without
+//! `--yes` when nobody can be asked is `usage`); `sign_in_required`,
+//! `find_my_auth_required` (Find My needs the Apple password, after
+//! `icloud-session`'s own re-authorization with a stored password failed),
+//! `find_my_unavailable`, `session_rejected` (HTTP 401/421 that persists);
+//! `not_found`; `offline`, `network`, `session_service`,
+//! `keyring_unavailable`, `bad_response`, `http`. A failure in a machine
+//! mode is `{"ok":false,"error":{"code","message","hint"?}}` on one line of
+//! stderr; in text mode `error:`/`hint:` lines on stderr. Stdout holds only
+//! results.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
 use icloud_app::cli::{confirm, fold, no_data_dir, other, session_failure, usage, warning};
-use icloud_session::cli::{EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE};
+use icloud_session::cli::EXIT_ERROR;
 use icloud_session::output::{self, CliError, Mode, OutputFlags, Response, SERVICE_TROUBLE_HINT};
 use icloud_session::time::rfc3339;
 use serde_json::{Value, json};
@@ -44,27 +46,26 @@ envelope, --styled text, --quiet prints only the data, --ids-only the device
 ids (devices, locate, play-sound, lost-mode), --count the number of results
 (devices; positions for history; deleted for prune-history). Flags combine:
 ids-only > count > quiet > json > styled. A failure is
-{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or
-error:/hint: lines on stderr in text mode.
+{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on one line of
+stderr, or error:/hint: lines on stderr in text mode; stdout holds only
+results.
 
-Exit codes:
-  0 ok
-  1 error (unsupported, no_fix, cancelled, io, error, http 4xx)
-  2 usage, ambiguous, or play-sound/lost-mode without --yes when nobody can
-    be asked
-  3 sign_in_required (icloud-session sign-in), find_my_auth_required
+Exit codes: 0 ok, 1 any failure. The error code tells failures apart:
+  unsupported, no_fix, cancelled, io, error, http (a 5xx with a hint);
+  usage (also play-sound/lost-mode without --yes when nobody can be asked),
+    ambiguous, not_found;
+  sign_in_required (icloud-session sign-in), find_my_auth_required
     (icloud-session authorize-find-my), find_my_unavailable (Find My is not
     on for this Apple ID), session_rejected (iCloud keeps refusing the
-    session although icloud-sessiond still holds it: sign in again)
-  4 not_found
-  5 offline, network, session_service (icloud-sessiond unreachable),
-    keyring_unavailable, bad_response, http 5xx";
+    session although icloud-sessiond still holds it: sign in again);
+  offline, network, session_service (icloud-sessiond unreachable),
+    keyring_unavailable, bad_response";
 
 #[derive(Parser)]
 #[command(
     name = "icloud-findmy",
     version,
-    about = "Find My from the command line. With no command, opens the app.",
+    about = "Find My from the command line. `open`, or no command, opens the app.",
     after_help = AFTER_HELP
 )]
 struct Args {
@@ -79,6 +80,14 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Open the Find My window (as running icloud-findmy with no command does).
+    ///
+    /// Runs the window, icloud-findmy-app, in this command's place: what
+    /// the desktop entry and the app launcher run. It prints nothing and
+    /// exits with the window; when the window cannot be started, the
+    /// failure is reported as for any command (code error).
+    #[command(after_help = AFTER_HELP)]
+    Open,
     /// List devices: model, battery, online, last fix.
     ///
     /// Every device on the Apple ID, as Apple last heard from it: name,
@@ -117,8 +126,7 @@ enum Command {
     /// Play a sound on a device.
     ///
     /// Plays a sound on a device. Asks in text mode on a terminal (stdin and
-    /// stdout); anywhere else --yes is required (a usage error, exit 2,
-    /// otherwise).
+    /// stdout); anywhere else --yes is required (a usage error otherwise).
     ///
     /// JSON: {action: "play_sound", device: {id, name}}
     #[command(after_help = AFTER_HELP)]
@@ -175,12 +183,12 @@ enum Command {
     PruneHistory,
 }
 
-/// A failure: the contract's error object and exit code.
+/// A failure: the contract's error object; its process exits 1.
 type Failure = CliError;
 
 type Outcome = Result<Response, Failure>;
 
-/// A Find My failure as the contract's code, exit code, message and hint:
+/// A Find My failure as the contract's code, message and hint:
 /// icloud-session's failures as every iCloud tool reports them, plus Find
 /// My's own `find_my_unavailable`, `bad_response` for an answer it cannot
 /// read, and `unsupported`.
@@ -188,9 +196,9 @@ fn find_error(e: findme::Error) -> Failure {
     use findme::Error as F;
     match e {
         F::Session(e) => session_failure(&e),
-        F::NoService => CliError::new("find_my_unavailable", EXIT_SIGN_IN, e.to_string())
+        F::NoService => CliError::new("find_my_unavailable", EXIT_ERROR, e.to_string())
             .hint("turn on Find My on one of this Apple ID's devices, or sign in with another Apple ID"),
-        F::Parse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, e.to_string()).hint(SERVICE_TROUBLE_HINT),
+        F::Parse(_) => CliError::new("bad_response", EXIT_ERROR, e.to_string()).hint(SERVICE_TROUBLE_HINT),
         F::Unsupported(m) => CliError::new("unsupported", EXIT_ERROR, m),
     }
 }
@@ -247,6 +255,8 @@ pub fn run() -> u8 {
         } => cli.lost_mode(&device, &phone, &message, yes),
         Command::History { device, since } => cli.history(&device, since),
         Command::PruneHistory => cli.prune_history(),
+        // Only returns when the window could not be started.
+        Command::Open => return icloud_app::cli::open_app("icloud-findmy").report(mode),
     };
     match result {
         Ok(resp) => resp.print(mode),
@@ -334,7 +344,7 @@ impl<T: Transport> Cli<T> {
             let Some(now) = devices.iter().find(|d| d.id == device.id) else {
                 return Err(CliError::new(
                     "not_found",
-                    EXIT_NOT_FOUND,
+                    EXIT_ERROR,
                     format!("{} is no longer on this Apple ID", device.name),
                 ));
             };
@@ -519,14 +529,14 @@ fn resolve<'a>(devices: &'a [Device], query: &str) -> Result<&'a Device, Failure
     match matches.as_slice() {
         [d] => Ok(d),
         [] => Err(
-            CliError::new("not_found", EXIT_NOT_FOUND, format!("no device matches \"{query}\"")).hint(format!(
+            CliError::new("not_found", EXIT_ERROR, format!("no device matches \"{query}\"")).hint(format!(
                 "name one of these devices or use its ID:{}",
                 list(&devices.iter().collect::<Vec<_>>())
             )),
         ),
         many => Err(CliError::new(
             "ambiguous",
-            EXIT_USAGE,
+            EXIT_ERROR,
             format!("\"{query}\" matches {} devices", many.len()),
         )
         .hint(format!("name one exactly or use its ID:{}", list(many)))),
@@ -623,27 +633,30 @@ mod tests {
     }
 
     #[test]
-    fn failures_use_the_shared_codes_exits_and_hints() {
+    fn failures_use_the_shared_codes_and_hints_and_all_exit_1() {
         use findme::Error as F;
         use icloud_session::Error as S;
         let code = |e: F| {
             let f = find_error(e);
-            assert!(f.exit != 5 || f.hint.is_some(), "{}", f.code);
-            (f.code, f.exit)
+            assert_eq!(f.exit, 1, "{}", f.code);
+            (f.code, f.hint.is_some())
         };
         // icloud-session's failures read as in every iCloud tool.
-        assert_eq!(code(S::Offline("x".into()).into()), ("offline".into(), 5));
-        assert_eq!(code(S::FindMyAuthRequired.into()), ("find_my_auth_required".into(), 3));
+        assert_eq!(code(S::Offline("x".into()).into()), ("offline".into(), true));
+        assert_eq!(
+            code(S::FindMyAuthRequired.into()),
+            ("find_my_auth_required".into(), true)
+        );
         let rejected = find_error(F::from(S::Http {
             status: 421,
             body: String::new(),
         }));
-        assert_eq!((rejected.code.as_str(), rejected.exit), ("session_rejected", 3));
+        assert_eq!((rejected.code.as_str(), rejected.exit), ("session_rejected", 1));
         assert_eq!(rejected.hint, Some(icloud_app::cli::sign_in_hint()));
         // Find My's own.
-        assert_eq!(code(F::NoService), ("find_my_unavailable".into(), 3));
-        assert_eq!(code(F::Parse("x".into())), ("bad_response".into(), 5));
-        assert_eq!(code(F::Unsupported("x")), ("unsupported".into(), 1));
+        assert_eq!(code(F::NoService), ("find_my_unavailable".into(), true));
+        assert_eq!(code(F::Parse("x".into())), ("bad_response".into(), true));
+        assert_eq!(code(F::Unsupported("x")), ("unsupported".into(), false));
     }
 
     #[test]
@@ -686,12 +699,12 @@ mod tests {
         let Err(e) = resolve(&ds, "dous") else {
             panic!("ambiguous")
         };
-        assert_eq!((e.code.as_str(), e.exit), ("ambiguous", 2));
+        assert_eq!((e.code.as_str(), e.exit), ("ambiguous", 1));
         let hint = e.hint.unwrap();
         assert!(hint.contains("a1") && hint.contains("b2"), "{hint}");
         let Err(e) = resolve(&ds, "watch") else {
             panic!("not found")
         };
-        assert_eq!((e.code.as_str(), e.exit), ("not_found", 4));
+        assert_eq!((e.code.as_str(), e.exit), ("not_found", 1));
     }
 }

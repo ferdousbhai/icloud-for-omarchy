@@ -82,6 +82,8 @@ pub struct FakeServer {
     state: Arc<Mutex<State>>,
     /// Seconds each uploaded file's bytes take to arrive.
     upload_hold: Arc<AtomicU64>,
+    /// Milliseconds a `records/modify` that deletes takes to be answered.
+    delete_hold: Arc<AtomicU64>,
 }
 
 impl Drop for FakeServer {
@@ -101,8 +103,10 @@ impl FakeServer {
         let url = format!("http://{addr}");
         let state = Arc::new(Mutex::new(State::new(&url, count)));
         let upload_hold = Arc::new(AtomicU64::new(0));
+        let delete_hold = Arc::new(AtomicU64::new(0));
         for _ in 0..4 {
             let (server, state, hold) = (server.clone(), state.clone(), upload_hold.clone());
+            let delete_hold = delete_hold.clone();
             std::thread::spawn(move || {
                 while let Ok(mut req) = server.recv() {
                     // Outside the state's lock, so the rest of the fake answers meanwhile.
@@ -111,6 +115,15 @@ impl FakeServer {
                     }
                     let mut body = Vec::new();
                     let _ = req.as_reader().read_to_end(&mut body);
+                    if req
+                        .url()
+                        .split('?')
+                        .next()
+                        .is_some_and(|path| path.ends_with("/records/modify"))
+                        && deletes(&body)
+                    {
+                        std::thread::sleep(Duration::from_millis(delete_hold.load(Ordering::Relaxed)));
+                    }
                     let (status, ctype, bytes) = handle(&state, req.method().as_str(), req.url(), &body);
                     let header = tiny_http::Header::from_bytes("Content-Type", ctype).expect("header");
                     let _ = req.respond(
@@ -126,12 +139,19 @@ impl FakeServer {
             server,
             state,
             upload_hold,
+            delete_hold,
         }
     }
 
     /// Take `seconds` over each uploaded file, so an upload can be seen in progress.
     pub fn hold_uploads(&self, seconds: u64) {
         self.upload_hold.store(seconds, Ordering::Relaxed);
+    }
+
+    /// Take `millis` before answering a request that deletes, so a delete is still on its way when the window
+    /// closes (Photos' `dev/qa/close.jsonl`).
+    pub fn hold_deletes(&self, millis: u64) {
+        self.delete_hold.store(millis, Ordering::Relaxed);
     }
 
     /// Answer 421 to every Apple call until `/mock/reauthenticate`.
@@ -492,9 +512,16 @@ impl State {
                 out.push(json!({ "recordName": name, "serverErrorCode": "CONFLICT", "reason": "client oplock error updating record" }));
                 continue;
             }
+            // Said on the fake's output, for a check of what reached iCloud (`dev/qa/*.after`).
             match rec.pointer("/fields/isDeleted/value").and_then(Value::as_i64) {
-                Some(1) => self.assets[i].deleted = true,
-                Some(0) => self.assets[i].deleted = false,
+                Some(1) => {
+                    self.assets[i].deleted = true;
+                    println!("deleted {} ({})", self.assets[i].id, self.assets[i].filename);
+                }
+                Some(0) => {
+                    self.assets[i].deleted = false;
+                    println!("restored {} ({})", self.assets[i].id, self.assets[i].filename);
+                }
                 _ => {}
             }
             self.assets[i].tag += 1;
@@ -702,6 +729,16 @@ fn handle(state: &Mutex<State>, method: &str, url: &str, body: &[u8]) -> (u16, &
         },
         _ => (404, "text/plain", b"not found".to_vec()),
     }
+}
+
+/// Whether a `records/modify` body moves a record to Recently Deleted.
+fn deletes(body: &[u8]) -> bool {
+    let body: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    body["operations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|op| op.pointer("/record/fields/isDeleted/value").and_then(Value::as_i64) == Some(1))
 }
 
 /// One more request answered against a "sign out after n" count: whether

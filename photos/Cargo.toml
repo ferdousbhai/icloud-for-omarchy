@@ -13,7 +13,7 @@ default-run = "icloud-photos"
 name = "icloud_photos"
 path = "src/lib.rs"
 
-# The command line; with no arguments it runs the app. Links no GTK.
+# The command line; with no arguments, or `open`, it runs the app. Links no GTK.
 [[bin]]
 name = "icloud-photos"
 path = "src/main.rs"
@@ -26,15 +26,17 @@ required-features = ["ui"]
 
 [features]
 default = ["ui"]
-ui = ["dep:gtk", "dep:omui", "dep:async-channel"]
+ui = ["dep:icloud-app-ui", "dep:gtk", "dep:omui", "dep:async-channel"]
 # The window driven by a script (bin/qa): omui's scripted QA, which a release build leaves out.
-qa = ["ui", "omui/qa"]
+qa = ["ui", "omui/qa", "icloud-app-ui/qa"]
 
 [dependencies]
 # The shared iCloud sign-in (a D-Bus client for icloud-sessiond).
 icloud-session = { workspace = true, features = ["clap"] }
 # What the iCloud GTK apps share (app/).
 icloud-app.workspace = true
+# Their windows' half: the application under the one name, the catalog test, the QA actions.
+icloud-app-ui = { workspace = true, optional = true }
 gtk = { workspace = true, optional = true }
 omui = { workspace = true, optional = true }
 async-channel = { workspace = true, optional = true }

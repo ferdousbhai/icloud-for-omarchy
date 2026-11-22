@@ -2,9 +2,10 @@
 //! an agent or the systemd timer runs it, through nothing but its public
 //! surface (arguments, stdin, stdout, stderr, the exit code, the files of a
 //! scratch vault, the lock file, the engine it starts and the icloud-session
-//! it asks). `ICLOUD_NOTES_BIN` names the binary; without it every test
-//! passes having run nothing (bin/check and the package's check() name the
-//! one cargo built).
+//! it asks). `ICLOUD_NOTES_BIN` names the binary (bin/check, CI and the
+//! package's check() name the one cargo built); without it every test fails,
+//! unless the run leaves the suite out itself with
+//! `ICLOUD_NOTES_BLACKBOX=skip`, which CI (`CI` set) refuses.
 //!
 //! Each test has a world of its own (world.rs): a temporary home, vault,
 //! trash and D-Bus session bus, the fake icloud-session (session.rs) and the

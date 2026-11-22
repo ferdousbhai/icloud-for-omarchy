@@ -122,21 +122,29 @@ fn text<'a>(map: &'a Map<String, Value>, key: &str) -> &'a str {
     map.get(key).and_then(Value::as_str).unwrap_or_default()
 }
 
-/// The contract error object `{code, message, hint?}` when `output` (the
-/// engine's whole stdout) is the document `{"ok":false,"error":{...}}`.
-/// Parsed as JSON: key order and layout are not part of the contract.
-fn contract_error(output: &[u8]) -> Option<Map<String, Value>> {
-    let document = object(output);
-    (document.get("ok") == Some(&Value::Bool(false))).then(|| child(&document, "error").cloned().unwrap_or_default())
+/// The contract error object `{code, message, hint?}` the engine wrote on
+/// `stderr`: in its machine modes a failure is `{"ok":false,"error":{...}}`
+/// on one line, the last that is one (status lines and warnings come
+/// before it), and stdout holds only results. Parsed as JSON: key order is
+/// not part of the contract.
+fn contract_error(stderr: &[u8]) -> Option<Map<String, Value>> {
+    let document = icloud_session::output::error_line(stderr)?;
+    Some(
+        document
+            .get("error")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default(),
+    )
 }
 
-/// The engine's error for a failed run: in its machine modes it prints it
-/// on stdout as the contract error document; a half of a sync carries it as
+/// The engine's error for a failed run: the contract error object on its
+/// stderr; a half of a sync carries it in the result on stdout as
 /// `{"error":{...}}`. Empty when neither is there (a crash).
-fn engine_error(output: &[u8]) -> Map<String, Value> {
-    match contract_error(output) {
+fn engine_error(stdout: &[u8], stderr: &[u8]) -> Map<String, Value> {
+    match contract_error(stderr) {
         Some(error) if !error.is_empty() => error,
-        _ => child(&object(output), "error").cloned().unwrap_or_default(),
+        _ => child(&object(stdout), "error").cloned().unwrap_or_default(),
     }
 }
 
@@ -179,15 +187,12 @@ fn refused_change(push_result: &Map<String, Value>) -> Map<String, Value> {
     )
 }
 
-/// Only a sign-in fixes it: the engine's error code says so. Exit 3 also
-/// means "not cloned", "another account's vault" and the like, so the exit
-/// code counts only when no error code came through at all.
-fn is_sign_in_required(code: &str, exit_code: i32) -> bool {
-    if code.is_empty() {
-        exit_code == 3
-    } else {
-        code == "sign_in_required"
-    }
+/// Only a sign-in fixes it: the engine's error code says so, and only the
+/// code can, since every failure exits 1. A run that gave no code (a crash)
+/// is not taken for a sign-in: syncing would pause for nothing a person can
+/// do.
+fn is_sign_in_required(code: &str) -> bool {
+    code == "sign_in_required"
 }
 
 /// Apple refused the session icloud-session still holds: only a sign-in
@@ -197,8 +202,8 @@ fn is_session_rejected(code: &str) -> bool {
 }
 
 /// Either: the engine's sync skips its pull after it, and syncing pauses.
-fn needs_sign_in(code: &str, exit_code: i32) -> bool {
-    is_sign_in_required(code, exit_code) || is_session_rejected(code)
+fn needs_sign_in(code: &str) -> bool {
+    is_sign_in_required(code) || is_session_rejected(code)
 }
 
 /// iCloud out of reach: the engine's network errors.
@@ -229,11 +234,14 @@ fn run_failed_log(name: &str, error: &Map<String, Value>) -> String {
     failed_log(name, error)
 }
 
-/// A line of the engine's stderr worth the log: not blank, and not one of
-/// the progress lines (one per fetched page and processed note in a machine
-/// mode: thousands in a clone).
+/// A line of the engine's stderr worth the log: not blank, not one of the
+/// progress lines (one per fetched page and processed note in a machine
+/// mode: thousands in a clone), and not its error object, which the log
+/// gets in words (`failed_log`).
 fn is_logged_stderr_line(line: &[u8]) -> bool {
-    !line.trim_ascii().is_empty() && !line.starts_with(b"icloud-notes:progress:")
+    !line.trim_ascii().is_empty()
+        && !line.starts_with(b"icloud-notes:progress:")
+        && icloud_session::output::error_line(line).is_none()
 }
 
 fn compact(value: &Value) -> Vec<u8> {
@@ -603,9 +611,9 @@ impl Backend {
             }
             self.append_log(&format!("(exit {exit_code})"));
             if self.sync.mode == Mode::Sync {
-                self.finish_sync_halves(exit_code, &finished.stdout);
+                self.finish_sync_halves(exit_code, &finished.stdout, &finished.stderr);
             } else {
-                self.finish_run(self.sync.label, exit_code, &finished.stdout);
+                self.finish_run(self.sync.label, exit_code, &finished.stdout, &finished.stderr);
             }
         }
         self.write_queued_save();
@@ -613,7 +621,7 @@ impl Backend {
     }
 
     /// One run, or one half of a sync, is over.
-    fn finish_run(&mut self, label: &'static str, exit_code: i32, output: &[u8]) {
+    fn finish_run(&mut self, label: &'static str, exit_code: i32, output: &[u8], stderr: &[u8]) {
         // push --dry-run and diff report their changes in the result and
         // exit 0; only a non-zero exit is a failure.
         let ok = exit_code == 0;
@@ -645,14 +653,15 @@ impl Backend {
         } else if refused {
             refused_change(&object(&captured))
         } else {
-            engine_error(output)
+            engine_error(output, stderr)
         };
         // A failure's output is its error, as a failed half's is: {"error":{...}}.
         if !error.is_empty() {
             captured = compact(&json!({"error": error}));
         }
         let code = text(&error, "code").to_string();
-        // A run's error is only on stdout: log it as a sync half's is
+        // A run's error is only on stderr, left out of the log as it was
+        // copied there: log it in words, as a sync half's is
         // (finish_sync_halves logs the halves').
         if self.sync.mode != Mode::Sync && !error.is_empty() {
             self.append_log(&run_failed_log(&label.to_lowercase(), &error));
@@ -664,7 +673,7 @@ impl Backend {
         // sync would fail the same way. `session_rejected` pauses the same
         // way, but is not reported: the session library reported it already
         // when it got the refusal.
-        let session_expired = !ok && is_sign_in_required(&code, exit_code);
+        let session_expired = !ok && is_sign_in_required(&code);
         let session_rejected = !ok && is_session_rejected(&code);
         if session_expired {
             self.sync.reports += 1;
@@ -703,7 +712,7 @@ impl Backend {
     /// gone or the session rejected, or iCloud out of reach). Each half is
     /// logged and finished as a run of its own was; then the vault is
     /// re-read, once, and only when the run may have changed it.
-    fn finish_sync_halves(&mut self, exit_code: i32, output: &[u8]) {
+    fn finish_sync_halves(&mut self, exit_code: i32, output: &[u8], stderr: &[u8]) {
         let answer = object(output);
         let mut halves: Vec<(&'static str, i32, Vec<u8>)> = Vec::new();
         // Nothing a re-read would show: no half failed but for a sign-in or the network.
@@ -752,16 +761,16 @@ impl Backend {
                 // No answer (no engine, no lock, the vault busy, a crash):
                 // both halves failed as the run did, as two runs would have;
                 // a sign-in skips the pull. The engine's error object, when
-                // it printed one, is on stdout.
+                // it printed one, is on stderr.
                 let code = if exit_code == 0 { -1 } else { exit_code };
-                let error = engine_error(output);
+                let error = engine_error(output, stderr);
                 let mut failed = Vec::new();
                 if !error.is_empty() {
                     self.append_log(&failed_log("sync", &error));
                     failed = compact(&json!({"error": error}));
                 }
                 halves.push(("Push", code, failed.clone()));
-                if !needs_sign_in(text(&error, "code"), code) {
+                if !needs_sign_in(text(&error, "code")) {
                     halves.push(("Pull", code, failed));
                 }
                 quiet = false;
@@ -785,7 +794,7 @@ impl Backend {
                     let push_code = child(push, "error")
                         .map(|error| text(error, "code"))
                         .unwrap_or_default();
-                    if !needs_sign_in(push_code, push_exit) {
+                    if !needs_sign_in(push_code) {
                         // Not run, and not for a sign-in (which pauses
                         // instead): the push found iCloud out of reach. It
                         // failed as the push did.
@@ -795,7 +804,7 @@ impl Backend {
             }
         }
         for (label, code, output) in halves {
-            self.finish_run(label, code, &output);
+            self.finish_run(label, code, &output, &[]);
         }
         // The answer carries what vault-info would say now: no second engine run.
         if let Some(info) = child(&answer, "vault_info") {

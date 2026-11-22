@@ -293,7 +293,7 @@ fn find_my_auth_required_surfaces_without_retrying() {
 }
 
 /// icloud-session's failures are kept whole, so the command line reports
-/// them as every iCloud tool does (exit 5 for offline, say).
+/// them as every iCloud tool does (the code `offline` for offline, say).
 #[test]
 fn session_errors_are_kept_whole() {
     assert!(Error::from(S::FindMyAuthRequired).is_find_my_auth());

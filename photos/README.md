@@ -35,7 +35,7 @@ describes), from the repository root:
 
 ```bash
 bin/build icloud-photos
-target/release/icloud-photos       # or target/release/icloud-photos-app
+target/release/icloud-photos open  # the window; target/release/icloud-photos --help for the commands
 ```
 
 ## Everyday use
@@ -69,21 +69,48 @@ target/release/icloud-photos       # or target/release/icloud-photos-app
   photos and videos to your library, with a progress dialog. A file iCloud
   already has is reported as such, not uploaded twice.
 - **Sync** runs on launch, when you come back to the window after a couple of
-  minutes, every 10 minutes, and on `Ctrl+R`.
+  minutes, every 10 minutes while the window is on screen (not while it is
+  minimised or on another workspace), and on `Ctrl+R`.
 - **Preferences** (`Ctrl+,`): the folder for originals, and whether originals
   download on demand (default) or all of them in the background.
 - When you are signed out (here or from any other iCloud app), a banner
   offers **Sign In**, which opens Apple's sign-in page in a window of its
   own; syncing resumes on its own once you are signed in.
 
+### Keyboard shortcuts
+
+| Key | Does | Where |
+|---|---|---|
+| `Ctrl+R` / `F5` | Sync with iCloud | Anywhere |
+| `Ctrl+U` | Upload photos and videos | Anywhere |
+| `Ctrl+,` | Preferences | Anywhere |
+| `?` / `F1` | Show the keyboard shortcuts (`?` types in the search field) | Anywhere |
+| `Left` / `Right` | Previous / next photo (not while typing) | Viewer |
+| `Ctrl+S` | Download the original | Viewer |
+| `Ctrl+O` | Open the original in your default app | Viewer |
+| `Ctrl+C` | Copy the image | Viewer |
+| `Delete` | Move to Recently Deleted, after a question (not while typing) | Viewer |
+| `Escape` / `Alt+Left` | Back to the grid | Viewer |
+| `Ctrl+W` | Close the window | Anywhere |
+| `Ctrl+Q` | Quit | Anywhere |
+
+The window follows Omarchy's language (Setup > Region > Language) as it
+runs, dates and numbers included; album and file names stay as they are.
+Only English ships for now. Closing the window while an upload, a delete or
+an Undo is on its way lets it finish first; the app ends once it is done.
+
 ## Command line
 
-`icloud-photos` is also the command-line tool: with no arguments it opens
-the app (`icloud-photos-app`, which the desktop entry starts directly);
-`icloud-photos <command>` runs without GTK or a display, over the
-same sign-in, catalog, cache and library folder as the app.
+`icloud-photos` is also the command-line tool: `icloud-photos open`, or
+no arguments, opens the window (it runs `icloud-photos-app`, which the
+package keeps in `/usr/lib/icloud-photos/`; the desktop entry runs
+`icloud-photos open`); `icloud-photos <command>` runs without GTK or a
+display, over the same sign-in, catalog, cache and library folder as the
+app.
 
 ```console
+$ icloud-photos open                     # the window
+$ icloud-photos open ID                  # one photo, in your default app
 $ icloud-photos status
 $ icloud-photos sync
 $ icloud-photos albums
@@ -236,10 +263,12 @@ Layout:
 - `src/transport.rs` the HTTP seam every module above goes through
 - `src/session.rs` the only file that uses the `icloud-session` client
 - `src/ui/` the GTK 4 app, with omui's look, widgets and Omarchy theme, started by
-  `src/app.rs` (`icloud-photos-app`)
+  `src/app.rs` (`icloud-photos-app`); its strings, in English, in `src/i18n/en.json`
 - `src/cli.rs` the command line (no GTK), over the same library code, started
-  by `src/main.rs` (`icloud-photos`, which runs `icloud-photos-app` when given
-  no arguments; `ICLOUD_PHOTOS_APP=path` points it at another build)
+  by `src/main.rs` (`icloud-photos`, which runs `icloud-photos-app` for `open`
+  or no arguments; `ICLOUD_PHOTOS_APP=path` points it at another build)
+- `data/icloud-photos.desktop`, `data/icloud-photos.svg` the desktop entry and
+  icon, named, like the command and the window's app id, `icloud-photos`
 
 `cargo test -p icloud-photos` runs the test suite (fixtures in `tests/fixtures/`, plus
 an end-to-end run against the fake server, and `tests/cli.rs`, which runs
@@ -247,7 +276,11 @@ the built binary against it for every command); the root `bin/check` runs
 it with clippy and every other crate's tests.
 `bin/qa photos` drives the window through `dev/qa/*.jsonl` on the fake server,
 headless (omui's scripted QA; `bin/check` runs it), and writes their pictures to
-`target/qa/photos/`. `dev/preview.sh <out-dir> [theme-dir ...]` takes pictures
+`target/qa/photos/`: the library, the shortcuts overlay, a file chooser that
+will not open (omui's scripted `picker` failure), the viewer and a delete
+with its Undo, a switch of language (`language.jsonl`, to a made-up one and to
+right to left), and the window closed while a delete is on its way
+(`close.jsonl`, checked by `close.after`). `dev/preview.sh <out-dir> [theme-dir ...]` takes pictures
 of the window on the fake server in a nested Hyprland, with a private home,
 session bus and Omarchy theme: the grid, the viewer, the preferences, About, an
 upload at work, a delete and its Undo toast, and the sign-in banner.

@@ -74,7 +74,7 @@ fn help_is_the_usage_text_in_every_mode() {
     fixture("help/usage.txt", &help.out);
     assert!(
         help.out
-            .starts_with("Usage: icloud-notes                 open the app\n")
+            .starts_with("Usage: icloud-notes [open]          open the app\n")
     );
     for command in COMMANDS {
         assert!(help.out.contains(&format!("\n  {command}")), "help lists {command}");
@@ -125,7 +125,7 @@ fn every_command_has_its_own_help() {
     }
     // Help needs no arguments of the command, nor a vault.
     assert_eq!(w.run(["read", "--help"]).code, 0);
-    let (message, hint) = w.run(["help", "bogus"]).fails(2, "usage");
+    let (message, hint) = w.run(["help", "bogus"]).fails("usage");
     assert_eq!(
         (message.as_str(), hint.as_str()),
         ("unknown command \"bogus\"", USAGE_HINT)
@@ -173,7 +173,7 @@ fn usage_errors_name_what_is_wrong() {
         (&["list", "--version"], "list does not take --version"),
     ];
     for (args, message) in cases {
-        let (said, hint) = w.run(*args).fails(2, "usage");
+        let (said, hint) = w.run(*args).fails("usage");
         assert_eq!((said.as_str(), hint.as_str()), (*message, USAGE_HINT), "{args:?}");
     }
     assert!(!w.exists("Notes/T.md"), "a usage error changes nothing");
@@ -184,12 +184,12 @@ fn a_usage_error_is_printed_in_the_mode_the_flags_ask_for() {
     let Some(w) = World::seeded() else { return };
     // The flags count wherever they stand, even after what was wrong.
     w.run(["--styled", "bogus"])
-        .fails_in_text(2, "unknown command \"bogus\"", USAGE_HINT);
+        .fails_in_text("unknown command \"bogus\"", USAGE_HINT);
     w.run(["list", "--nope", "--styled"])
-        .fails_in_text(2, "unknown option --nope", USAGE_HINT);
-    w.run(["--styled", "list", "--nope", "--quiet"]).fails(2, "usage");
+        .fails_in_text("unknown option --nope", USAGE_HINT);
+    w.run(["--styled", "list", "--nope", "--quiet"]).fails("usage");
     // After `--` nothing is a flag.
-    w.run(["list", "--nope", "--", "--styled"]).fails(2, "usage");
+    w.run(["list", "--nope", "--", "--styled"]).fails("usage");
 }
 
 #[test]
@@ -229,7 +229,7 @@ fn the_vault_option_names_another_vault() {
     let none = w.scratch().join("none");
     let (message, hint) = w
         .run(["--vault".as_ref(), none.as_os_str(), "list".as_ref()])
-        .fails(3, "not_cloned");
+        .fails("not_cloned");
     assert_eq!(message, format!("no notes cloned at {}", none.display()));
     assert_eq!(hint, "Run `icloud-notes clone` (signed in to icloud-session) first.");
     // A relative directory is taken from where the command runs.

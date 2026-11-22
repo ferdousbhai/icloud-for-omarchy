@@ -14,7 +14,7 @@
 use std::path::Path;
 
 use super::SyncProgress;
-use super::errors::{EXIT_ERROR, EXIT_OK, EXIT_SIGN_IN, Error};
+use super::errors::{EXIT_ERROR, EXIT_OK, Error};
 use super::pull::{self, PullSummary};
 use super::push::{self, PushOptions, PushResult};
 use super::remote::{Connector, DefaultConnector, SharedConnector};
@@ -31,31 +31,21 @@ pub struct SyncOutcome {
 }
 
 impl SyncOutcome {
-    /// The run's exit code: 3 (sign-in required, or the vault not set up
-    /// for this account) if either half exited 3, since nothing else can
-    /// work until that is fixed; otherwise the higher of the two halves'
-    /// codes, so 5 (unavailable) > 4 (not found) > 2 (usage) > 1 (error) >
-    /// 0: a specific reason beats the generic error. A push that had a
-    /// change refused counts as 1.
+    /// The run's exit code: 0 when both halves worked, else 1. A push that
+    /// had a change refused is a failure too. Which half failed, and why, is
+    /// in each half's error `code`; a caller ranks those, not the number.
     pub fn exit_code(&self) -> u8 {
-        let push = match (&self.push, &self.push_again) {
-            (Ok(_), Some(again)) => again.exit_code(),
-            // A push that ran but had a change refused is an error too.
-            (Ok(result), None) if !result.failures().is_empty() => EXIT_ERROR,
-            (half, _) => half_exit_code(half),
+        let push_failed = match (&self.push, &self.push_again) {
+            (Ok(_), Some(_)) | (Err(_), _) => true,
+            (Ok(result), None) => !result.failures().is_empty(),
         };
-        let pull = self.pull.as_ref().map_or(EXIT_OK, half_exit_code);
-        if push == EXIT_SIGN_IN || pull == EXIT_SIGN_IN {
-            EXIT_SIGN_IN
+        let pull_failed = matches!(self.pull, Some(Err(_)));
+        if push_failed || pull_failed {
+            EXIT_ERROR
         } else {
-            push.max(pull)
+            EXIT_OK
         }
     }
-}
-
-/// One half's exit code, as `push` or `pull` alone would exit.
-pub fn half_exit_code<T>(half: &Result<T, Error>) -> u8 {
-    half.as_ref().err().map_or(EXIT_OK, Error::exit_code)
 }
 
 /// Whether a failed push leaves the pull out: the pull would fail the same
