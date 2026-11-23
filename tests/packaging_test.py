@@ -57,8 +57,16 @@ class Packaging(unittest.TestCase):
             shutil.copy2(ROOT / "bin" / name, root / "bin" / name)
 
     def need_namespace(self):
-        if subprocess.run([*NAMESPACE, "true"], capture_output=True).returncode:
-            self.skipTest("subordinate UID namespaces unavailable")
+        # Where user namespaces are refused (a container), `unshare --map-auto` fails but leaves its uid-map helper
+        # behind, holding whatever output it was given: so a plain namespace is asked for first, which has no
+        # helper, and the probe's output goes nowhere a wait could hang on.
+        for probe in (["unshare", "--user", "true"], [*NAMESPACE, "true"]):
+            try:
+                if subprocess.run(probe, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, timeout=30).returncode:
+                    self.skipTest("subordinate UID namespaces unavailable")
+            except subprocess.TimeoutExpired:
+                self.skipTest("subordinate UID namespaces unavailable (the probe hung)")
 
     def populate(self):
         for arch in ("x86_64", "aarch64"):
@@ -131,9 +139,68 @@ class Packaging(unittest.TestCase):
         recipe = (ROOT / "packaging/PKGBUILD").read_text()
         for app in ["photos", "findmy", "reminders", "notes"]:
             body = recipe.split(f"package_icloud-{app}() {{", 1)[1].split("\n}", 1)[0]
-            self.assertIn(f"_refuse_link usr/bin/icloud-{app}-app libadwaita-1", body)
+            self.assertIn(f"_refuse_link usr/lib/icloud-{app}/icloud-{app}-app libadwaita-1", body)
+            # The one-name layout, and with it the old /usr/bin/icloud-<app>-app for existing key bindings.
+            self.assertIn("_package_gtk_app", body)
             # The Lucide icons omui compiles into the window are ISC (NOTICE).
             self.assertIn("license=('MIT' 'ISC')", body)
+        # The sign-in window is omui's too.
+        session = recipe.split("package_icloud-session() {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("_refuse_link usr/bin/icloud-session-signin libadwaita-1", session)
+        self.assertIn("license=('MIT' 'ISC')", session)
+
+    def test_an_app_is_installed_under_its_one_name(self):
+        # Omarchy's one name: the command, the desktop entry and the icon are the package's name; the window's
+        # binary is in /usr/lib/<name>/, with the old command kept as a link to it.
+        src = self.work / "src" / "icloud-for-omarchy"
+        (src / "photos/data").mkdir(parents=True)
+        for name in ["icloud-photos.desktop", "icloud-photos.svg"]:
+            (src / "photos/data" / name).write_text(name)
+        for name in ["photos/README.md", "LICENSE", "NOTICE"]:
+            (src / name).write_text(name)
+        release = self.work / "target/release"
+        release.mkdir(parents=True)
+        for name in ["icloud-photos", "icloud-photos-app"]:
+            (release / name).write_text(name)
+        pkg = self.work / "pkg"
+        subprocess.run(
+            ["bash", "-ec", 'source packaging/PKGBUILD; pkgname=icloud-photos; _package_gtk_app'], cwd=ROOT, check=True,
+            env=dict(os.environ, srcdir=str(self.work / "src"), pkgdir=str(pkg),
+                     CARGO_TARGET_DIR=str(self.work / "target")),
+        )
+        self.assertEqual((pkg / "usr/bin/icloud-photos").read_text(), "icloud-photos")
+        self.assertEqual((pkg / "usr/lib/icloud-photos/icloud-photos-app").read_text(), "icloud-photos-app")
+        self.assertEqual(os.readlink(pkg / "usr/bin/icloud-photos-app"), "../lib/icloud-photos/icloud-photos-app")
+        self.assertEqual((pkg / "usr/bin/icloud-photos-app").read_text(), "icloud-photos-app")
+        self.assertTrue((pkg / "usr/share/applications/icloud-photos.desktop").is_file())
+        self.assertTrue((pkg / "usr/share/icons/hicolor/scalable/apps/icloud-photos.svg").is_file())
+        # Every app's entry is named by the app and opens the window through its command.
+        for app in ["photos", "findmy", "reminders", "notes"]:
+            name = f"icloud-{app}"
+            entry = (ROOT / app / "data" / f"{name}.desktop").read_text().splitlines()
+            for line in [f"Exec={name} open", f"Icon={name}", f"StartupWMClass={name}"]:
+                self.assertIn(line, entry, name)
+            self.assertTrue((ROOT / app / "data" / f"{name}.svg").is_file(), name)
+        session = (ROOT / "sessiond/data/icloud-session.desktop").read_text().splitlines()
+        self.assertIn("StartupWMClass=icloud-session", session)
+
+    def test_every_push_runs_the_full_check_in_arch_with_what_the_recipe_builds_with(self):
+        workflow = (ROOT / ".github/workflows/check.yml").read_text()
+        triggers = workflow.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertIn("  push:", triggers)
+        self.assertIn("container: archlinux:", workflow)
+        # CI named to the tests, so Notes' black-box suite cannot be skipped, and as a regular user.
+        self.assertRegex(workflow, r"runuser -u builder -- env CI=true .*bin/check --all")
+        install = re.search(r"pacman -Syu --noconfirm --needed ([^\n]*(?:\\\n[^\n]*)*)", workflow).group(1)
+        installed = set(install.replace("\\", " ").split())
+        makedepends = subprocess.check_output(
+            ["bash", "-c", 'source packaging/PKGBUILD; printf "%s\\n" "${makedepends[@]}"'], cwd=ROOT, text=True,
+        ).split()
+        # Arch's rust package brings cargo, clippy and rustfmt.
+        self.assertEqual(set(makedepends) - {"cargo"} - installed, set())
+        # The windows' QA scripts run on gtk4's broadway display, and the installers on the runner itself.
+        self.assertIn("gtk4", installed)
+        self.assertIn("tests/install_test.sh", workflow)
 
     def test_all_rust_crates_inherit_one_locked_suite_version(self):
         workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]

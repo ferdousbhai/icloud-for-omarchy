@@ -8,9 +8,10 @@ use std::rc::Rc;
 use gtk::{gdk, gio, glib, prelude::*};
 use icloud_notes::backend::Refusal;
 use icloud_notes::syncmodel;
+use omui::tr;
 
 use crate::lists::{self, Item};
-use crate::window::Ui;
+use crate::window::{Ui, as_is};
 
 /// What an action does to the window, with its parameter.
 type Activate = Box<dyn Fn(&Rc<Ui>, Option<&glib::Variant>)>;
@@ -69,10 +70,10 @@ pub fn add(ui: &Rc<Ui>) {
             let result = ui.backend.borrow_mut().export_pdf(&crate::pdf::render);
             match result {
                 Ok(pdf) => {
-                    let name = pdf.file_name().unwrap_or_default().to_string_lossy();
-                    ui.set_status(&format!("Exported {name} next to the note."));
+                    let name = pdf.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                    ui.set_status(move || tr!("Exported {} next to the note.", name));
                 }
-                Err(refusal) => ui.set_notice(&refusal.message),
+                Err(refusal) => ui.set_notice(as_is(refusal.message)),
             }
         }),
     );
@@ -92,11 +93,11 @@ pub fn add(ui: &Rc<Ui>) {
             let result = ui.backend.borrow_mut().recover_conflicted_note(&how);
             match result {
                 Ok(recovered) => {
-                    ui.set_notice(&recovered.message);
+                    ui.set_notice(as_is(recovered.message));
                     ui.load_editor();
                     ui.show_vault();
                 }
-                Err(refusal) => ui.set_notice(&refusal.message),
+                Err(refusal) => ui.set_notice(as_is(refusal.message)),
             }
         }),
     );
@@ -107,7 +108,7 @@ pub fn add(ui: &Rc<Ui>) {
             let choices = ui.conflicts.choices();
             let result = ui.backend.borrow_mut().resolve_conflicts(&choices);
             if result.is_ok() {
-                ui.set_notice("");
+                ui.clear_notice();
                 ui.load_editor();
             }
             shown(ui, result);
@@ -135,6 +136,7 @@ pub fn add(ui: &Rc<Ui>) {
         ("win.zoom-in", &["<Ctrl>plus", "<Ctrl>equal", "<Ctrl>KP_Add"]),
         ("win.zoom-out", &["<Ctrl>minus", "<Ctrl>KP_Subtract"]),
         ("win.zoom-reset", &["<Ctrl>0", "<Ctrl>KP_0"]),
+        // Closing and quitting, Ctrl+W and Ctrl+Q, are omui's (keys.rs).
     ] {
         app.set_accels_for_action(name, keys);
     }
@@ -246,8 +248,10 @@ fn prompt(
         column.append(&hint);
     }
     dialog.set_extra_child(Some(column.upcast_ref()));
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("ok", "OK");
+    dialog.add_response("cancel", "");
+    dialog.set_response_translated("cancel", "_Cancel");
+    dialog.add_response("ok", "");
+    dialog.set_response_translated("ok", "_OK");
     dialog.set_response_appearance("ok", omui::Appearance::Suggested);
     dialog.set_default_response("ok");
     dialog.set_close_response("cancel");
@@ -269,7 +273,7 @@ fn prompt(
 /// A refusal's message in the status line, or the vault shown again.
 fn shown(ui: &Ui, result: Result<(), Refusal>) {
     match result {
-        Err(refusal) => ui.set_notice(&refusal.message),
+        Err(refusal) => ui.set_notice(as_is(refusal.message)),
         Ok(()) => ui.show_vault(),
     }
 }
@@ -278,7 +282,7 @@ fn new_note(ui: &Rc<Ui>) {
     if ui.backend.borrow().sync_running() {
         return;
     }
-    prompt(ui, "New note", "Note title", "", "", |ui, title| {
+    prompt(ui, &tr("New note"), &tr("Note title"), "", "", |ui, title| {
         if !ui.flush_edits() {
             return;
         }
@@ -293,7 +297,7 @@ fn new_note(ui: &Rc<Ui>) {
 }
 
 fn new_folder(ui: &Rc<Ui>) {
-    prompt(ui, "New folder", "Folder name", "", "", |ui, name| {
+    prompt(ui, &tr("New folder"), &tr("Folder name"), "", "", |ui, name| {
         ui.backend.borrow_mut().new_folder(name);
         ui.show_vault();
     });
@@ -304,7 +308,7 @@ fn delete_note(ui: &Rc<Ui>) {
     if file.is_empty() {
         return;
     }
-    let body = format!(
+    let body = tr!(
         "Move \"{}\" to the trash? The next Push moves it to Recently Deleted in iCloud.",
         lists::note_label(&file)
     );
@@ -313,7 +317,7 @@ fn delete_note(ui: &Rc<Ui>) {
         &ui.window,
         "Delete note?",
         &body,
-        "Delete",
+        "_Delete",
         omui::Appearance::Destructive,
         move || {
             let Some(ui) = weak.upgrade() else { return };
@@ -360,7 +364,7 @@ fn commit_title(ui: &Rc<Ui>) {
         return;
     }
     if ui.backend.borrow().sync_running() {
-        ui.set_notice("Wait for the sync to finish, then rename the note.");
+        ui.set_notice(|| tr("Wait for the sync to finish, then rename the note."));
         ui.editor.title.set_text(&current);
         return;
     }
@@ -386,13 +390,17 @@ fn move_note(ui: &Rc<Ui>) {
     if targets.is_empty() {
         return;
     }
-    let dialog = omui::Dialog::new(Some("Move note"), Some(&format!("Move \"{title}\" to:")));
+    let dialog = omui::Dialog::new(Some(""), Some(""));
+    dialog.set_heading_translated("Move note");
+    dialog.bind(move |dialog| dialog.set_body(&tr!("Move \"{}\" to:", title)));
     let names: Vec<&str> = targets.iter().map(String::as_str).collect();
     let choice = gtk::DropDown::from_strings(&names);
     choice.set_width_request(300);
     dialog.set_extra_child(Some(choice.upcast_ref()));
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("ok", "Move");
+    dialog.add_response("cancel", "");
+    dialog.set_response_translated("cancel", "_Cancel");
+    dialog.add_response("ok", "");
+    dialog.set_response_translated("ok", "_Move");
     dialog.set_response_appearance("ok", omui::Appearance::Suggested);
     dialog.set_default_response("ok");
     dialog.set_close_response("cancel");
@@ -413,7 +421,7 @@ pub fn move_open_note(ui: &Rc<Ui>, folder: &str) {
         return;
     }
     if ui.backend.borrow().sync_running() {
-        ui.set_notice("Wait for the sync to finish, then move the note.");
+        ui.set_notice(|| tr("Wait for the sync to finish, then move the note."));
         return;
     }
     let result = ui.backend.borrow_mut().move_current_note(folder);
@@ -440,10 +448,10 @@ fn rename_folder(ui: &Rc<Ui>) {
     }
     prompt(
         ui,
-        "Rename folder",
-        "Folder name",
-        lists::folder_label(&current),
-        "The next Push renames the folder in iCloud too.",
+        &tr("Rename folder"),
+        &tr("Folder name"),
+        &lists::folder_label(&current),
+        &tr("The next Push renames the folder in iCloud too."),
         |ui, name| {
             if !ui.flush_edits() {
                 return;
@@ -464,8 +472,9 @@ fn delete_folder(ui: &Rc<Ui>) {
     if folder.is_empty() {
         return;
     }
-    let body = format!(
-        "Move \"{}\" and its {count} note(s) to the trash? The next Push moves the notes to Recently Deleted in iCloud and deletes the folder there.",
+    let body = omui::trn!(
+        "Move \"{}\" and its {n} notes to the trash? The next Push moves the notes to Recently Deleted in iCloud and deletes the folder there.",
+        count,
         lists::folder_label(&folder)
     );
     let weak = Rc::downgrade(ui);
@@ -473,7 +482,7 @@ fn delete_folder(ui: &Rc<Ui>) {
         &ui.window,
         "Delete folder?",
         &body,
-        "Delete",
+        "_Delete",
         omui::Appearance::Destructive,
         move || {
             let Some(ui) = weak.upgrade() else { return };
@@ -497,11 +506,12 @@ fn save(ui: &Rc<Ui>) {
         return;
     }
     let weak = Rc::downgrade(ui);
+    // The warning is the library's, in English.
     omui::confirm(
         &ui.window,
         "Save anyway?",
         &warning,
-        "Save",
+        "_Save",
         omui::Appearance::Destructive,
         move || {
             if let Some(ui) = weak.upgrade() {
@@ -594,18 +604,18 @@ pub fn row_menu(ui: &Rc<Ui>, item: &Item, list: &gtk::Widget, x: f64, y: f64) {
             if ui.backend.borrow().current_folder() != folder {
                 return;
             }
-            menu.append(Some("Rename folder…"), Some("win.rename-folder"));
-            menu.append(Some("Delete folder…"), Some("win.delete-folder"));
+            menu.append(Some(&tr("Rename folder…")), Some("win.rename-folder"));
+            menu.append(Some(&tr("Delete folder…")), Some("win.delete-folder"));
         }
         Item::Note { folder, file } => {
             if !ui.select_note(folder, file) {
                 return;
             }
             let note = gio::Menu::new();
-            note.append(Some("Rename note"), Some("win.rename-note"));
-            note.append(Some("Move to…"), Some("win.move-note"));
+            note.append(Some(&tr("Rename note")), Some("win.rename-note"));
+            note.append(Some(&tr("Move to…")), Some("win.move-note"));
             menu.append_section(None, &note);
-            menu.append(Some("Delete note…"), Some("win.delete-note"));
+            menu.append(Some(&tr("Delete note…")), Some("win.delete-note"));
         }
     }
     let popover = gtk::PopoverMenu::from_model(Some(&menu));

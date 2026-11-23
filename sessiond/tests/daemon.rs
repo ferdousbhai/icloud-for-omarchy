@@ -496,11 +496,11 @@ exec '{DAEMON}' "$@""#,
     /// The CLI run piped (the default machine mode): its stdout must be the
     /// success envelope; returns `data`.
     /// `status`'s data: its envelope is printed whether signed in (exit 0)
-    /// or not (exit 3).
+    /// or not (exit 1).
     fn cli_status(&self) -> Value {
         let out = self.cli(&["status"]);
         let data = envelope_data(&out.stdout);
-        let want = if data["signed_in"] == true { 0 } else { 3 };
+        let want = if data["signed_in"] == true { 0 } else { 1 };
         assert_eq!(out.status.code(), Some(want), "{data}");
         data
     }
@@ -642,11 +642,14 @@ fn envelope_data(stdout: &[u8]) -> Value {
     v["data"].clone()
 }
 
-/// A machine-mode failure: one error document on stdout, nothing on stderr
-/// but progress lines. Returns it.
+/// A machine-mode failure: exit 1, nothing on stdout (which only holds
+/// results), and the error document as the last line of stderr, after any
+/// progress lines. Returns it.
 fn machine_error(out: &std::process::Output) -> Value {
-    let err: Value =
-        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stdout)));
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stdout));
+    let err = icloud_session::output::error_line(&out.stderr)
+        .unwrap_or_else(|| panic!("no error document: {}", String::from_utf8_lossy(&out.stderr)));
     assert_eq!(err["ok"], false, "{err}");
     let mut keys: Vec<_> = err.as_object().unwrap().keys().cloned().collect();
     keys.sort();
@@ -1104,7 +1107,7 @@ fn apple_ending_the_session_says_why_until_a_sign_in_even_across_a_restart() {
     assert_eq!(prop::<String>(&conn, "SignOutReason"), SESSION_ENDED);
     assert_eq!(sign_in_required_message(&conn), SESSION_ENDED);
     let out = env.cli(&["validate", "--json"]);
-    assert_eq!(out.status.code(), Some(3));
+    assert_eq!(out.status.code(), Some(1));
     let err = machine_error(&out);
     assert_eq!(
         err["error"]["message"],
@@ -1289,7 +1292,7 @@ fn a_sign_in_that_cannot_be_kept_says_why() {
     // The keyring refuses the session: a directory where its file goes.
     fs::create_dir(env.secrets_path()).unwrap();
     let out = env.cli(&["sign-in", "--json"]);
-    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
     let err = machine_error(&out);
     assert_eq!(err["error"]["code"], "sign_in_not_completed", "{err}");
     let message = err["error"]["message"].as_str().unwrap();
@@ -1900,11 +1903,14 @@ fn one_executable_answers_to_both_names() {
     let v = env!("CARGO_PKG_VERSION");
     assert_eq!(version(Path::new(DAEMON)), format!("icloud-sessiond {v}\n"));
     assert_eq!(version(cli_bin()), format!("icloud-session {v}\n"));
-    // Run as the daemon it takes no commands; as the CLI it does.
-    // The daemon (not the CLI) rejects stray args with its own usage exit 64,
-    // which is internal to D-Bus activation and not the shared CLI contract.
+    // Run as the daemon it takes no commands; as the CLI it does. A stray
+    // argument is a failure like any other, exit 1, with its usage on stderr.
     let out = Command::new(DAEMON).arg("status").env_clear().output().unwrap();
-    assert_eq!(out.status.code(), Some(64), "{out:?}");
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        out.stdout.is_empty() && String::from_utf8_lossy(&out.stderr).starts_with("usage:"),
+        "{out:?}"
+    );
 }
 
 #[test]
@@ -1921,9 +1927,9 @@ fn cli_status_validate_sign_in_and_sign_out() {
         ..Default::default()
     });
 
-    // Signed out: the status is still printed, with exit 3.
+    // Signed out: the status is still printed, with exit 1.
     let out = env.cli(&["status"]);
-    assert_eq!(out.status.code(), Some(3));
+    assert_eq!(out.status.code(), Some(1));
     assert!(out.stderr.is_empty());
     let status = envelope_data(&out.stdout);
     let quiet: Value = serde_json::from_slice(&env.cli(&["status", "--quiet"]).stdout).unwrap();
@@ -1933,12 +1939,12 @@ fn cli_status_validate_sign_in_and_sign_out() {
         json!({"signed_in": false, "apple_id": null, "full_name": null, "dsid": null, "expires_at": null, "signing_in": false, "find_my_authorized": false, "find_my_password_stored": false, "sign_out_reason": null})
     );
 
-    // A machine-mode error is one JSON document on stdout, nothing on
-    // stderr, in every machine mode (piped is one).
+    // A machine-mode error is one JSON document on one line of stderr,
+    // nothing on stdout, and exit 1, in every machine mode (piped is one).
     for mode in [&[][..], &["--json"], &["--quiet"], &["--count"], &["--ids-only"]] {
         let out = env.cli(&[&["validate"], mode].concat());
-        assert_eq!(out.status.code(), Some(3), "{mode:?}");
-        assert_eq!(String::from_utf8_lossy(&out.stderr), "", "{mode:?}");
+        assert_eq!(out.status.code(), Some(1), "{mode:?}");
+        assert_eq!(String::from_utf8_lossy(&out.stderr).lines().count(), 1, "{mode:?}");
         let err = machine_error(&out);
         assert_eq!(err["error"]["code"], "sign_in_required");
         let mut keys: Vec<_> = err["error"].as_object().unwrap().keys().cloned().collect();
@@ -1953,13 +1959,13 @@ fn cli_status_validate_sign_in_and_sign_out() {
     }
     // Text mode: error:/hint: lines on stderr, nothing on stdout.
     let out = env.cli(&["validate", "--styled"]);
-    assert_eq!(out.status.code(), Some(3));
+    assert_eq!(out.status.code(), Some(1));
     assert!(out.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.starts_with("error: sign in to iCloud required"), "{stderr}");
     assert!(stderr.contains("\nhint: run `icloud-session sign-in`"), "{stderr}");
     let out = env.cli(&["status", "--styled"]);
-    assert_eq!(out.status.code(), Some(3));
+    assert_eq!(out.status.code(), Some(1));
     assert_eq!(String::from_utf8_lossy(&out.stdout), "Not signed in\n");
 
     let status = env.cli_data(&["sign-in"]);
@@ -2000,11 +2006,10 @@ fn cli_status_validate_sign_in_and_sign_out() {
     assert!(text.contains("Find My: not authorized"), "{text}");
     assert!(text.contains("Password: not stored"), "{text}");
 
-    // A window that closes without Find My's session: exit 3, the not-signed-in
-    // code every iCloud tool uses (the JSON code tells it from a sign-in), and
-    // only the error on stdout.
+    // A window that closes without Find My's session: exit 1, the JSON code
+    // telling it from a sign-in, and only the error, on stderr.
     let out = env.cli(&["authorize-find-my", "--json"]);
-    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
     let err = machine_error(&out);
     assert_eq!(err["error"]["code"], "find_my_auth_not_completed");
     assert!(
@@ -2042,14 +2047,14 @@ fn cli_status_validate_sign_in_and_sign_out() {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    assert_eq!(env.cli(&["bogus"]).status.code(), Some(2));
+    assert_eq!(env.cli(&["bogus"]).status.code(), Some(1));
     let out = env.cli(&["--json", "sign-in", "--later"]);
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(1));
     let err = machine_error(&out);
     assert_eq!(err["error"]["code"], "usage");
-    assert!(out.stderr.is_empty());
+    assert!(err["error"]["hint"].as_str().unwrap().contains("--help"), "{err}");
     // The password managers' own CLIs pipe into set-password instead.
-    assert_eq!(env.cli(&["set-password", "--from-bitwarden"]).status.code(), Some(2));
+    assert_eq!(env.cli(&["set-password", "--from-bitwarden"]).status.code(), Some(1));
     // Every command has its own --help.
     for cmd in [
         "status",
@@ -2526,14 +2531,14 @@ fn a_keyring_that_cannot_be_read_holds_back_the_session_until_it_can() {
 
     assert!(!prop::<bool>(&conn, "FindMyPasswordStored"));
 
-    // The CLI: a required service unavailable, exit 5, whether through the
+    // The CLI: a required service unavailable, exit 1 and keyring_unavailable, whether through the
     // client library (validate) or a direct daemon call (set-password).
     let out = env.cli(&["validate", "--json"]);
-    assert_eq!(out.status.code(), Some(5), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
     let err = machine_error(&out);
     assert_eq!(err["error"]["code"], "keyring_unavailable", "{err}");
     let out = env.cli_with(&["set-password", "--json"], "pw\n", &[]);
-    assert_eq!(out.status.code(), Some(5), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
     let err = machine_error(&out);
     assert_eq!(err["error"]["code"], "keyring_unavailable", "{err}");
 
@@ -2843,8 +2848,8 @@ fn cli_sign_in_ends_when_the_daemon_dies() {
         thread::sleep(Duration::from_millis(25));
     };
     let out = cli.wait_with_output().unwrap();
-    assert_eq!(status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
-    // Only the error on stdout (piped: a machine mode); it says still signed out.
+    assert_eq!(status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+    // Only the error, on stderr (piped: a machine mode); it says still signed out.
     let err = machine_error(&out);
     assert_eq!(err["error"]["code"], "sign_in_not_completed", "{err}");
     assert!(
@@ -3232,7 +3237,7 @@ fn authorize_find_my_while_signed_out_opens_no_window() {
         Err(Error::SignInRequired)
     ));
     let out = env.cli(&["authorize-find-my", "--json"]);
-    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
     let err = machine_error(&out);
     assert_eq!(err["error"]["code"], "sign_in_required", "{err}");
     assert_eq!(err["error"]["hint"], icloud_session::output::SIGN_IN_HINT, "{err}");
@@ -3286,8 +3291,10 @@ const PASSWORD: &str = "correct horse";
 /// The sign-in window in `--find --autofill` mode, faked: it counts its
 /// runs, reads the Apple ID and the password from stdin (exactly two
 /// lines) and, as Apple's page would, prints a one-factor capture whose
-/// FMIP is `auto<n>` when the password is the one in `good`, exits 3 when
-/// it is not, and exits 1 while `fail` exists (Apple unreachable). Anything
+/// FMIP is `auto<n>` when the password is the one in `good`, fails with the
+/// error `password_rejected` on stderr when it is not (exiting 1, as every
+/// failure does: the code is what tells the two apart), and exits 1 with no
+/// error object while `fail` exists (Apple unreachable). Anything
 /// out of place (other arguments, another Apple ID, the password in its
 /// argv or env) is written to `bad` and fails the run.
 struct Autofill {
@@ -3333,7 +3340,7 @@ env | grep -qF -- "$pw" && {{ echo "the password in env" >> "$d/bad"; exit 1; }}
 printf '%s' "$pw" > "$d/got"
 sleep "$(cat "$d/delay" 2>/dev/null || echo 0)" >/dev/null
 [ -e "$d/fail" ] && exit 1
-[ "$pw" = "$(cat "$d/good")" ] || exit 3
+[ "$pw" = "$(cat "$d/good")" ] || {{ echo 'icloud-session-signin: autofill: password rejected' >&2; echo '{{"ok":false,"error":{{"code":"password_rejected","message":"wrong password"}}}}' >&2; exit 1; }}
 cat <<EOF
 {capture}
 EOF"#,
@@ -3721,9 +3728,9 @@ fn a_wrong_stored_password_falls_back_to_the_manual_path_without_a_loop() {
     assert!(prop::<bool>(&conn, "FindMyPasswordStored"));
 
     // set-password with the wrong one: refused, nothing stored.
-    // Credentials rejected: exit 3, code password_rejected.
+    // Credentials rejected: exit 1, code password_rejected.
     let out = env.cli_with(&["set-password", "--json"], "also wrong\n", &[]);
-    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
     let err = machine_error(&out);
     assert_eq!(err["error"]["code"], "password_rejected", "{err}");
     assert!(err["error"]["message"].as_str().unwrap().contains("refused"), "{err}");
@@ -3827,7 +3834,7 @@ fn sign_out_keeps_the_stored_password_and_forget_password_removes_it() {
     assert_eq!(env.secrets()[0]["secret"], PASSWORD, "the user's, kept");
     // Signed out: set-password has no account to check it against.
     let out = env.cli_with(&["set-password"], PASSWORD, &[]);
-    assert_eq!(out.status.code(), Some(3));
+    assert_eq!(out.status.code(), Some(1));
 
     let printed = env.cli_data(&["forget-password"]);
     assert_eq!(env.secrets(), json!([]));
@@ -3864,7 +3871,7 @@ fn the_call_that_starts_the_daemon_already_sees_the_stored_password() {
     assert_eq!(printed["find_my_password_stored"], true, "{printed}");
 }
 
-/// The CLI's error document (stdout, stderr empty), run with `--json` against `address`.
+/// The CLI's error document (stdout empty, the error the only line of stderr), run with `--json` against `address`.
 fn cli_error_at(address: &str, args: &[&str]) -> (Option<i32>, Value) {
     let out = Command::new(cli_bin())
         .args(args)
@@ -3874,18 +3881,18 @@ fn cli_error_at(address: &str, args: &[&str]) -> (Option<i32>, Value) {
         .stdin(Stdio::null())
         .output()
         .unwrap();
-    assert_eq!(String::from_utf8_lossy(&out.stderr), "", "{args:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stderr).lines().count(), 1, "{args:?}");
     (out.status.code(), machine_error(&out))
 }
 
 #[test]
-fn an_unreachable_daemon_is_session_service_exit_5() {
+fn an_unreachable_daemon_is_session_service() {
     // No session bus at all.
     let dir = tempfile::tempdir().unwrap();
     let nobus = format!("unix:path={}", dir.path().join("no-bus").display());
     for cmd in ["status", "validate", "forget-password", "sign-out"] {
         let (code, err) = cli_error_at(&nobus, &[cmd]);
-        assert_eq!(code, Some(5), "{cmd}: {err}");
+        assert_eq!(code, Some(1), "{cmd}: {err}");
         assert_eq!(err["error"]["code"], "session_service", "{cmd}: {err}");
     }
     // A bus that cannot start the daemon.
@@ -3895,7 +3902,7 @@ fn an_unreachable_daemon_is_session_service_exit_5() {
     });
     for cmd in ["status", "forget-password"] {
         let (code, err) = cli_error_at(&env.address, &[cmd]);
-        assert_eq!(code, Some(5), "{cmd}: {err}");
+        assert_eq!(code, Some(1), "{cmd}: {err}");
         assert_eq!(err["error"]["code"], "session_service", "{cmd}: {err}");
     }
 }

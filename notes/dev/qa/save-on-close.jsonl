@@ -1,0 +1,28 @@
+# Notes on a scratch vault and the stub engine: the last window closed as its close button closes it, with edits
+# autosave has not written yet and a sync just started. The close writes the edits, and the app then ends by itself
+# once the sync it holds on for is done: nothing (a timer, the sign-in watch) keeps a windowless app alive. The
+# .after beside this checks the note on disk.
+{"do":"wait","role":"list-item","name":"Notes","visible":true}
+{"do":"wait","role":"label","name":"Ready.","visible":true}
+{"do":"key","keys":"Down"}
+{"do":"key","keys":"Right"}
+{"do":"key","keys":"Down"}
+{"do":"key","keys":"Down"}
+{"do":"key","keys":"Return"}
+{"do":"wait","role":"text-box","name":"Note","focused":true,"text":"# Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
+
+# Sync now from Sync status saves first, and starts a sync.
+{"do":"key","keys":"<Control>End"}
+{"do":"type","text":"Osaka too. "}
+{"do":"click","role":"button","name":"Sync status"}
+{"do":"wait","dialog":"Sync status"}
+{"do":"click","role":"button","name":"Sync now"}
+{"do":"wait","dialog":null}
+
+# More typed while it runs: a save that waits for the sync, which the close writes once it has stopped the run.
+{"do":"focus","role":"text-box","name":"Note"}
+{"do":"key","keys":"<Control>End"}
+{"do":"type","text":"And Nara. "}
+{"do":"wait","role":"label","name":"● unsaved","visible":true}
+{"do":"close"}
+{"do":"wait","role":"button","name":"never there"}

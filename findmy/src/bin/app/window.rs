@@ -1,6 +1,13 @@
 //! The main window: device list beside the map, a header with refresh and
 //! the device actions popover, and the sign-in (and Find My password)
 //! banner. Refreshes every [`REFRESH_SECS`] while the window is on screen.
+//!
+//! Every text of the window is in the language of the moment and follows a
+//! switch, but what is the user's own (the devices' names) and Apple's (the
+//! models', "Find My"). The refresh timer holds the window only weakly and
+//! never the application: closing the window ends the app once the work it
+//! has started ([`background`], which holds the application) is done, a
+//! Play Sound or Lost Mode on its way included.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -11,8 +18,8 @@ use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 use gtk::{gio, glib};
-use omui::background;
 use omui::icons::name;
+use omui::{background, i18n, tr};
 
 use super::devices::DeviceList;
 use super::map::DeviceMap;
@@ -27,7 +34,6 @@ const TRAIL_SECS: i64 = 24 * 3600;
 /// How old a shown trail may get before a refresh reloads it although the
 /// device has not moved, so points leave the 24 h window.
 const TRAIL_RELOAD: Duration = Duration::from_secs(10 * 60);
-const LOST_MESSAGE: &str = "This device has been lost. Please call me.";
 
 /// Which trail is on the map: whose, up to which fix, loaded when.
 struct TrailShown {
@@ -139,7 +145,7 @@ impl Window {
             });
             let (w1, w2) = (weak.clone(), weak.clone());
             let banner = SignInBanner::with_find_my(
-                "Sign in to iCloud to see your devices",
+                icloud_app_ui::sign_in_ask("Sign in to iCloud to see your devices"),
                 move || {
                     if let Some(this) = w1.upgrade() {
                         this.signed_in();
@@ -161,6 +167,15 @@ impl Window {
             glib::Propagation::Proceed
         });
         this.install_actions();
+        // What was written once from the state (the header's subtitle), in
+        // the new language; the list, the map and the banner follow by
+        // themselves.
+        let weak = Rc::downgrade(&this);
+        i18n::on_change(&this.window, move || {
+            if let Some(this) = weak.upgrade() {
+                this.show_subtitle();
+            }
+        });
         this.start_refresh_loop();
         this.refresh(true);
         this
@@ -296,17 +311,20 @@ impl Window {
                     Ok(Err(e)) if e.is_sign_in() => {
                         this.banner.show();
                         if this.devices.borrow().is_empty() {
-                            this.list
-                                .set_placeholder("Sign in required", Some("Sign in to iCloud with the button above."));
+                            this.list.set_placeholder(|| {
+                                (tr("Sign in required"), tr("Sign in to iCloud with the button above."))
+                            });
                         }
                     }
                     Ok(Err(e)) if e.is_find_my_auth() => {
                         this.banner.show_find_my();
                         if this.devices.borrow().is_empty() {
-                            this.list.set_placeholder(
-                                "Find My needs your Apple password",
-                                Some("Enter it with the button above."),
-                            );
+                            this.list.set_placeholder(|| {
+                                (
+                                    tr("Find My needs your Apple password"),
+                                    tr("Enter it with the button above."),
+                                )
+                            });
                         }
                     }
                     Ok(Err(e)) => this.show_error(&e.to_string()),
@@ -320,10 +338,13 @@ impl Window {
         );
     }
 
-    /// Toasts an error once, not on every 60 s tick while it persists.
+    /// Toasts an error once, not on every 60 s tick while it persists. The
+    /// message is the library's, in English.
     fn show_error(&self, msg: &str) {
         if self.devices.borrow().is_empty() {
-            self.list.set_placeholder("Could not load devices", Some(msg));
+            let detail = msg.to_owned();
+            self.list
+                .set_placeholder(move || (tr("Could not load devices"), detail.clone()));
         }
         if self.last_error.borrow().as_deref() != Some(msg) {
             self.toast(msg);
@@ -348,7 +369,7 @@ impl Window {
         *self.last_error.borrow_mut() = None;
         if devices.is_empty() {
             self.list
-                .set_placeholder("No devices", Some("Find My has no devices for this Apple ID."));
+                .set_placeholder(|| (tr("No devices"), tr("Find My has no devices for this Apple ID.")));
         }
         // Keep the selection even if the device left the list (it shows as
         // unavailable, and comes back if the device does); with nothing
@@ -374,15 +395,15 @@ impl Window {
                 self.load_trail_if_needed(&d);
             }
             (None, Some(_)) => {
-                let name = self.selected_name.borrow().clone();
-                self.title.set_subtitle(&format!("{name} (unavailable)"));
+                self.show_subtitle();
                 self.clear_trail();
                 if vanished {
-                    self.toast(&format!("{name} is no longer in Find My"));
+                    let name = self.selected_name.borrow().clone();
+                    self.toast(&tr!("{} is no longer in Find My", name));
                 }
             }
             (None, None) => {
-                self.title.set_subtitle("");
+                self.show_subtitle();
                 self.clear_trail();
             }
         }
@@ -392,8 +413,19 @@ impl Window {
     /// Names the selected device in the header, and remembers the name in
     /// case the device later leaves the list.
     fn show_selected(&self, d: &Device) {
-        self.title.set_subtitle(&d.name);
         self.selected_name.replace(d.name.clone());
+        self.show_subtitle();
+    }
+
+    /// The header's subtitle: the selected device's name, said to be
+    /// unavailable while it is not in the list, or nothing.
+    fn show_subtitle(&self) {
+        let subtitle = match (self.selected_device(), self.selected.borrow().is_some()) {
+            (Some(d), _) => d.name,
+            (None, true) => tr!("{} (unavailable)", self.selected_name.borrow()),
+            (None, false) => String::new(),
+        };
+        self.title.set_subtitle(&subtitle);
     }
 
     /// Selects a device (from the list, by mouse or keyboard, or a marker):
@@ -408,7 +440,7 @@ impl Window {
         self.show_selected(&d);
         match d.location {
             Some(fix) => self.map.center_on(&fix),
-            None => self.toast(&format!("No location for {}", d.name)),
+            None => self.toast(&tr!("No location for {}", d.name)),
         }
         self.load_trail_if_needed(&d);
         self.update_actions();
@@ -521,7 +553,7 @@ impl Window {
                 let Some(this) = weak.upgrade() else { return };
                 this.end_action();
                 match result {
-                    Ok(Ok(())) => this.toast(&format!("Playing a sound on {name}")),
+                    Ok(Ok(())) => this.toast(&tr!("Playing a sound on {}", name)),
                     Ok(Err(e)) => this.action_failed(e, sign_in_gen),
                     Err(e) => this.toast(&e),
                 }
@@ -538,9 +570,9 @@ impl Window {
             e.is_find_my_auth(),
             self.sign_in_is_current(sign_in_gen),
         ) {
-            (true, _, false) => self.toast("Signed in again: try once more"),
+            (true, _, false) => self.toast(&tr("Signed in again: try once more")),
             (true, _, true) => self.banner.show(),
-            (_, true, false) => self.toast("Find My was authorized again: try once more"),
+            (_, true, false) => self.toast(&tr("Find My was authorized again: try once more")),
             (_, true, true) => self.banner.show_find_my(),
             _ => self.toast(&e.to_string()),
         }
@@ -553,28 +585,36 @@ impl Window {
         if self.acting.get() {
             return;
         }
-        let dialog = omui::Dialog::new(
-            Some(&format!("Turn On Lost Mode for {}?", device.name)),
-            Some("The device locks and shows your message, with a button to call the number you give."),
-        );
+        let dialog = omui::Dialog::new(Some(""), Some(""));
+        // In the language of the moment, as long as it is open.
+        let name = device.name.clone();
+        dialog.bind(move |dialog| dialog.set_heading(&tr!("Turn On Lost Mode for {}?", name)));
+        dialog
+            .set_body_translated("The device locks and shows your message, with a button to call the number you give.");
         let fields = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::None)
             .css_classes(["boxed-list"])
             .build();
-        let (phone_row, phone) = omui::entry_row("Phone number", "");
+        let (phone_row, phone) = omui::entry_row(&tr("Phone number"), "");
         phone.set_input_purpose(gtk::InputPurpose::Phone);
-        let (message_row, message) = omui::entry_row("Message", LOST_MESSAGE);
+        // The message the locked device shows, in the user's language: it is
+        // theirs to change before it is sent.
+        let (message_row, message) = omui::entry_row(&tr("Message"), &tr("This device has been lost. Please call me."));
         fields.append(&phone_row.widget);
         fields.append(&message_row.widget);
         dialog.set_extra_child(Some(fields.upcast_ref()));
         // As wide as the message field needs for the default message, which
         // omui's 420-pixel width for a dialog with a heading would cut off.
         dialog.set_content_size(374, -1);
-        dialog.add_response("cancel", "_Cancel");
-        dialog.add_response("lost", "_Turn On");
+        dialog.add_response("cancel", "");
+        dialog.set_response_translated("cancel", "_Cancel");
+        dialog.add_response("lost", "");
+        dialog.set_response_translated("lost", "_Turn On");
         dialog.set_response_appearance("lost", omui::Appearance::Destructive);
         dialog.set_default_response("cancel");
         dialog.set_close_response("cancel");
+        // Escape, the close button or the window closing under it turn
+        // nothing on: only "lost" acts, any other answer is a dismissal.
         // Both are needed, as on the command line: a locked device with
         // nothing to say or no number to call helps nobody.
         let complete = {
@@ -621,7 +661,7 @@ impl Window {
                 this.acting.set(false);
                 match result {
                     Ok(Ok(())) => {
-                        this.toast(&format!("Lost Mode is on for {name}"));
+                        this.toast(&tr!("Lost Mode is on for {}", name));
                         this.lost_mode_sent(&id);
                         this.refresh(false);
                     }
@@ -655,18 +695,25 @@ fn build(app: &gtk::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banne
 
     let sidebar_toggle = gtk::ToggleButton::builder()
         .icon_name(name::SIDEBAR)
-        .tooltip_text("Devices")
         .css_classes(["header-action"])
         .build();
+    i18n::bind_tooltip(&sidebar_toggle, "Devices");
     header.pack_start(&sidebar_toggle);
-    let refresh = omui::icon_button(name::REFRESH, "Refresh (Ctrl+R)");
+    let refresh = omui::icon_button(name::REFRESH, "");
+    i18n::bind_tooltip(&refresh, "Refresh (Ctrl+R)");
     refresh.set_action_name(Some("win.refresh"));
     header.pack_start(&refresh);
 
     let actions = gio::Menu::new();
-    actions.append(Some("Play Sound"), Some("win.play-sound"));
-    actions.append(Some("Lost Mode…"), Some("win.lost-mode"));
-    let actions_button = omui::icon_menu_button(name::MORE, "Device Actions", &actions);
+    let actions_button = omui::icon_menu_button(name::MORE, "", &actions);
+    i18n::bind_tooltip(&actions_button, "Device Actions");
+    // A menu model is no widget to bind: its items are put in anew on each
+    // switch of language, as long as the button lives.
+    i18n::bind(&actions_button, move |_| {
+        actions.remove_all();
+        actions.append(Some(&tr("Play Sound")), Some("win.play-sound"));
+        actions.append(Some(&tr("Lost Mode…")), Some("win.lost-mode"));
+    });
     header.pack_end(&actions_button);
 
     let split = omui::Split::new(&list.widget, &map.widget, (260, 340), Some(640));
@@ -703,10 +750,11 @@ fn build(app: &gtk::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banne
     split.widget.set_vexpand(true);
     body.append(&split.widget);
 
+    // "Find My" is Apple's name for the service, not translated.
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("Find My")
-        .icon_name(super::APP_ID)
+        .icon_name(super::NAME)
         .default_width(1100)
         .default_height(720)
         .width_request(360)
@@ -714,6 +762,10 @@ fn build(app: &gtk::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banne
         .build();
     omui::claim_titlebar(&window);
     let shell = omui::Shell::new(&window, &body);
+    // Ctrl+W closes the window, Ctrl+Q every window (there is one): nothing
+    // in it is unsaved, and work on its way holds the application.
+    omui::quit_keys(&window);
+    shortcuts().install(&window, false);
 
     Window {
         window,
@@ -740,22 +792,49 @@ fn build(app: &gtk::Application, list: Rc<DeviceList>, map: Rc<DeviceMap>, banne
     }
 }
 
+/// Every key of the window, for its overlay (`?` and F1) and the README's
+/// table. A key's name is not translated.
+fn shortcuts() -> omui::ShortcutOverlay {
+    omui::ShortcutOverlay::new(|| {
+        vec![
+            omui::ShortcutSection::new(
+                &tr("Devices"),
+                &[
+                    ("Up / Down", &tr("Select the previous or next device")),
+                    ("Enter", &tr("Center the map on the selected device")),
+                    ("Ctrl+R / F5", &tr("Refresh, asking the devices for a fresh position")),
+                ],
+            ),
+            omui::ShortcutSection::new(
+                &tr("General"),
+                &[
+                    ("? / F1", &tr("Show or hide the shortcuts")),
+                    ("Ctrl+W", &tr("Close the window")),
+                    ("Ctrl+Q", &tr("Quit")),
+                ],
+            ),
+        ]
+    })
+}
+
 /// Over omui's stylesheet: the map's device badges (a round badge with the
 /// model icon, the selected one in the accent colour); a device's row icon in
 /// the accent colour unless it is offline, and its battery and Lost Mode icons
 /// in their state's colour, which omui's rows all draw dim; and the map's scale
 /// and attribution, whose own stylesheet backs them with Adwaita's
 /// @theme_bg_color, which omui's theme does not define, leaving them bare and
-/// unreadable on the tiles (the attribution is the tiles' licence term).
+/// unreadable on the tiles (the attribution is the tiles' licence term). A
+/// badge's shadow is the one colour of its own: it darkens the map's tiles,
+/// which are OpenStreetMap's colours whatever the theme.
 pub const CSS: &str = "\
 .device-marker {
   padding: 7px;
   border-radius: 999px;
-  background-color: alpha(black, 0.75);
-  color: white;
+  background-color: alpha(@om_bg, 0.85);
+  color: @om_text;
   box-shadow: 0 1px 4px alpha(black, 0.45);
 }
-.device-marker.selected { padding: 9px; background-color: @om_accent; color: @om_bg; }
+.device-marker.selected { padding: 9px; background-color: @om_accent; color: @om_accent_fg; }
 .device-marker.stale { opacity: 0.6; }
 row.om-row .row-side > image.error { color: @om_danger; }
 row.om-row .row-side > image.warning { color: @om_warning; }
@@ -767,6 +846,6 @@ map-scale label, map-license label {
   padding: 3px;
 }
 map-scale label { border: 2px solid alpha(@om_text, 0.6); border-top: none; }
-map-license label { font-size: x-small; border-radius: 3px; }
+map-license label { font-size: x-small; border-radius: var(--om-radius-small); }
 map-scale, map-license { margin: 6px; }
 ";

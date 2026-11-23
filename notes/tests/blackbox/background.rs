@@ -97,7 +97,7 @@ fn no_network_is_a_skip_in_one_line() {
                 .into()
         )
     );
-    assert_eq!(background(&w, &[("PUSH_FAIL", "network:5")]).0, 0);
+    assert_eq!(background(&w, &[("PUSH_FAIL", "network")]).0, 0);
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn a_refused_sign_in_pauses_the_sync() {
         (
             1,
             format!(
-                "{RAN}(exit 3)\npush failed: sign in to iCloud required\n{HINT}\n\
+                "{RAN}(exit 1)\npush failed: sign in to iCloud required\n{HINT}\n\
                  iCloud refused the sign-in; icloud-session was told. Sync paused until you sign in.\n"
             )
         )
@@ -121,7 +121,7 @@ fn a_refused_sign_in_pauses_the_sync() {
         (
             1,
             format!(
-                "{RAN}(exit 3)\npush failed: {rejected}\n{HINT}\n\
+                "{RAN}(exit 1)\npush failed: {rejected}\n{HINT}\n\
                  Apple refused the iCloud session icloud-session holds; sign in again ({HINT}).\n"
             )
         )
@@ -131,8 +131,8 @@ fn a_refused_sign_in_pauses_the_sync() {
     let (code, out) = background(
         &w,
         &[
-            ("PUSH_FAIL", "cloudkit_request_failed:1"),
-            ("PULL_FAIL", "session_rejected:3"),
+            ("PUSH_FAIL", "cloudkit_request_failed"),
+            ("PULL_FAIL", "session_rejected"),
         ],
     );
     assert_eq!(code, 1);

@@ -84,12 +84,13 @@ pub fn text(r: &Reminder, cache: &Cache, local: &TimeZone) -> String {
 /// Shows one notification with Omarchy's `omarchy-notification-send`,
 /// found on `PATH` (the omarchy package installs it in /usr/bin, and the
 /// systemd user manager that runs the timer has Omarchy's `PATH`);
-/// clicking it opens the app.
+/// clicking it opens the app with `icloud-reminders open`, the one command
+/// on `PATH` (the window's binary is in /usr/lib/icloud-reminders/).
 pub fn send(headline: &str, body: &str) -> Result<(), String> {
     let (headline, body) = (positional(headline), positional(body));
     let status = Command::new("omarchy-notification-send")
         .args(["--app-name", APP_NAME, "-g", GLYPH, "-u", "normal", &headline, &body])
-        .args(["--exec", "icloud-reminders-app"])
+        .args(["--exec", "icloud-reminders", "open"])
         .status()
         .map_err(|e| format!("cannot run omarchy-notification-send (is Omarchy installed?): {e}"))?;
     if status.success() {

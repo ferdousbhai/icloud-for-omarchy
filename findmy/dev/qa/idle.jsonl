@@ -1,0 +1,7 @@
+# The window closed with nothing on its way: the minute's refresh timer and the sign-in banner's watch do not keep a
+# windowless app running, so it ends at once. idle.after checks the first refresh's history was kept.
+{"do":"wait","role":"list-item","name":"Test's iPhone","visible":true,"timeout_ms":15000}
+{"do":"wait","role":"button","name":"Refresh (Ctrl+R)","sensitive":true}
+{"do":"close"}
+# Never answers: omui's QA fails it after five seconds if the app is still running then.
+{"do":"wait","role":"button","name":"never there"}

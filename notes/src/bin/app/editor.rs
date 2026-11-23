@@ -7,12 +7,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
+use omui::i18n::bind_label;
 use omui::icons::name;
+use omui::tr;
 
 use crate::highlight::Highlighter;
 
 pub struct Editor {
     pub widget: gtk::Stack,
+    /// What shows with no note open.
+    empty: omui::EmptyState,
     pub date: gtk::Label,
     /// The title of a note in a vault titled by file name: renaming it
     /// renames the file. In-body vaults title a note by its first line.
@@ -42,7 +46,7 @@ fn header_line(class: &str) -> gtk::Label {
 
 impl Editor {
     pub fn new() -> Editor {
-        let empty = omui::EmptyState::new(Some(name::DOCUMENT), "", Some("Select a note, or create a new one."));
+        let empty = omui::EmptyState::new(Some(name::DOCUMENT), "", Some(""));
         let date = gtk::Label::builder()
             .css_classes(["caption", "dim-label"])
             .margin_top(16)
@@ -55,7 +59,8 @@ impl Editor {
             .visible(false)
             .build();
         let conflict_copy = header_line("warning");
-        conflict_copy.set_label(
+        bind_label(
+            &conflict_copy,
             "This is a Syncthing conflict copy, so it is not synced. Merge what you want from it into the note and delete it.",
         );
         let read_only = header_line("warning");
@@ -69,7 +74,9 @@ impl Editor {
             .bottom_margin(32)
             .css_classes(["note-text"])
             .build();
-        view.update_property(&[gtk::accessible::Property::Label("Note")]);
+        omui::i18n::bind(&view, |view| {
+            view.update_property(&[gtk::accessible::Property::Label(&tr("Note"))]);
+        });
         let scroller = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)
@@ -91,8 +98,9 @@ impl Editor {
         widget.add_named(&page, Some("note"));
         let highlight = Rc::new(Highlighter::new(&buffer));
         follow_cursor(&view, &highlight);
-        Editor {
+        let editor = Editor {
             widget,
+            empty,
             date,
             title,
             conflict_copy,
@@ -102,7 +110,14 @@ impl Editor {
             page,
             scroller,
             saved: RefCell::default(),
-        }
+        };
+        editor.relabel();
+        editor
+    }
+
+    /// What the editor says itself, in the language of the moment.
+    pub fn relabel(&self) {
+        self.empty.set_description(&tr("Select a note, or create a new one."));
     }
 
     pub fn text(&self) -> String {
@@ -125,11 +140,13 @@ impl Editor {
     }
 
     /// Shows `body`, the note as the editor holds it. A reload of the open
-    /// note (a pull) keeps the cursor where it was.
+    /// note (a pull) keeps the cursor where it was. Loading is not an edit:
+    /// undo (Ctrl+Z) must never bring back the note shown before, or the text
+    /// of before a pull, which autosave would then write over this note.
     pub fn load(&self, body: &str) {
         if self.text() != body {
             let at = self.buffer.cursor_position();
-            self.buffer.set_text(body);
+            self.replace_irreversibly(body);
             let at = at.min(self.buffer.char_count());
             self.buffer.place_cursor(&self.buffer.iter_at_offset(at));
         }
@@ -138,9 +155,17 @@ impl Editor {
 
     /// No note: the empty page, and nothing in the editor.
     pub fn close(&self) {
-        self.buffer.set_text("");
+        self.replace_irreversibly("");
         self.set_saved("");
         self.widget.set_visible_child_name("empty");
+    }
+
+    /// Puts `text` in the buffer as something undo cannot take back, which
+    /// also forgets the edits made before it.
+    fn replace_irreversibly(&self, text: &str) {
+        self.buffer.begin_irreversible_action();
+        self.buffer.set_text(text);
+        self.buffer.end_irreversible_action();
     }
 }
 

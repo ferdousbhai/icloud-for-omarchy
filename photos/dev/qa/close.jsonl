@@ -1,0 +1,12 @@
+# Closing the window while a delete is on its way (the fake takes 1.5 s over it): the app stays, windowless, until
+# iCloud has answered and the catalog says so, then ends by itself. Nothing else it runs (the sync timer, the
+# download workers, the sign-in watch) keeps it: the wait after `close` fails if it is still there 5 s on.
+# close.after then checks the delete reached the fake and the app's own handling of the answer ran.
+{"do":"wait","role":"progress-bar","name":"Loading","visible":false,"timeout_ms":30000}
+{"do":"click","role":"button","name":"IMG_1120.JPG"}
+{"do":"wait","role":"label","name":"1 of 120","visible":true}
+{"do":"key","keys":"Delete"}
+{"do":"wait","dialog":"Delete this photo?"}
+{"do":"click","role":"button","name":"Delete","in":{"role":"dialog","name":"Delete this photo?"}}
+{"do":"close"}
+{"do":"wait","role":"button","name":"never there"}

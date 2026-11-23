@@ -5,8 +5,14 @@
 //! while, and when the last sync is `pull_every` old. iCloud does not tell a
 //! web client that something changed, so a phone's edit is fetched by the
 //! step: every minute while the window is active, every 15 minutes while it
-//! is not, and slower after each failed pull. The engine runs on a worker
-//! thread; what it did comes back to the main loop.
+//! is on screen but not active, and slower after each failed pull. A window
+//! nobody can see (hidden, minimised, on another workspace) asks iCloud
+//! nothing and runs no step on the timer: a change in the vault (a save
+//! here, a file another program wrote, which the window's file monitors
+//! see) still starts the step, which then only sends it, and the pull put
+//! off runs as the window comes back.
+//! The engine runs on a worker thread; what it did comes back to the main
+//! loop.
 
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -16,6 +22,8 @@ use icloud_notes::backend::Event;
 use icloud_notes::lock::Taken;
 use icloud_notes::sync::{Kind, Run, Started};
 use icloud_notes::{session, syncmodel};
+
+use omui::tr;
 
 use crate::dialogs;
 use crate::window::Ui;
@@ -29,9 +37,9 @@ const SOON: Duration = Duration::from_secs(12);
 const LOCK_RETRY: Duration = Duration::from_millis(500);
 /// The longest the step waits between pulls.
 const SLOWEST_SECS: u32 = 15 * 60;
-
-const PAUSED: &str = "Sync paused. Sign in to iCloud to resume.";
-const OFFLINE: &str = "Offline. Notes syncs again once iCloud can be reached.";
+/// The age no last sync reaches: the step then syncs only for a change in
+/// the vault. The engine counts it in milliseconds, in 64 bits.
+const NEVER_SECS: u32 = u32::MAX;
 
 impl Ui {
     /// The first sync, once icloud-session has said whether anyone is
@@ -53,7 +61,12 @@ impl Ui {
             let Some(ui) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
             };
-            ui.sync_if_due(ui.pull_every());
+            // Off screen the timer has nothing to do: a pull waits for the
+            // window to come back, and a change in the vault starts the step
+            // by itself (sync_soon).
+            if ui.on_screen() {
+                ui.sync_if_due(ui.pull_every());
+            }
             glib::ControlFlow::Continue
         });
         // Changes from other devices come in the moment the window comes to
@@ -64,6 +77,16 @@ impl Ui {
                 && window.is_active()
             {
                 ui.refresh_sign_in();
+                ui.sync_if_due(60);
+            }
+        });
+        // Back on screen without the keyboard (its workspace shown on another
+        // monitor): the pull put off while nobody could see the window.
+        let weak = Rc::downgrade(self);
+        self.window.connect_suspended_notify(move |window| {
+            if let Some(ui) = weak.upgrade()
+                && !window.is_suspended()
+            {
                 ui.sync_if_due(60);
             }
         });
@@ -91,7 +114,7 @@ impl Ui {
                 self.sync_if_due(60); // edits made while the window was closed go up first
             }
         } else if engine && signed_in {
-            self.set_notice(&format!("Downloading your notes as {apple_id}…"));
+            self.set_notice(move || tr!("Downloading your notes as {}…", apple_id));
             self.run(Kind::Clone);
         } else {
             dialogs::onboarding(self);
@@ -132,19 +155,20 @@ impl Ui {
         } else if !self.started.get() {
             self.first_sync();
         } else if was_expired && !self.backend.borrow().auth_expired() {
-            self.set_status("Signed in.");
+            self.set_status(|| tr("Signed in."));
             self.sync_if_due(60);
         }
     }
 
-    /// How old the last sync may be before the step pulls: a minute while
-    /// the window is active, doubling after each failed pull, and 15 minutes
-    /// while it is not.
+    /// How old the last sync may be before the step pulls.
     fn pull_every(&self) -> u32 {
-        if !self.window.is_active() {
-            return SLOWEST_SECS;
-        }
-        (60 * 2u32.pow(self.poll_failures.get())).min(SLOWEST_SECS)
+        pull_every(self.on_screen(), self.window.is_active(), self.poll_failures.get())
+    }
+
+    /// Whether anyone can see the window: shown, and not suspended by the
+    /// compositor (minimised, or on a workspace no monitor shows).
+    fn on_screen(&self) -> bool {
+        self.window.is_visible() && !self.window.is_suspended()
     }
 
     /// What every sync that starts on its own waits for: a running sync,
@@ -234,7 +258,7 @@ impl Ui {
             Started::Waiting => {
                 self.waiting_run.set(Some(kind));
                 let holder = self.backend.borrow().lock_holder();
-                self.set_status(&format!("Waiting for {holder} to finish…"));
+                self.set_busy_status(move || tr!("Waiting for {} to finish…", holder));
                 self.spinner.set_visible(true);
                 self.show_banners();
                 self.show_vault();
@@ -245,7 +269,7 @@ impl Ui {
                 self.spinner.set_visible(true);
                 self.show_banners(); // their buttons wait for the run
                 if !matches!(kind, Kind::Background { .. }) {
-                    self.set_status(&format!("{}…", label(kind)));
+                    self.set_busy_status(move || under_way(kind));
                 }
                 self.show_vault();
                 let weak = Rc::downgrade(self);
@@ -335,7 +359,7 @@ impl Ui {
         self.freshening.set(false);
         self.last_sync.set(Some(Instant::now()));
         let runs: Vec<Run> = chains.into_iter().flatten().collect();
-        let mut message = None;
+        let mut message: Option<Box<dyn Fn() -> String>> = None;
         for run in &runs {
             let code = run.error.get("code").and_then(|c| c.as_str()).unwrap_or_default();
             let error_message = run.error.get("message").and_then(|m| m.as_str()).unwrap_or_default();
@@ -353,32 +377,28 @@ impl Ui {
                     self.deletions_refused.replace(error_message.to_string());
                 }
                 "clone" => {
-                    self.set_notice("");
+                    self.clear_notice();
                     if !run.ok && !self.backend.borrow().vault().cloned() {
                         dialogs::onboarding(self);
                     }
                 }
                 _ => {}
             }
-            let name = match run.command {
-                "push" => "Push",
-                "pull" => "Pull",
-                _ => "Clone",
-            };
+            let (command, ok, exit) = (run.command, run.ok, run.exit_code);
             message = Some(match code {
-                "sign_in_required" | "session_rejected" => PAUSED.to_string(),
-                "offline" | "network" => OFFLINE.to_string(),
-                "too_many_deletions" => "Nothing pushed: most of the notes' files are gone.".to_string(),
-                _ if run.ok => format!("{name} done."),
-                "" => format!("{name} failed (exit {}). See log.", run.exit_code),
-                _ => format!("{name} failed. See log."),
+                "sign_in_required" | "session_rejected" => Box::new(|| tr("Sync paused. Sign in to iCloud to resume.")),
+                "offline" | "network" => Box::new(|| tr("Offline. Notes syncs again once iCloud can be reached.")),
+                "too_many_deletions" => Box::new(|| tr("Nothing pushed: most of the notes' files are gone.")),
+                _ if ok => Box::new(move || ended(command, Ended::Done)),
+                "" => Box::new(move || ended(command, Ended::Exited(exit))),
+                _ => Box::new(move || ended(command, Ended::Failed)),
             });
         }
         // A step that found nothing due leaves the status as it was.
         if let Some(message) = message {
-            self.set_status(&message);
-        } else if self.status.label().ends_with('…') {
-            self.set_status("Ready.");
+            self.set_status(message);
+        } else if self.status_busy() {
+            self.set_status(|| tr("Ready."));
         }
         self.show_banners();
         self.after_reload();
@@ -419,20 +439,79 @@ impl Ui {
         if merged {
             self.load_editor();
             if !kept.is_empty() {
-                self.set_notice(&kept);
+                self.set_notice(crate::window::as_is(kept));
             } else if self.backend.borrow().note_conflicts().is_empty() {
-                self.set_notice("Merged your edits with a change from another device.");
+                self.set_notice(|| tr("Merged your edits with a change from another device."));
             }
         }
     }
 }
 
-/// What the status line calls a run while it goes.
-fn label(kind: Kind) -> &'static str {
+/// How old the last sync may be before the step pulls: a minute while the
+/// window is active, doubling after each failed pull, 15 minutes while it is
+/// on screen without the keyboard, and never while it is not on screen.
+fn pull_every(on_screen: bool, active: bool, failures: u32) -> u32 {
+    if !on_screen {
+        NEVER_SECS
+    } else if !active {
+        SLOWEST_SECS
+    } else {
+        (60 * 2u32.pow(failures)).min(SLOWEST_SECS)
+    }
+}
+
+/// What the status line says while a run goes.
+fn under_way(kind: Kind) -> String {
     match kind {
-        Kind::Clone => "Clone",
-        Kind::Pull => "Pull",
-        Kind::Push { .. } => "Push",
-        Kind::Sync { .. } | Kind::Background { .. } => "Sync",
+        Kind::Clone => tr("Clone…"),
+        Kind::Pull => tr("Pull…"),
+        Kind::Push { .. } => tr("Push…"),
+        Kind::Sync { .. } | Kind::Background { .. } => tr("Sync…"),
+    }
+}
+
+/// How a run ended, as the status line tells it.
+#[derive(Clone, Copy)]
+enum Ended {
+    Done,
+    /// Failed with no error of the engine's: how it exited.
+    Exited(i32),
+    Failed,
+}
+
+/// The status line once the run `command` ended, a whole sentence for each.
+fn ended(command: &str, how: Ended) -> String {
+    match (command, how) {
+        ("push", Ended::Done) => tr("Push done."),
+        ("pull", Ended::Done) => tr("Pull done."),
+        (_, Ended::Done) => tr("Clone done."),
+        ("push", Ended::Exited(code)) => tr!("Push failed (exit {}). See log.", code),
+        ("pull", Ended::Exited(code)) => tr!("Pull failed (exit {}). See log.", code),
+        (_, Ended::Exited(code)) => tr!("Clone failed (exit {}). See log.", code),
+        ("push", Ended::Failed) => tr("Push failed. See log."),
+        ("pull", Ended::Failed) => tr("Pull failed. See log."),
+        (_, Ended::Failed) => tr("Clone failed. See log."),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_window_off_screen_never_pulls_on_a_timer() {
+        assert_eq!(pull_every(false, false, 0), NEVER_SECS);
+        // Active without being on screen does not happen; were it to, nobody is looking either.
+        assert_eq!(pull_every(false, true, 0), NEVER_SECS);
+        // The engine's arithmetic on it, in milliseconds, has room.
+        assert!(i64::from(NEVER_SECS).checked_mul(1000).is_some());
+    }
+
+    #[test]
+    fn a_window_on_screen_pulls_by_who_is_looking() {
+        assert_eq!(pull_every(true, true, 0), 60);
+        assert_eq!(pull_every(true, true, 2), 240);
+        assert_eq!(pull_every(true, true, 4), SLOWEST_SECS);
+        assert_eq!(pull_every(true, false, 0), SLOWEST_SECS);
     }
 }

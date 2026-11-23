@@ -13,6 +13,7 @@ use icloud_photos::still::{self, display_file};
 use icloud_photos::thumbs::{Job, Priority};
 
 use omui::icons::name;
+use omui::{i18n, tr};
 
 use super::decode;
 use super::window::App;
@@ -27,13 +28,17 @@ pub struct Viewer {
     spinner: gtk::Spinner,
     prev: gtk::Button,
     next: gtk::Button,
+    /// The More menu, filled again in the language of the moment.
+    menu: gio::Menu,
     ids: RefCell<Vec<String>>,
     index: Cell<usize>,
     /// Whether the picture shows the full rendition (not a thumb stand-in).
     sharp: Cell<bool>,
 }
 
-fn osd_button(icon: &str, action: &str, halign: gtk::Align, tip: &str) -> gtk::Button {
+/// A round button over the photo, at its `halign` side (the start, or the
+/// end, whichever way the language reads).
+fn osd_button(icon: &str, action: &str, halign: gtk::Align) -> gtk::Button {
     let b = gtk::Button::builder()
         .icon_name(icon)
         .action_name(action)
@@ -41,34 +46,45 @@ fn osd_button(icon: &str, action: &str, halign: gtk::Align, tip: &str) -> gtk::B
         .valign(gtk::Align::Center)
         .margin_start(12)
         .margin_end(12)
-        .tooltip_text(tip)
         .build();
     b.add_css_class("osd");
     b.add_css_class("circular");
     b
 }
 
+/// The More menu's items, in the language in use.
+fn fill_menu(menu: &gio::Menu) {
+    menu.remove_all();
+    menu.append(Some(&tr("Copy Image")), Some("win.viewer-copy"));
+    if still::has_wallpaper_command() {
+        menu.append(Some(&tr("Set as Wallpaper")), Some("win.viewer-wallpaper"));
+    }
+}
+
 impl Viewer {
     pub fn new() -> Viewer {
         let title = omui::Title::new("", "");
         let header = omui::header(Some(title.widget.upcast_ref()));
-        let back = omui::icon_button(name::BACK, "Back");
+        let back = omui::icon_button(name::BACK, "");
+        i18n::bind_tooltip(&back, "Back");
         header.pack_start(&back);
         let menu = gio::Menu::new();
-        menu.append(Some("Copy Image"), Some("win.viewer-copy"));
-        if still::has_wallpaper_command() {
-            menu.append(Some("Set as Wallpaper"), Some("win.viewer-wallpaper"));
-        }
-        header.pack_end(&omui::icon_menu_button(name::MORE, "More", &menu));
-        for (icon, action, tip) in [
-            (name::DELETE, "win.viewer-delete", "Delete (Del)"),
-            (name::DOWNLOAD, "win.viewer-download", "Download Original (Ctrl+S)"),
-            (name::EXTERNAL_LINK, "win.viewer-open", "Open in Default App (Ctrl+O)"),
-        ] {
-            let button = omui::icon_button(icon, tip);
-            button.set_action_name(Some(action));
-            header.pack_end(&button);
-        }
+        fill_menu(&menu);
+        let more = omui::icon_menu_button(name::MORE, "", &menu);
+        i18n::bind_tooltip(&more, "More");
+        header.pack_end(&more);
+        let delete = omui::icon_button(name::DELETE, "");
+        i18n::bind_tooltip(&delete, "Delete (Del)");
+        delete.set_action_name(Some("win.viewer-delete"));
+        header.pack_end(&delete);
+        let download = omui::icon_button(name::DOWNLOAD, "");
+        i18n::bind_tooltip(&download, "Download Original (Ctrl+S)");
+        download.set_action_name(Some("win.viewer-download"));
+        header.pack_end(&download);
+        let open = omui::icon_button(name::EXTERNAL_LINK, "");
+        i18n::bind_tooltip(&open, "Open in Default App (Ctrl+O)");
+        open.set_action_name(Some("win.viewer-open"));
+        header.pack_end(&open);
 
         let picture = gtk::Picture::builder()
             .content_fit(gtk::ContentFit::Contain)
@@ -81,8 +97,10 @@ impl Viewer {
         spinner.set_halign(gtk::Align::Center);
         spinner.set_valign(gtk::Align::Center);
         spinner.set_visible(false);
-        let prev = osd_button(name::BACK, "win.viewer-prev", gtk::Align::Start, "Previous (←)");
-        let next = osd_button(name::FORWARD, "win.viewer-next", gtk::Align::End, "Next (→)");
+        let prev = osd_button(name::BACK, "win.viewer-prev", gtk::Align::Start);
+        i18n::bind_tooltip(&prev, "Previous (←)");
+        let next = osd_button(name::FORWARD, "win.viewer-next", gtk::Align::End);
+        i18n::bind_tooltip(&next, "Next (→)");
         let overlay = gtk::Overlay::builder().child(&picture).build();
         overlay.add_overlay(&spinner);
         overlay.add_overlay(&prev);
@@ -108,6 +126,7 @@ impl Viewer {
             spinner,
             prev,
             next,
+            menu,
             ids: RefCell::default(),
             index: Cell::new(0),
             sharp: Cell::new(false),
@@ -153,22 +172,23 @@ impl Viewer {
         let a = app.clone();
         add("viewer-wallpaper", Box::new(move || a.viewer.set_wallpaper(&a)));
 
-        let keys = gtk::ShortcutController::new();
-        keys.set_scope(gtk::ShortcutScope::Managed);
-        for (trigger, action) in [
-            ("Left", "win.viewer-prev"),
-            ("Right", "win.viewer-next"),
-            ("Delete", "win.viewer-delete"),
-            ("<Primary>s", "win.viewer-download"),
-            ("<Primary>o", "win.viewer-open"),
-            ("<Primary>c", "win.viewer-copy"),
-        ] {
-            keys.add_shortcut(gtk::Shortcut::new(
-                gtk::ShortcutTrigger::parse_string(trigger),
-                Some(gtk::NamedAction::new(action)),
-            ));
-        }
-        self.page.add_controller(keys);
+        // While the keyboard is in the viewer, which it goes to with the page. The single keys do nothing in a
+        // text field, where they move the cursor or delete a character; omui's dialogs hold them all back.
+        let keys = omui::Keys::new(&self.page);
+        let run = |action: &'static str| {
+            let page = self.page.downgrade();
+            move || {
+                if let Some(page) = page.upgrade() {
+                    let _ = page.activate_action(action, None);
+                }
+            }
+        };
+        keys.on("Left", run("win.viewer-prev"));
+        keys.on("Right", run("win.viewer-next"));
+        keys.on("Delete", run("win.viewer-delete"));
+        keys.on_always("<Control>s", run("win.viewer-download"));
+        keys.on_always("<Control>o", run("win.viewer-open"));
+        keys.on_always("<Control>c", run("win.viewer-copy"));
         let nav = app.nav.downgrade();
         self.back.connect_clicked(move |_| {
             if let Some(nav) = nav.upgrade() {
@@ -210,8 +230,9 @@ impl Viewer {
         let Some(row) = app.cat.asset(&id).ok().flatten() else {
             return;
         };
+        // The file's name is iCloud's, and stays as it is.
         self.title.set_title(&row.filename);
-        self.title.set_subtitle(&format!("{} of {len}", index + 1));
+        self.set_position();
         self.refresh_info(app);
 
         // A blurry stand-in right away, then the full rendition.
@@ -249,30 +270,48 @@ impl Viewer {
         }
     }
 
+    /// "3 of 120", in the language in use.
+    fn set_position(&self) {
+        let len = self.ids.borrow().len() as i64;
+        self.title.set_subtitle(&omui::tr!(
+            "{} of {}",
+            i18n::format_int(self.index.get() as i64 + 1),
+            i18n::format_int(len)
+        ));
+    }
+
+    /// Writes the viewer's own words again after a switch of language: its menu, where it is in the album, and the
+    /// line under the photo.
+    pub fn relabel(&self, app: &App) {
+        fill_menu(&self.menu);
+        if self.current().is_some() {
+            self.set_position();
+            self.refresh_info(app);
+        }
+    }
+
     pub fn refresh_info(&self, app: &App) {
         let Some(id) = self.current() else { return };
         let Some(row) = app.cat.asset(&id).ok().flatten() else {
             return;
         };
         let mut parts = Vec::new();
-        if let Ok(dt) = glib::DateTime::from_unix_local(row.created)
-            && let Ok(s) = dt.format("%e %B %Y, %H:%M")
-        {
-            parts.push(s.trim().to_owned());
+        if let Ok(dt) = glib::DateTime::from_unix_local(row.created) {
+            parts.push(taken_at(&dt));
         }
         if row.w > 0 {
-            parts.push(format!("{} × {}", row.w, row.h));
+            parts.push(format!("{} × {}", i18n::format_int(row.w), i18n::format_int(row.h)));
         }
         if row.size > 0 {
-            parts.push(glib::format_size(row.size as u64).to_string());
+            parts.push(super::format_size(row.size as u64));
         }
         match (row.kind, row.is_live) {
-            (Kind::Video, _) => parts.push("Video (open to play)".into()),
-            (_, true) => parts.push("Live Photo".into()),
+            (Kind::Video, _) => parts.push(tr("Video (open to play)")),
+            (_, true) => parts.push(tr("Live Photo")),
             _ => {}
         }
         if let Some(p) = row.local_path.filter(|p| p.exists()) {
-            parts.push(format!("Saved in {}", p.parent().unwrap_or(&p).display()));
+            parts.push(omui::tr!("Saved in {}", p.parent().unwrap_or(&p).display()));
         }
         self.info.set_label(&parts.join("  ·  "));
     }
@@ -327,12 +366,12 @@ impl Viewer {
     fn current_still(&self, app: &App) -> Option<PathBuf> {
         let row = app.cat.asset(&self.current()?).ok().flatten()?;
         if row.kind == Kind::Video {
-            app.toast("Videos can't be used as an image");
+            app.toast(&tr("Videos can't be used as an image"));
             return None;
         }
         let path = display_file(&row);
         if path.is_none() {
-            app.toast("Still loading the photo");
+            app.toast(&tr("Still loading the photo"));
         }
         path
     }
@@ -346,10 +385,10 @@ impl Viewer {
             match gio::spawn_blocking(move || decode::texture(&path)).await {
                 Ok(Ok(tex)) => {
                     a.window.clipboard().set_texture(&tex);
-                    a.toast("Copied");
+                    a.toast(&tr("Copied"));
                 }
-                Ok(Err(e)) => a.toast(&format!("Copy failed: {e}")),
-                Err(_) => a.toast("Copy failed"),
+                Ok(Err(e)) => a.toast(&omui::tr!("Copy failed: {}", e)),
+                Err(_) => a.toast(&tr("Copy failed")),
             }
         });
     }
@@ -359,15 +398,14 @@ impl Viewer {
         let Some(path) = self.current_still(app) else { return };
         let dirs = app.dirs.clone();
         let a = app.clone();
-        glib::spawn_future_local(async move {
-            let result = gio::spawn_blocking(move || still::set_wallpaper(&path, &dirs))
-                .await
-                .unwrap_or_else(|_| Err("it stopped unexpectedly".into()));
-            match result {
-                Ok(_) => a.toast("Set as wallpaper"),
-                Err(e) => a.toast(&format!("Couldn't set the wallpaper: {e}")),
-            }
-        });
+        // It writes a copy of the photo and the desktop's background, so the application waits for it.
+        omui::background(
+            move || still::set_wallpaper(&path, &dirs),
+            move |result| match result.unwrap_or_else(Err) {
+                Ok(_) => a.toast(&tr("Set as wallpaper")),
+                Err(e) => a.toast(&omui::tr!("Couldn't set the wallpaper: {}", e)),
+            },
+        );
     }
 
     /// A thumbnail arrived; use it as the stand-in if nothing better is shown.
@@ -391,5 +429,24 @@ impl Viewer {
             let next = i.min(ids.len() - 1);
             self.show(app, ids, next);
         }
+    }
+}
+
+/// When a photo was taken, in the language in use: its date, spelled out in
+/// the order and form the catalog's `%e %B %Y` says (a `strftime` format a
+/// translation may change), and the time of day on the language's clock.
+fn taken_at(when: &glib::DateTime) -> String {
+    let date = i18n::format_datetime(when, &tr("%e %B %Y"));
+    omui::tr!("{0}, {1}", date.trim(), i18n::format_time_short(when))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_date_a_photo_was_taken_is_spelled_out() {
+        let when = gtk::glib::DateTime::from_utc(2026, 9, 20, 14, 5, 0.0).unwrap();
+        let text = super::taken_at(&when);
+        assert!(text.starts_with("20 September 2026, "), "{text}");
+        assert!(text.contains("05"), "{text}");
     }
 }

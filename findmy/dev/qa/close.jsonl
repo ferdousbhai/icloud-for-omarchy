@@ -1,0 +1,13 @@
+# Lost Mode turned on and the window closed before Apple has answered: the app stays, windowless, until the request
+# is answered (omui::background holds it), and then ends by itself. The fake answers this phone number only after two
+# seconds; close.after checks that it had answered before the app ended.
+{"do":"wait","role":"list-item","name":"Test's iPhone","visible":true,"timeout_ms":15000}
+{"do":"wait","role":"button","name":"Device Actions","sensitive":true}
+{"do":"action","name":"win.lost-mode"}
+{"do":"wait","dialog":"Turn On Lost Mode for Test's iPhone?"}
+{"do":"type","role":"text-box","name":"Phone number","text":"+1 555 0199"}
+{"do":"click","role":"button","name":"Turn On"}
+{"do":"wait","dialog":null}
+{"do":"close"}
+# Never answers: omui's QA fails it after five seconds if the app is still running then.
+{"do":"wait","role":"button","name":"never there"}

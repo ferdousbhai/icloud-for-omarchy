@@ -46,7 +46,7 @@ fn the_lock_file_is_named_for_the_vault_and_stays() {
     let _held = w.hold_lock(WINDOW);
     let spelled = format!("{}/vault/../vault/Notes/..", w.scratch().display());
     w.json(["--vault", &spelled, "new", "Other spelling"])
-        .fails(1, "vault_busy");
+        .fails("vault_busy");
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn a_lock_that_cannot_be_opened_is_an_error() {
         .cmd(["new", "Unlocked"])
         .env("XDG_RUNTIME_DIR", &nowhere)
         .run()
-        .fails(1, "vault_lock");
+        .fails("vault_lock");
     assert_eq!(
         (message, hint.as_str()),
         (
@@ -83,7 +83,7 @@ fn the_window_is_never_waited_for() {
     let Some(w) = World::seeded() else { return };
     let _held = w.hold_lock(WINDOW);
     let busy = w.json(["new", "While open"]);
-    let (message, hint) = busy.fails(1, "vault_busy");
+    let (message, hint) = busy.fails("vault_busy");
     assert_eq!(
         message,
         "Notes (pid 4242) is open and owns the notes vault while it is open."
@@ -93,15 +93,15 @@ fn the_window_is_never_waited_for() {
         "Make the change in Notes, or quit it and retry (or --wait SECS for it to close)."
     );
     assert!(busy.elapsed < Duration::from_millis(900), "at once: {busy:#?}");
-    w.text(["delete", "alpha", "--yes"]).fails_in_text(1, &message, &hint);
+    w.text(["delete", "alpha", "--yes"]).fails_in_text(&message, &hint);
     assert!(!w.exists("Notes/While open.md") && w.exists("Notes/Alpha.md"));
     // Unless asked to.
     let waited = w.json(["--wait", "1", "new", "While open"]);
-    waited.fails(1, "vault_busy");
+    waited.fails("vault_busy");
     assert!(waited.elapsed >= Duration::from_millis(900), "{waited:#?}");
     // A sync is refused the same way, before the engine runs.
     for command in ["sync", "pull", "push"] {
-        w.json([command]).fails(1, "vault_busy");
+        w.json([command]).fails("vault_busy");
     }
     assert_eq!(w.stub_log(), [""; 0]);
 }
@@ -142,12 +142,12 @@ fn another_holder_is_waited_for_as_long_as_asked() {
         json!({"held_by": BACKGROUND, "app_open": false})
     );
     let waited = w.json(["--wait", "1", "new", "Later"]);
-    let (message, hint) = waited.fails(1, "vault_busy");
+    let (message, hint) = waited.fails("vault_busy");
     assert_eq!(message, format!("{BACKGROUND} holds the notes vault."));
     assert_eq!(hint, "Retry later, or pass --wait SECS.");
     assert!(waited.elapsed >= Duration::from_millis(900), "{waited:#?}");
     let at_once = w.json(["--wait=0", "new", "Later"]);
-    at_once.fails(1, "vault_busy");
+    at_once.fails("vault_busy");
     assert!(at_once.elapsed < Duration::from_millis(900), "{at_once:#?}");
     assert!(!w.exists("Notes/Later.md"));
     // Let go while a command waits: it goes ahead.
@@ -171,7 +171,7 @@ fn a_holder_that_wrote_nothing_is_another_sync() {
         w.json(["status"]).ok()["lock"],
         json!({"held_by": "another sync", "app_open": false})
     );
-    let (message, _) = w.json(["--wait", "0", "new", "Later"]).fails(1, "vault_busy");
+    let (message, _) = w.json(["--wait", "0", "new", "Later"]).fails("vault_busy");
     assert_eq!(message, "another sync holds the notes vault.");
     assert!(w.text(["status"]).out.contains("\nLock:        another sync\n"));
 }
@@ -180,7 +180,7 @@ fn a_holder_that_wrote_nothing_is_another_sync() {
 fn wait_wants_whole_seconds() {
     let Some(w) = World::seeded() else { return };
     for bad in ["x", "1.5", "-1", "", "1s"] {
-        let (message, hint) = w.json(["new", "T", "--wait", bad]).fails(2, "usage");
+        let (message, hint) = w.json(["new", "T", "--wait", bad]).fails("usage");
         assert_eq!(
             (message, hint.as_str()),
             (format!("--wait wants whole seconds, not \"{bad}\""), USAGE_HINT)
@@ -208,7 +208,7 @@ fn a_command_says_who_it_is_while_it_holds_the_lock() {
             w.json(["status"]).ok()["lock"],
             json!({"held_by": said, "app_open": false})
         );
-        let (message, _) = w.json(["--wait", "0", "new", "Meanwhile"]).fails(1, "vault_busy");
+        let (message, _) = w.json(["--wait", "0", "new", "Meanwhile"]).fails("vault_busy");
         assert_eq!(message, format!("{said} holds the notes vault."));
         fs::remove_file(&gate).unwrap();
         sync.join().unwrap().ok();

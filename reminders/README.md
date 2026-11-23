@@ -48,9 +48,28 @@ once; otherwise it starts at your next login.
 - The window syncs on opening, every minute while it is on screen, and on
   **Ctrl+R**. Overdue reminders show their date in red.
 - When nobody is signed in to iCloud, a banner offers **Sign In**.
+- The window is in Omarchy's language and follows a switch at once (only
+  English is translated so far); due dates read as the language writes
+  them (**Today, 09:00**). Titles, notes and list names are yours, never
+  translated, and the due box still reads `today`, `tomorrow` and
+  `2026-10-12` as written above.
 
 Changes go straight to iCloud: without a network a change fails and says
 so, and nothing is queued.
+
+### Keyboard shortcuts
+
+| Key | Does |
+|---|---|
+| `Ctrl+N` | Go to **New reminder** |
+| `Enter` | Add the reminder typed there; on a reminder, edit it |
+| `Space` | On a reminder's box: complete or reopen it |
+| `Escape` | In a narrow window: back to the lists |
+| `Ctrl+R` / `F5` | Sync with iCloud |
+| `Alt+S` / `Alt+D` / `Escape` | In a reminder's dialog: save, delete, close without saving |
+| `Ctrl+W` | Close the window |
+| `Ctrl+Q` | Quit (every window) |
+| `?` / `F1` | Show every shortcut (`?` only outside a text field) |
 
 ### Notifications
 
@@ -194,11 +213,14 @@ Delete the directory to start over; the next sync fetches everything.
 ## Command line
 
 `icloud-reminders` given a command runs it without the window. It links
-no GTK, so the timer can run it every minute; with no command it opens
-the app, `icloud-reminders-app`. Reminders are read and changed in the
-files above, not by commands.
+no GTK, so the timer can run it every minute; `icloud-reminders open` (and
+no command) opens the app, running the window's binary
+`/usr/lib/icloud-reminders/icloud-reminders-app` (beside the command in a
+cargo build). Reminders are read and changed in the files above, not by
+commands.
 
 ```console
+$ icloud-reminders open                       # the window (the desktop entry runs this)
 $ icloud-reminders sync [--full]              # sync now and apply the files' edits
 $ icloud-reminders background                 # what the timer runs
 $ icloud-reminders leave [--yes]              # leave iCloud: the folder goes to Omacloud
@@ -214,7 +236,7 @@ Needs `rust`, `cargo` and `gtk4`. From the repository root:
 
 ```bash
 bin/build icloud-reminders
-target/release/icloud-reminders-app      # the app; icloud-reminders is the command line
+target/release/icloud-reminders open     # the app (target/release/icloud-reminders-app); without `open`, the command line
 ```
 
 ### Running without an Apple account
@@ -235,7 +257,16 @@ curl -s http://127.0.0.1:8765/fake/requests                    # what was sent
 
 ```bash
 cargo test -p icloud-reminders
+cargo build -p icloud-reminders --bins --examples --features icloud-reminders/qa && bin/qa reminders
 ```
+
+`bin/qa reminders` drives the window headless through `dev/qa/*.jsonl`:
+`reminders.jsonl` the lists, adding, editing and completing;
+`language.jsonl` the shortcut overlay and a language switch (Danish and
+Arabic made up by omui's QA `language` command, then English again); `close.jsonl`
+the window closed while a write is on its way (the fake answers a `Slow …`
+reminder late), which `close.after` checks reached the cache before the
+app ended by itself.
 
 `tests/cli.rs` runs the built command line against the fake: `sync`, the
 folder's files, and notifications (a stand-in `omarchy-notification-send`

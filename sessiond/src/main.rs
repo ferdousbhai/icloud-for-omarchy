@@ -29,7 +29,7 @@ fn main() -> ExitCode {
         }
         Some(_) => {
             eprintln!("usage: icloud-sessiond   (normally started by D-Bus activation)");
-            return ExitCode::from(64);
+            return ExitCode::FAILURE;
         }
     }
     let daemon = daemon::Daemon::new(daemon::Config::from_env());

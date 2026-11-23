@@ -88,17 +88,17 @@ fn nothing_reaches_icloud() {
         vec!["diff", "alpha", "e9"],
         vec!["restore", "alpha", "--yes"],
     ] {
-        let said = w.run(&args).fails(3, "left_icloud");
+        let said = w.run(&args).fails("left_icloud");
         assert_eq!(
             (said.0.as_str(), said.1.as_str()),
             (message.as_str(), hint.as_str()),
             "{args:?}"
         );
     }
-    w.text(["sync"]).fails_in_text(3, &message, &hint);
+    w.text(["sync"]).fails_in_text(&message, &hint);
     // A change's --push: the change is made, and its sync says why it was not.
     let pushed = w.run(["write", "alpha", "--append", "--body", "again", "--push"]);
-    assert_eq!((pushed.code, pushed.err.as_str()), (3, ""));
+    assert_eq!((pushed.code, pushed.err.as_str()), (1, ""));
     let data = pushed.data();
     assert_eq!(data["changed"], true);
     assert_eq!(
@@ -122,7 +122,7 @@ fn the_record_names_one_vault() {
     // Another vault is not the one that left.
     let other = w.scratch().join("other");
     w.run(["--vault".as_ref(), other.as_os_str(), "list".as_ref()])
-        .fails(3, "not_cloned");
+        .fails("not_cloned");
     // The same vault by another spelling of its path is.
     let record = w.scratch().join("data/icloud-notes/left-icloud.json");
     fs::write(
@@ -134,6 +134,6 @@ fn the_record_names_one_vault() {
     // A record that cannot be read, or names nothing, is no record.
     for broken in ["not json", "{}", r#"{"folder":""}"#] {
         fs::write(&record, broken).unwrap();
-        w.run(["list"]).fails(3, "not_cloned");
+        w.run(["list"]).fails("not_cloned");
     }
 }

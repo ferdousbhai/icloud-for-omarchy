@@ -1,0 +1,3 @@
+# After idle.jsonl: the app ended on its own (bin/qa runs this only then) and kept its first refresh in the history.
+set -euo pipefail
+[[ -s $QA_ROOT/data/icloud-findmy/history.db ]] || { echo "idle.after: no history.db"; ls -lR "$QA_ROOT/data"; exit 1; }

@@ -74,6 +74,13 @@ fn run(out: &Path, omacloud: &Path, args: &[&str]) -> (i32, Value) {
         .env("ICLOUD_NOTES_SYNC_DETERMINISTIC", "1")
         .output()
         .unwrap();
+    // A failure leaves stdout empty and its error object on stderr's last line.
+    if !output.status.success() {
+        assert!(output.stdout.is_empty(), "{}", String::from_utf8_lossy(&output.stdout));
+        let error = icloud_session::output::error_line(&output.stderr)
+            .unwrap_or_else(|| panic!("no error object on stderr: {}", String::from_utf8_lossy(&output.stderr)));
+        return (output.status.code().unwrap_or(-1), error);
+    }
     let stdout: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
         panic!(
             "stdout isn't JSON ({e}): {}\n{}",
@@ -107,7 +114,7 @@ fn leave_refuses_without_omacloud_and_changes_nothing() {
     ];
     for (bin, code) in cases {
         let (exit, json) = run(out, &bin, &["--json", "leave", v, "--yes"]);
-        assert_eq!((exit, json["error"]["code"].as_str()), (3, Some(code)), "{json}");
+        assert_eq!((exit, json["error"]["code"].as_str()), (1, Some(code)), "{json}");
         assert!(vault.join(".icloud-notes/state.json").is_file());
         assert!(!out.join("data/icloud-notes/left-icloud.json").exists());
     }
@@ -119,7 +126,7 @@ fn leave_refuses_without_omacloud_and_changes_nothing() {
         ),
     );
     let (exit, json) = run(out, &off, &["--json", "leave", v, "--yes"]);
-    assert_eq!((exit, json["error"]["code"].as_str()), (3, Some("omacloud_folder_off")));
+    assert_eq!((exit, json["error"]["code"].as_str()), (1, Some("omacloud_folder_off")));
     assert!(
         json["error"]["hint"]
             .as_str()
@@ -149,7 +156,7 @@ fn leave_needs_yes_where_nobody_can_be_asked() {
     let vault = vault(out);
     let bin = fake_omacloud(out, &ready_status(out));
     let (exit, json) = run(out, &bin, &["--json", "leave", vault.to_str().unwrap()]);
-    assert_eq!((exit, json["error"]["code"].as_str()), (2, Some("usage")));
+    assert_eq!((exit, json["error"]["code"].as_str()), (1, Some("usage")));
     assert!(vault.join(".icloud-notes/state.json").is_file());
 }
 
@@ -195,7 +202,7 @@ fn leave_syncs_once_more_then_hands_the_folder_over() {
         let (exit, json) = run(out, &bin, &args);
         assert_eq!(
             (exit, json["error"]["code"].as_str()),
-            (3, Some("left_icloud")),
+            (1, Some("left_icloud")),
             "{args:?}: {json}"
         );
     }

@@ -20,7 +20,9 @@ use icloud_notes::backend::{Backend, Event, Role};
 use icloud_notes::lock::Taken;
 use icloud_notes::syncmodel;
 use icloud_notes::vault::Vault;
+use omui::i18n::{bind, bind_label, bind_tooltip};
 use omui::icons::name;
+use omui::{tr, trn};
 
 use crate::actions;
 use crate::attach::Strip;
@@ -60,6 +62,7 @@ const AUTOSAVE: Duration = Duration::from_millis(1500);
 /// the status line.
 pub const CSS: &str = "
 .note-pane { background: @om_bg; border-right: 1px solid alpha(@om_border, 0.6); }
+.note-pane:dir(rtl) { border-right: none; border-left: 1px solid alpha(@om_border, 0.6); }
 .pane-title { font-size: 1.3em; font-weight: 700; margin: 12px 20px 0 20px; }
 .pane-caption { margin: 14px 18px 6px 18px; font-size: 0.8em; font-weight: 700; }
 .list-summary { margin: 0 20px 4px 20px; }
@@ -73,18 +76,19 @@ button.chevron { min-width: 12px; min-height: 12px; padding: 0; }
 button.chevron image { -gtk-icon-size: 12px; color: @om_dim_text; }
 .badges { margin-top: 2px; }
 .badge.muted { background: alpha(@om_text, 0.08); color: @om_dim_text; }
-.drag-note { background: @om_surface; border: 1px solid @om_accent; border-radius: 6px; padding: 4px 10px; }
+.drag-note { background: @om_surface; border: 1px solid @om_accent; border-radius: var(--om-radius-small); padding: 4px 10px; }
 entry.note-title { font-size: 1.6em; font-weight: 700; background: none; border-color: transparent; }
 entry.note-title:focus-within { border-color: alpha(@om_border, 0.6); }
-.conflict-card { padding: 12px; border-radius: 10px; }
+.conflict-card { padding: 12px; border-radius: var(--om-radius); }
 .warning-card { background: alpha(@om_warning, 0.12); }
 .warning-card image.warning { color: @om_warning; -gtk-icon-size: 18px; }
-button.version-card { padding: 12px; border-radius: 10px; background: @om_bg; border: 1px solid alpha(@om_border, 0.6); }
+button.version-card { padding: 12px; border-radius: var(--om-radius); background: @om_bg; border: 1px solid alpha(@om_border, 0.6); }
 button.version-card:hover { background: alpha(@om_text, 0.04); }
 button.version-card.picked { border: 2px solid @om_accent; background: alpha(@om_accent, 0.08); }
 image.unpicked { opacity: 0.3; }
-.conflict-line { padding: 2px 6px; border-radius: 3px; }
+.conflict-line { padding: 2px 6px; border-radius: var(--om-radius-tiny); }
 .changed-line { background: alpha(@om_accent, 0.14); box-shadow: inset 2px 0 @om_accent; }
+.changed-line:dir(rtl) { box-shadow: inset -2px 0 @om_accent; }
 .status-bar { border-top: 1px solid alpha(@om_border, 0.6); padding: 3px 14px; border-spacing: 8px; }
 .status-bar label { font-size: 0.85em; }
 .notice { color: @om_accent; }
@@ -102,7 +106,7 @@ pub struct Ui {
     /// The sidebar: the two lists ("panes"), or the tree ("tree").
     pub sidebar: gtk::Stack,
     pub sidebar_button: gtk::Button,
-    /// The folder list, whose width the handle on its right edge drags.
+    /// The folder list, whose width the handle on its end edge drags.
     folder_pane: gtk::Box,
     /// The sidebar's width with the two lists and with the tree (the
     /// divider's), kept for the layout not on screen and the next start.
@@ -120,8 +124,12 @@ pub struct Ui {
     pub editor: Editor,
     pub conflicts: Conflicts,
     pub strip: Strip,
-    /// Closing was stopped once for edits that cannot be saved: the next close discards them.
-    close_warned: Cell<bool>,
+    /// Where Attach asks for files: the desktop's portal.
+    pub picker: Rc<dyn omui::FilePicker>,
+    /// The question a close asks about edits that cannot be saved is on screen.
+    close_asked: Cell<bool>,
+    /// That question was answered with Discard: the close it then asks for goes through.
+    close_discards: Cell<bool>,
     /// What the search boxes hold (both layouts' share it), and what it found.
     pub query: RefCell<String>,
     pub hits: RefCell<Option<Vec<lists::Hit>>>,
@@ -135,7 +143,14 @@ pub struct Ui {
     pub zoom: Cell<f64>,
     zoom_style: gtk::CssProvider,
     pub status: gtk::Label,
+    /// What the status line and the notice say, built again in the
+    /// language of the moment after a switch.
+    status_text: RefCell<Text>,
+    /// The status line tells of a run under way ("Pull…"), which says
+    /// "Ready." once a run that changed nothing ends.
+    status_busy: Cell<bool>,
     pub notice: gtk::Label,
+    notice_text: RefCell<Text>,
     pub unsaved: gtk::Label,
     pub spinner: gtk::Spinner,
     pub banners: Banners,
@@ -171,6 +186,18 @@ pub struct Ui {
     reread: RefCell<Option<glib::SourceId>>,
 }
 
+/// A line the window shows, made again after each switch of language: the
+/// English is translated as it is called. Text from the library or the
+/// engine (a refusal, an error) is English, and is shown as it is
+/// ([`as_is`]).
+pub type Text = Rc<dyn Fn() -> String>;
+
+/// Text that is the same in every language: the library's, the engine's.
+pub fn as_is(text: impl Into<String>) -> impl Fn() -> String + 'static {
+    let text = text.into();
+    move || text.clone()
+}
+
 pub struct Window;
 
 impl Window {
@@ -180,7 +207,7 @@ impl Window {
         let window = gtk::ApplicationWindow::builder()
             .application(app)
             .title("Notes")
-            .icon_name(crate::APP_ID)
+            .icon_name(crate::NAME)
             .default_width(saved.width)
             .default_height(saved.height)
             .width_request(440)
@@ -188,14 +215,19 @@ impl Window {
 
         // ---- the toolbar
         let header = omui::header(None);
-        let sidebar_button = omui::icon_button(name::SIDEBAR, "Hide the sidebar");
-        let new_folder = omui::icon_button(name::NEW_FOLDER, "New folder");
+        // The sidebar button's tooltip says what it does now (sync_sidebar_button).
+        let sidebar_button = omui::icon_button(name::SIDEBAR, "");
+        let new_folder = omui::icon_button(name::NEW_FOLDER, "");
+        bind_tooltip(&new_folder, "New folder");
         new_folder.set_action_name(Some("win.new-folder"));
-        let new_note = omui::icon_button(name::COMPOSE, "New note (Ctrl+N)");
+        let new_note = omui::icon_button(name::COMPOSE, "");
+        bind_tooltip(&new_note, "New note (Ctrl+N)");
         new_note.set_action_name(Some("win.new-note"));
-        let delete = omui::icon_button(name::DELETE, "Delete note");
+        let delete = omui::icon_button(name::DELETE, "");
+        bind_tooltip(&delete, "Delete note");
         delete.set_action_name(Some("win.delete-note"));
-        let rename = omui::icon_button(name::EDIT, "Rename note");
+        let rename = omui::icon_button(name::EDIT, "");
+        bind_tooltip(&rename, "Rename note");
         rename.set_action_name(Some("win.rename-note"));
         let separator = || gtk::Separator::new(gtk::Orientation::Vertical);
         let sidebar_separator = separator();
@@ -210,20 +242,29 @@ impl Window {
         ] {
             header.pack_start(widget);
         }
-        let checklist = omui::icon_button(name::CHECKED, "Checklist (Ctrl+Enter)");
+        let checklist = omui::icon_button(name::CHECKED, "");
+        bind_tooltip(&checklist, "Checklist (Ctrl+Enter)");
         checklist.set_action_name(Some("win.checklist"));
-        let bold = omui::icon_button(name::BOLD, "Bold (Ctrl+B)");
+        let bold = omui::icon_button(name::BOLD, "");
+        bind_tooltip(&bold, "Bold (Ctrl+B)");
         bold.set_action_name(Some("win.bold"));
-        let italic = omui::icon_button(name::ITALIC, "Italic (Ctrl+I)");
+        let italic = omui::icon_button(name::ITALIC, "");
+        bind_tooltip(&italic, "Italic (Ctrl+I)");
         italic.set_action_name(Some("win.italic"));
-        let link = omui::icon_button(name::LINK, "Link (Ctrl+K)");
+        let link = omui::icon_button(name::LINK, "");
+        bind_tooltip(&link, "Link (Ctrl+K)");
         link.set_action_name(Some("win.link"));
-        let attach = omui::icon_button(name::ATTACH, "Attach a file (or drop or paste one)");
+        let attach = omui::icon_button(name::ATTACH, "");
+        bind_tooltip(&attach, "Attach a file (or drop or paste one)");
         attach.set_action_name(Some("win.attach"));
-        let sync_status = omui::icon_button(name::REFRESH, "Sync status");
+        let sync_status = omui::icon_button(name::REFRESH, "");
+        bind_tooltip(&sync_status, "Sync status");
         sync_status.set_action_name(Some("win.sync-status"));
-        let (menu, styles_menu) = more_menu();
-        let more = omui::icon_menu_button(name::MORE, "More", &menu);
+        let (menu, styles_menu, relabel_menu) = more_menu();
+        let more = omui::icon_menu_button(name::MORE, "", &menu);
+        bind_tooltip(&more, "More");
+        relabel_menu();
+        omui::i18n::on_change(&more, relabel_menu);
         let styles = gtk::Box::new(gtk::Orientation::Horizontal, TOOLBAR_SPACING);
         for button in [&bold, &italic, &link] {
             styles.append(button);
@@ -245,13 +286,14 @@ impl Window {
             let handlers = Rc::new(handlers(weak));
             let lists = Lists::new(handlers.clone());
             let search_box = || {
-                gtk::SearchEntry::builder()
-                    .placeholder_text("Search notes")
+                let entry = gtk::SearchEntry::builder()
                     .margin_start(12)
                     .margin_end(12)
                     .margin_top(8)
                     .margin_bottom(6)
-                    .build()
+                    .build();
+                bind(&entry, |entry| entry.set_placeholder_text(Some(&tr("Search notes"))));
+                entry
             };
             let search_boxes = [search_box(), search_box()];
 
@@ -260,6 +302,7 @@ impl Window {
             // window.json may hold lists narrower than both panes' least; the least folder pane then wins.
             let folder_most = (lists_width.min(LISTS_MOST) - NOTE_LEAST).max(FOLDER_LEAST);
             let folder_pane = pane("sidebar", saved.folder_pane.clamp(FOLDER_LEAST, folder_most));
+            // The brand, which no language translates.
             let caption = omui::label("ICLOUD", "dim-label");
             caption.add_css_class("pane-caption");
             folder_pane.append(&caption);
@@ -330,11 +373,8 @@ impl Window {
                 .css_classes(["notice"])
                 .visible(false)
                 .build();
-            let unsaved = gtk::Label::builder()
-                .label("● unsaved")
-                .css_classes(["unsaved"])
-                .visible(false)
-                .build();
+            let unsaved = gtk::Label::builder().css_classes(["unsaved"]).visible(false).build();
+            bind_label(&unsaved, "● unsaved");
             let status_bar = gtk::Box::builder().css_classes(["status-bar"]).build();
             status_bar.append(&spinner);
             status_bar.append(&status);
@@ -368,7 +408,9 @@ impl Window {
                 editor,
                 conflicts,
                 strip,
-                close_warned: Cell::new(false),
+                picker: Rc::new(omui::PortalFilePicker::new()),
+                close_asked: Cell::new(false),
+                close_discards: Cell::new(false),
                 query: RefCell::default(),
                 hits: RefCell::default(),
                 search_truncated: Cell::new(false),
@@ -379,7 +421,10 @@ impl Window {
                 zoom: Cell::new(saved.zoom),
                 zoom_style: gtk::CssProvider::new(),
                 status,
+                status_text: RefCell::new(Rc::new(String::new)),
+                status_busy: Cell::new(false),
                 notice,
+                notice_text: RefCell::new(Rc::new(String::new)),
                 unsaved,
                 spinner,
                 banners,
@@ -442,6 +487,15 @@ impl Window {
         actions::add(&ui);
         crate::attach::connect(&ui);
         ui.pane_keys();
+        crate::keys::install(&ui);
+        // What is not a fixed label follows the language as the window
+        // builds it: the lists, the note's header, the banners, the lines.
+        let weak = Rc::downgrade(&ui);
+        omui::i18n::on_change(&window, move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.relabel();
+            }
+        });
         let weak = Rc::downgrade(&ui);
         window.connect_close_request(move |_| match weak.upgrade() {
             Some(ui) if !ui.may_close() => glib::Propagation::Stop,
@@ -559,7 +613,7 @@ fn handlers(weak: &Weak<Ui>) -> Handlers {
     }
 }
 
-/// `pane` with a handle on its right edge that drags its width, from
+/// `pane` with a handle on its end edge (the right, left to right) that drags its width, from
 /// `least` to what `most` says then.
 fn resizable(pane: &gtk::Box, least: i32, most: impl Fn() -> i32 + 'static) -> gtk::Overlay {
     let overlay = gtk::Overlay::builder().child(pane).build();
@@ -579,6 +633,12 @@ fn resizable(pane: &gtk::Box, least: i32, most: impl Fn() -> i32 + 'static) -> g
     let pane_at = pane.downgrade();
     drag.connect_drag_update(move |_, dx, _| {
         if let Some(pane) = pane_at.upgrade() {
+            // The handle is on the pane's end edge: right to left, the pane grows to the left.
+            let dx = if pane.direction() == gtk::TextDirection::Rtl {
+                -dx
+            } else {
+                dx
+            };
             pane.set_width_request((from.get() + dx as i32).clamp(least, most().max(least)));
         }
     });
@@ -611,37 +671,57 @@ fn gives_way(buttons: &gtk::Box, menu: gio::Menu) -> gtk::ScrolledWindow {
         .build();
     // Its adjustment changes with the width it is given: all of the buttons, or none.
     let buttons = buttons.downgrade();
+    let section = menu.clone();
     holder.hadjustment().connect_changed(move |room| {
         if let Some(buttons) = buttons.upgrade() {
             let fits = room.upper() <= room.page_size();
             buttons.set_child_visible(fits);
-            if fits != (menu.n_items() == 0) {
-                menu.remove_all();
+            if fits != (section.n_items() == 0) {
+                section.remove_all();
                 if !fits {
-                    menu.append(Some("Bold"), Some("win.bold"));
-                    menu.append(Some("Italic"), Some("win.italic"));
-                    menu.append(Some("Link"), Some("win.link"));
+                    styles_section(&section);
                 }
             }
+        }
+    });
+    // A menu item's label is set as it is added.
+    omui::i18n::on_change(&holder, move || {
+        if menu.n_items() > 0 {
+            menu.remove_all();
+            styles_section(&menu);
         }
     });
     holder
 }
 
-/// More's menu, and its first section: empty until the toolbar has no room for Bold, Italic and Link (`gives_way`).
-fn more_menu() -> (gio::Menu, gio::Menu) {
+/// Bold, Italic and Link, as More's menu has them while the toolbar has no room.
+fn styles_section(menu: &gio::Menu) {
+    menu.append(Some(&tr("Bold")), Some("win.bold"));
+    menu.append(Some(&tr("Italic")), Some("win.italic"));
+    menu.append(Some(&tr("Link")), Some("win.link"));
+}
+
+/// More's menu, its first section, and what labels the rest in the language of the moment (a menu item's label is
+/// set as it is added). The first section is empty until the toolbar has no room for Bold, Italic and Link
+/// (`gives_way`).
+fn more_menu() -> (gio::Menu, gio::Menu, impl Fn() + 'static) {
     let menu = gio::Menu::new();
     let styles = gio::Menu::new();
     menu.append_section(None, &styles);
     let note = gio::Menu::new();
-    note.append(Some("Note history"), Some("win.history"));
-    note.append(Some("Export PDF"), Some("win.export-pdf"));
     menu.append_section(None, &note);
     let app = gio::Menu::new();
-    app.append(Some("Refresh"), Some("win.refresh"));
-    app.append(Some("Sync log"), Some("win.sync-log"));
     menu.append_section(None, &app);
-    (menu, styles)
+    let relabel = move || {
+        note.remove_all();
+        note.append(Some(&tr("Note history")), Some("win.history"));
+        note.append(Some(&tr("Export PDF")), Some("win.export-pdf"));
+        note.append(Some(&tr("Keyboard shortcuts")), Some("win.shortcuts"));
+        app.remove_all();
+        app.append(Some(&tr("Refresh")), Some("win.refresh"));
+        app.append(Some(&tr("Sync log")), Some("win.sync-log"));
+    };
+    (menu, styles, relabel)
 }
 
 impl Ui {
@@ -649,6 +729,7 @@ impl Ui {
     /// background sync runs the engine beside it, and the first status.
     fn start(self: &Rc<Self>) {
         let taken = self.backend.borrow_mut().lock_vault();
+        // The sync log is the engine's, in English like it.
         let line = match taken {
             Taken::Locked => None,
             Taken::Busy => Some(format!(
@@ -669,15 +750,15 @@ impl Ui {
         {
             let b = self.backend.borrow();
             let vault = b.vault();
-            self.set_status(if vault.left_icloud() {
-                "Omacloud syncs this folder; iCloud is no longer used here."
+            if vault.left_icloud() {
+                self.set_status(|| tr("Omacloud syncs this folder; iCloud is no longer used here."));
             } else if b.engine().is_none() {
-                icloud_notes::sync::NOT_INSTALLED
+                self.set_status(as_is(icloud_notes::sync::NOT_INSTALLED));
             } else if vault.cloned() {
-                "Ready."
+                self.set_status(|| tr("Ready."));
             } else {
-                "Not linked to iCloud yet. Press Clone."
-            });
+                self.set_status(|| tr("Not linked to iCloud yet. Press Clone."));
+            }
         }
         self.show_vault();
     }
@@ -737,10 +818,14 @@ impl Ui {
 
     fn sync_sidebar_button(&self) {
         let shown = self.sidebar_shown();
-        let tip = if shown { "Hide the sidebar" } else { "Show the sidebar" };
-        self.sidebar_button.set_tooltip_text(Some(tip));
+        let tip = if shown {
+            tr("Hide the sidebar")
+        } else {
+            tr("Show the sidebar")
+        };
+        self.sidebar_button.set_tooltip_text(Some(&tip));
         self.sidebar_button
-            .update_property(&[gtk::accessible::Property::Label(tip)]);
+            .update_property(&[gtk::accessible::Property::Label(&tip)]);
         omui::set_class(&self.sidebar_button, "active", shown);
     }
 
@@ -780,8 +865,8 @@ impl Ui {
         self.show_note_header();
         let b = self.backend.borrow();
         let title = match b.current_note() {
-            "" => "Notes".to_string(),
-            file => format!("{} - Notes", lists::note_label(file)),
+            "" => tr("Notes"),
+            file => tr!("{} - Notes", lists::note_label(file)),
         };
         self.window.set_title(Some(&title));
         drop(b);
@@ -831,7 +916,7 @@ impl Ui {
             );
             self.tree_summary.set_visible(hits.is_some());
             self.tree_summary.set_label(&match hits.as_deref() {
-                Some([]) => "No matching notes".to_string(),
+                Some([]) => tr("No matching notes"),
                 Some(found) => summary(found, self.search_truncated.get()),
                 None => String::new(),
             });
@@ -841,17 +926,17 @@ impl Ui {
             let statuses = self.statuses.borrow();
             let folder = b.current_folder().to_string();
             let pushed = |file: &str| match statuses.get(&icloud_notes_path(&folder, file)).map(String::as_str) {
-                Some("refused") => vec![("push refused", "error")],
-                Some("conflict") => vec![("remote changed", "warning")],
+                Some("refused") => vec![(tr("push refused"), "error")],
+                Some("conflict") => vec![(tr("remote changed"), "warning")],
                 _ => Vec::new(),
             };
             let hits = self.hits.borrow();
             lists::fill_notes(&self.lists.notes, &b, hits.as_deref(), &pushed);
-            self.folder_title.set_label(lists::folder_label(b.current_folder()));
+            self.folder_title.set_label(&lists::folder_label(b.current_folder()));
             let n = b.notes().len();
             self.list_summary.set_label(&match hits.as_deref() {
                 Some(found) => summary(found, self.search_truncated.get()),
-                None => format!("{n} note{}", if n == 1 { "" } else { "s" }),
+                None => trn!("{n} notes", n),
             });
         }
     }
@@ -868,7 +953,7 @@ impl Ui {
         self.editor.widget.set_visible_child_name("note");
         let details = b.note_details(&file);
         self.editor.date.set_label(&if self.freshening.get() {
-            "Getting the latest from iCloud…".to_string()
+            tr("Getting the latest from iCloud…")
         } else {
             long_date(details.modified_ms)
         });
@@ -884,8 +969,10 @@ impl Ui {
         }
         let reason = b.read_only_reason().to_string();
         self.editor.read_only.set_visible(!reason.is_empty());
-        self.editor.read_only.set_label(&format!(
-            "Read-only here: this note {reason}. Edit it in Apple Notes, and the changes still sync here."
+        // The reason is the engine's, in English ("has tables").
+        self.editor.read_only.set_label(&tr!(
+            "Read-only here: this note {}. Edit it in Apple Notes, and the changes still sync here.",
+            reason
         ));
         self.editor.title.set_editable(reason.is_empty());
         self.editor
@@ -912,16 +999,58 @@ impl Ui {
         self.unsaved.set_visible(false);
     }
 
-    /// The status line's message.
-    pub fn set_status(&self, text: &str) {
-        self.status.set_label(text);
+    /// The status line's message, which follows the language.
+    pub fn set_status(&self, text: impl Fn() -> String + 'static) {
+        self.status_busy.set(false);
+        self.status_text.replace(Rc::new(text));
+        self.show_status();
     }
 
-    /// The window's own message beside it ("" hides it).
-    pub fn set_notice(&self, text: &str) {
-        self.notice.set_label(text);
-        self.notice.set_tooltip_text(Some(text).filter(|t| !t.is_empty()));
+    /// The status line's message about a run under way.
+    pub fn set_busy_status(&self, text: impl Fn() -> String + 'static) {
+        self.set_status(text);
+        self.status_busy.set(true);
+    }
+
+    /// The status line tells of a run under way.
+    pub fn status_busy(&self) -> bool {
+        self.status_busy.get()
+    }
+
+    fn show_status(&self) {
+        let text = (self.status_text.borrow())();
+        self.status.set_label(&text);
+    }
+
+    /// The window's own message beside it, which follows the language.
+    pub fn set_notice(&self, text: impl Fn() -> String + 'static) {
+        self.notice_text.replace(Rc::new(text));
+        self.show_notice();
+    }
+
+    /// No message beside the status line.
+    pub fn clear_notice(&self) {
+        self.set_notice(String::new);
+    }
+
+    fn show_notice(&self) {
+        let text = (self.notice_text.borrow())();
+        self.notice.set_label(&text);
+        self.notice
+            .set_tooltip_text(Some(text.as_str()).filter(|t| !t.is_empty()));
         self.notice.set_visible(!text.is_empty());
+    }
+
+    /// Everything the window wrote in a language, written again in the one
+    /// switched to. Fixed labels follow by themselves (`bind_label`); this
+    /// is what is built from the vault and the runs.
+    fn relabel(self: &Rc<Self>) {
+        self.show_status();
+        self.show_notice();
+        self.sync_sidebar_button();
+        self.editor.relabel();
+        self.show_banners();
+        self.show_vault();
     }
 
     /// The search boxes' query, typed into box `from` (2: neither): both
@@ -1201,7 +1330,7 @@ impl Ui {
         if !self.flush_edits() {
             return false;
         }
-        self.set_notice("");
+        self.clear_notice();
         let before = self.backend.borrow().current_path();
         {
             let mut b = self.backend.borrow_mut();
@@ -1222,7 +1351,6 @@ impl Ui {
     // ---- saving --------------------------------------------------------------------
 
     fn text_changed(&self) {
-        self.close_warned.set(false);
         self.unsaved.set_visible(self.editor.dirty());
         if let Some(source) = self.autosave.take() {
             source.remove();
@@ -1257,13 +1385,13 @@ impl Ui {
         let saved = self.backend.borrow_mut().save_note(&text, Some(&self.editor.saved()));
         if saved {
             self.editor.set_saved(&text);
-            self.set_notice("");
+            self.clear_notice();
         } else if self.editor.dirty() {
-            self.set_notice(if self.backend.borrow().sync_running() {
-                "Saving once the sync is done. Your edits are still in the editor."
+            if self.backend.borrow().sync_running() {
+                self.set_notice(|| tr("Saving once the sync is done. Your edits are still in the editor."));
             } else {
-                "Could not save the note. Your edits are still in the editor."
-            });
+                self.set_notice(|| tr("Could not save the note. Your edits are still in the editor."));
+            }
         }
         self.unsaved.set_visible(self.editor.dirty());
         self.handle_events();
@@ -1273,10 +1401,9 @@ impl Ui {
     /// Closing saves what autosave has not written yet; a save that waits
     /// for the window's own sync is written once that sync is stopped. Edits
     /// a guardrail holds back, or that wait behind another program's sync,
-    /// stop the first close so they are not dropped unseen; closing again
-    /// discards them.
+    /// stop the close and ask first, so they are never dropped unseen.
     fn may_close(&self) -> bool {
-        if !self.editor.dirty() || self.close_warned.get() {
+        if !self.editor.dirty() || self.close_discards.get() {
             return true;
         }
         let held = !self.backend.borrow().save_warning(&self.editor.text()).is_empty();
@@ -1290,13 +1417,52 @@ impl Ui {
             self.backend.borrow_mut().write_queued_save_on_close();
             return true;
         }
-        self.close_warned.set(true);
-        self.set_notice(if !held && self.backend.borrow().sync_running() {
-            "Your edits are not saved yet: another sync has the notes. Wait for it, or close again to discard them."
-        } else {
-            "Your edits are not saved (Ctrl+S shows why). Close again to discard them."
-        });
+        self.ask_to_discard(!held && self.backend.borrow().sync_running());
         false
+    }
+
+    /// The question a close asks when the edits cannot be saved. Only its
+    /// Discard button loses them: Escape, Enter and closing the question all
+    /// keep the window open and the edits in the editor. A second close
+    /// while it is on screen (the compositor's, which no dialog holds back)
+    /// leaves the one question there.
+    fn ask_to_discard(&self, behind_a_sync: bool) {
+        if self.close_asked.replace(true) {
+            return;
+        }
+        let dialog = omui::Dialog::new(Some(""), Some(""));
+        dialog.set_heading_translated("Discard your unsaved edits?");
+        // In the language of the moment, as long as it is open.
+        dialog.bind(move |dialog| {
+            dialog.set_body(&if behind_a_sync {
+                tr(
+                    "Another sync has the notes, so your edits are not saved yet. Keep editing to wait for it, or \
+                    discard them and close.",
+                )
+            } else {
+                tr(
+                    "Your edits to this note could not be saved (Ctrl+S shows why). Keep editing to fix that, or \
+                    discard them and close.",
+                )
+            })
+        });
+        dialog.add_response("keep", "");
+        dialog.set_response_translated("keep", "_Keep Editing");
+        dialog.add_response("discard", "");
+        dialog.set_response_translated("discard", "_Discard and Close");
+        dialog.set_response_appearance("discard", omui::Appearance::Destructive);
+        dialog.set_default_response("keep");
+        dialog.set_close_response("keep");
+        let weak = self.weak();
+        dialog.connect_response(move |_, response| {
+            let Some(ui) = weak.upgrade() else { return };
+            ui.close_asked.set(false);
+            if response == "discard" {
+                ui.close_discards.set(true);
+                ui.window.close();
+            }
+        });
+        dialog.present(&self.window);
     }
 
     /// Saves before leaving the open note. Edits that fail the guardrails are
@@ -1306,7 +1472,7 @@ impl Ui {
             return true;
         }
         if !self.backend.borrow().save_warning(&self.editor.text()).is_empty() {
-            self.set_notice("Kept your edits in the editor. Resolve the warning (Ctrl+S) before moving on.");
+            self.set_notice(|| tr("Kept your edits in the editor. Resolve the warning (Ctrl+S) before moving on."));
             return false;
         }
         self.save()
@@ -1333,11 +1499,11 @@ impl Ui {
                         self.show_vault();
                     }
                 }
-                Event::EditsKeptAsNote(message) => self.set_notice(&message),
+                Event::EditsKeptAsNote(message) => self.set_notice(as_is(message)),
                 Event::QueuedSaveWritten(body) => {
                     if self.editor.text() == body {
                         self.load_editor();
-                        self.set_notice("");
+                        self.clear_notice();
                     } else {
                         // Typing went on: the edits now start from what was
                         // queued, merged with what the sync changed.
@@ -1435,21 +1601,21 @@ fn focus_row(list: &gtk::ListBox, index: i32) {
     }
 }
 
-/// The line under a search box: what it found.
+/// The line under a search box: what it found, each part a phrase of its own.
 fn summary(hits: &[lists::Hit], truncated: bool) -> String {
     let related = hits.iter().filter(|hit| hit.related).count();
     let matches = hits.len() - related;
-    let mut line = format!("{matches} result{}", if matches == 1 { "" } else { "s" });
+    let mut parts = vec![trn!("{n} results", matches)];
     if related > 0 {
-        line.push_str(&format!(" · {related} related"));
+        parts.push(trn!("{n} related", related));
     }
     if truncated {
-        line.push_str(&format!(
-            " · searched the first {} notes",
+        parts.push(trn!(
+            "searched the first {n} notes",
             icloud_notes::backend::WINDOW_SEARCH_NOTES
         ));
     }
-    line
+    parts.join(" · ")
 }
 
 fn icloud_notes_path(folder: &str, file: &str) -> String {
@@ -1466,7 +1632,14 @@ fn long_date(ms: i64) -> String {
         return String::new();
     }
     glib::DateTime::from_unix_local(ms / 1000)
-        .and_then(|date| date.format("%A, %-d %B %Y at %H:%M"))
-        .map(String::from)
+        .map(|when| long_when(&when))
         .unwrap_or_default()
+}
+
+/// A moment spelled out in the language: its day and date in the order the
+/// language writes them (the format is the translation's to change), and
+/// the time as the language's clock tells it.
+pub fn long_when(when: &glib::DateTime) -> String {
+    let date = omui::i18n::format_datetime(when, &tr("%A, %-d %B %Y"));
+    tr!("{} at {}", date, omui::i18n::format_time_short(when))
 }

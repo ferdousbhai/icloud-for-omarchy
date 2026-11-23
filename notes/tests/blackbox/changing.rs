@@ -66,7 +66,7 @@ fn new_takes_a_folder_and_cleans_the_title() {
         (&json!("Named.MD"), &json!("Named.MD"))
     );
     assert_eq!(w.read("Notes/Named.MD"), "# Named\n");
-    let (message, hint) = w.json(["new", "X", "--folder", "Nope"]).fails(4, "not_found");
+    let (message, hint) = w.json(["new", "X", "--folder", "Nope"]).fails("not_found");
     assert_eq!(message, "no folder \"Nope\"");
     assert!(hint.contains("icloud-notes new-folder"), "{hint}");
     for (title, message) in [
@@ -74,7 +74,7 @@ fn new_takes_a_folder_and_cleans_the_title() {
         ("/", "the title is empty"),
         (".hidden", "A name cannot start with a dot: those are skipped by sync."),
     ] {
-        let said = w.json(["new", title]).fails(2, "usage");
+        let said = w.json(["new", title]).fails("usage");
         assert_eq!((said.0.as_str(), said.1.as_str()), (message, USAGE_HINT), "{title:?}");
     }
     assert!(!w.exists("Notes/.hidden.md"));
@@ -83,11 +83,11 @@ fn new_takes_a_folder_and_cleans_the_title() {
 #[test]
 fn new_never_replaces_a_note() {
     let Some(w) = World::seeded() else { return };
-    let (message, hint) = w.json(["new", "Alpha", "--body", "other"]).fails(2, "exists");
+    let (message, hint) = w.json(["new", "Alpha", "--body", "other"]).fails("exists");
     assert_eq!(message, "a note named \"Alpha.md\" is already in Notes");
     assert_eq!(hint, "Edit it with `icloud-notes write`, or pick another title.");
     assert_eq!(w.read("Notes/Alpha.md"), ALPHA);
-    let (message, _) = w.json(["new", "Twin", "--folder", ""]).fails(2, "exists");
+    let (message, _) = w.json(["new", "Twin", "--folder", ""]).fails("exists");
     assert_eq!(message, "a note named \"Twin.md\" is already in the vault root");
 }
 
@@ -130,7 +130,7 @@ fn the_text_comes_from_an_option_a_file_or_stdin_once() {
         vec!["new", "Twice", "--body", "a", "--file", "/dev/null"],
         vec!["write", "alpha", "--stdin", "--file", "/dev/null"],
     ] {
-        let (message, _) = w.cmd(&args).stdin("x").run().fails(2, "usage");
+        let (message, _) = w.cmd(&args).stdin("x").run().fails("usage");
         assert_eq!(message, "give the text once: --body, --file or --stdin", "{args:?}");
     }
     assert!(!w.exists("Notes/Twice.md"));
@@ -142,7 +142,7 @@ fn the_text_comes_from_an_option_a_file_or_stdin_once() {
             "--file".as_ref(),
             missing.as_os_str(),
         ])
-        .fails(1, "error");
+        .fails("error");
     assert_eq!(
         (message, hint.as_str()),
         (
@@ -151,7 +151,7 @@ fn the_text_comes_from_an_option_a_file_or_stdin_once() {
         )
     );
     assert!(!w.exists("Notes/Unread.md"));
-    let (message, _) = w.json(["write", "alpha"]).fails(2, "usage");
+    let (message, _) = w.json(["write", "alpha"]).fails("usage");
     assert_eq!(message, "write needs the text: --body TEXT, --file PATH or --stdin");
 }
 
@@ -220,7 +220,7 @@ fn write_refuses_a_read_only_note() {
     let Some(w) = World::seeded() else { return };
     let (message, hint) = w
         .json(["write", "grid", "--body", "x", "--force", "--yes"])
-        .fails(1, "read_only");
+        .fails("read_only");
     assert_eq!(message, "Work/Grid.md is read-only here: this note is too large");
     assert_eq!(hint, "Edit it in Apple Notes; the changes still sync here.");
     assert_eq!(w.read("Work/Grid.md"), "---\napple-note-id: id-g\n---\n# Grid\nhuge\n");
@@ -241,12 +241,12 @@ fn write_never_empties_a_note_unasked() {
     ] {
         let said = w
             .json(["write", "alpha"].into_iter().chain(source.iter().copied()))
-            .fails(2, "usage");
+            .fails("usage");
         assert_eq!((said.0.as_str(), said.1.as_str()), (message, hint), "{source:?}");
     }
     // --force is for the guardrail, not for this.
-    w.json(["write", "alpha", "--body", "", "--force"]).fails(2, "usage");
-    w.text(["write", "alpha", "--body", ""]).fails_in_text(2, message, hint);
+    w.json(["write", "alpha", "--body", "", "--force"]).fails("usage");
+    w.text(["write", "alpha", "--body", ""]).fails_in_text(message, hint);
     assert_eq!(w.read("Notes/Alpha.md"), ALPHA);
     w.json(["write", "alpha", "--yes", "--body", ""]).ok();
     assert_eq!(w.read("Notes/Alpha.md"), "---\napple-note-id: id-a\n---\n");
@@ -271,7 +271,7 @@ fn write_asks_before_dropping_an_attachment() {
     let linked = w.read("Work/Pics.md");
     let (message, hint) = w
         .json(["write", "pics", "--body", "# Pics\n[two](attachments/two.pdf)\n"])
-        .fails(2, "usage");
+        .fails("usage");
     assert_eq!(
         message,
         "the text no longer links the attachment pic.png of Work/Pics.md, and the next push would remove it on all your devices"
@@ -282,7 +282,7 @@ fn write_asks_before_dropping_an_attachment() {
     );
     let (message, hint) = w
         .json(["write", "pics", "--body", "# Pics\n", "--force"])
-        .fails(2, "usage");
+        .fails("usage");
     assert_eq!(
         message,
         "the text no longer links the attachments pic.png, two.pdf of Work/Pics.md, and the next push would remove them on \
@@ -316,7 +316,7 @@ fn write_holds_back_text_the_next_push_would_refuse() {
     let Some(w) = World::seeded() else { return };
     let markers = "# Alpha\n<<<<<<< local\nx\n=======\ny\n>>>>>>> remote\n";
     let hint = "Nothing was written. Pass --force to write it anyway (as Ctrl+S does in Notes).";
-    let (message, said) = w.json(["write", "alpha", "--body", markers]).fails(1, "guardrail");
+    let (message, said) = w.json(["write", "alpha", "--body", markers]).fails("guardrail");
     assert_eq!(
         message,
         "Unresolved conflict markers present. Push will refuse this note until they are resolved."
@@ -324,7 +324,7 @@ fn write_holds_back_text_the_next_push_would_refuse() {
     assert_eq!(said, hint);
     // --yes is no --force.
     w.json(["write", "alpha", "--body", markers, "--yes"])
-        .fails(1, "guardrail");
+        .fails("guardrail");
     assert_eq!(w.read("Notes/Alpha.md"), ALPHA);
     w.json(["write", "alpha", "--force", "--body", markers]).ok();
     assert_eq!(
@@ -343,7 +343,7 @@ fn write_warns_about_a_second_note_with_the_same_id() {
     w.write("Notes/Copy.md", "---\napple-note-id: id-a\n---\n# Copy\n");
     let (message, _) = w
         .json(["write", "Notes/Copy.md", "--body", "# Copy\nedited\n"])
-        .fails(1, "guardrail");
+        .fails("guardrail");
     assert_eq!(
         message,
         "Another note in this folder (Alpha.md) carries the same apple-note-id. Pushing two files with one id is ambiguous, \
@@ -357,7 +357,7 @@ fn write_warns_about_a_second_note_with_the_same_id() {
             "--body",
             "# Copy\n<<<<<<< local\n=======\n>>>>>>> remote\n",
         ])
-        .fails(1, "guardrail");
+        .fails("guardrail");
     assert_eq!(
         message,
         "Unresolved conflict markers present. Push will refuse this note until they are resolved.\n\nAnother note in this \
@@ -411,16 +411,16 @@ fn rename_retitles_the_first_line_of_an_in_body_note() {
 #[test]
 fn rename_refuses_what_it_cannot_do_safely() {
     let Some(w) = World::seeded() else { return };
-    let (message, hint) = w.json(["rename", "grid", "Other"]).fails(1, "read_only");
+    let (message, hint) = w.json(["rename", "grid", "Other"]).fails("read_only");
     assert_eq!(
         (message.as_str(), hint.as_str()),
         ("This note is read-only here. Rename it in Apple Notes.", "")
     );
-    let (message, _) = w.json(["rename", "alpha", "  "]).fails(1, "error");
+    let (message, _) = w.json(["rename", "alpha", "  "]).fails("error");
     assert_eq!(message, "Title is empty.");
     // The title line holds the attachment's link: retitling would drop it.
     w.write("Work/Shot.md", "![pic.png](attachments/pic.png)\nbody\n");
-    let (message, _) = w.json(["rename", "Work/Shot.md", "Named"]).fails(1, "error");
+    let (message, _) = w.json(["rename", "Work/Shot.md", "Named"]).fails("error");
     assert_eq!(
         message,
         "The title line holds an attachment. Edit the note's text instead."
@@ -450,14 +450,14 @@ fn rename_renames_the_file_in_a_filename_vault() {
     assert!(!w.exists("Old.md"));
     // Its own name again is nothing to do.
     assert_eq!(w.json(["rename", "renamed", "Renamed"]).ok()["path"], "Renamed.md");
-    let (message, _) = w.json(["rename", "renamed", "Taken"]).fails(2, "exists");
+    let (message, _) = w.json(["rename", "renamed", "Taken"]).fails("exists");
     assert_eq!(message, "A note with that name already exists.");
-    let (message, hint) = w.json(["rename", "renamed", ".dot"]).fails(2, "usage");
+    let (message, hint) = w.json(["rename", "renamed", ".dot"]).fails("usage");
     assert_eq!(
         (message.as_str(), hint.as_str()),
         ("A name cannot start with a dot: those are skipped by sync.", USAGE_HINT)
     );
-    w.json(["rename", "locked", "Free"]).fails(1, "read_only");
+    w.json(["rename", "locked", "Free"]).fails("read_only");
     assert_eq!(
         names(&w.vault),
         [".icloud-notes", "Locked.md", "Renamed.md", "Taken.md"]
@@ -490,30 +490,30 @@ fn move_puts_a_note_in_another_folder() {
 #[test]
 fn move_refuses_a_taken_name_a_missing_folder_and_a_read_only_note() {
     let Some(w) = World::seeded() else { return };
-    let (message, hint) = w.json(["move", "Twin.md", "Notes"]).fails(2, "exists");
+    let (message, hint) = w.json(["move", "Twin.md", "Notes"]).fails("exists");
     assert_eq!(
         (message.as_str(), hint.as_str()),
         ("A note with that name already exists in that folder.", "")
     );
-    let (message, _) = w.json(["move", "alpha", "Nope"]).fails(4, "not_found");
+    let (message, _) = w.json(["move", "alpha", "Nope"]).fails("not_found");
     assert_eq!(message, "no folder \"Nope\"");
-    let (message, _) = w.json(["move", "grid", "Notes"]).fails(1, "read_only");
+    let (message, _) = w.json(["move", "grid", "Notes"]).fails("read_only");
     assert_eq!(message, "This note is read-only here. Move it in Apple Notes.");
-    w.json(["move", "no such note", "Notes"]).fails(4, "not_found");
+    w.json(["move", "no such note", "Notes"]).fails("not_found");
     assert!(w.exists("Twin.md") && w.exists("Work/Grid.md"));
 }
 
 #[test]
 fn delete_moves_a_note_to_the_trash_when_told_to() {
     let Some(w) = World::seeded() else { return };
-    let (message, hint) = w.json(["delete", "alpha"]).fails(2, "usage");
+    let (message, hint) = w.json(["delete", "alpha"]).fails("usage");
     assert_eq!(
         message,
         "delete asks before it acts, and cannot ask here (no terminal, or a machine output mode)"
     );
     assert_eq!(hint, "Pass --yes to go ahead.");
     // Text mode with no terminal cannot ask either.
-    w.text(["delete", "alpha"]).fails_in_text(2, &message, &hint);
+    w.text(["delete", "alpha"]).fails_in_text(&message, &hint);
     assert_eq!(w.read("Notes/Alpha.md"), ALPHA);
     let deleted = w.run(["delete", "alpha", "--yes"]);
     assert_eq!(deleted.ok(), json!({"action": "delete", "path": "Notes/Alpha.md"}));
@@ -538,7 +538,7 @@ fn delete_moves_a_note_to_the_trash_when_told_to() {
         trashed.contains(&"Twin.md".to_string()) && trashed.contains(&"Grid.md".to_string()),
         "{trashed:?}"
     );
-    w.json(["delete", "alpha", "--yes"]).fails(4, "not_found");
+    w.json(["delete", "alpha", "--yes"]).fails("not_found");
 }
 
 // ---- toggle -------------------------------------------------------------------
@@ -581,7 +581,7 @@ fn toggle_ticks_unticks_and_plants_a_checkbox() {
 fn toggle_leaves_everything_else_alone() {
     let Some(w) = World::seeded() else { return };
     for line in ["1", "4", "5", "99"] {
-        let (message, hint) = w.json(["toggle", "alpha", line]).fails(1, "not_a_list_item");
+        let (message, hint) = w.json(["toggle", "alpha", line]).fails("not_a_list_item");
         assert_eq!(
             (message, hint.as_str()),
             (format!("line {line} of Notes/Alpha.md is not a list item"), "")
@@ -589,10 +589,10 @@ fn toggle_leaves_everything_else_alone() {
     }
     for line in ["0", "-1", "two", "1.5", ""] {
         // After `--`, so that -1 is an argument and not an option.
-        let (message, _) = w.json(["toggle", "--", "alpha", line]).fails(2, "usage");
+        let (message, _) = w.json(["toggle", "--", "alpha", line]).fails("usage");
         assert_eq!(message, format!("LINE is a line number, 1 or more, not \"{line}\""));
     }
-    let (message, _) = w.json(["toggle", "grid", "1"]).fails(1, "read_only");
+    let (message, _) = w.json(["toggle", "grid", "1"]).fails("read_only");
     assert_eq!(message, "This note is read-only here: it is too large");
     assert_eq!(w.read("Notes/Alpha.md"), ALPHA);
 }
@@ -718,32 +718,30 @@ fn attach_refuses_and_changes_nothing() {
         path.display().to_string()
     };
     let photo = source("photo.png", b"png");
-    let (message, hint) = w.json(["attach", "grid", &photo]).fails(1, "read_only");
+    let (message, hint) = w.json(["attach", "grid", &photo]).fails("read_only");
     assert_eq!(message, "Work/Grid.md is read-only here: this note is too large");
     assert_eq!(hint, "Add the attachment in Apple Notes; it still syncs here.");
     let (message, hint) = w
         .json(["attach", "alpha", &format!("{scratch}/nope.png")])
-        .fails(4, "not_found");
+        .fails("not_found");
     assert_eq!(
         (message, hint.as_str()),
         (format!("no file \"{scratch}/nope.png\""), "")
     );
-    w.json(["attach", "no such note", &photo]).fails(4, "not_found");
-    let (message, _) = w
-        .json(["attach", "alpha", &format!("{scratch}/home")])
-        .fails(1, "error");
+    w.json(["attach", "no such note", &photo]).fails("not_found");
+    let (message, _) = w.json(["attach", "alpha", &format!("{scratch}/home")]).fails("error");
     assert_eq!(message, format!("cannot read {scratch}/home: not a regular file"));
     let locked = source("locked.txt", b"secret");
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
-    let (message, _) = w.json(["attach", "alpha", &locked]).fails(1, "error");
+    let (message, _) = w.json(["attach", "alpha", &locked]).fails("error");
     assert_eq!(message, format!("cannot read {locked}: Permission denied"));
     let empty = source("empty.txt", b"");
-    let (message, _) = w.json(["attach", "alpha", &empty]).fails(1, "error");
+    let (message, _) = w.json(["attach", "alpha", &empty]).fails("error");
     assert_eq!(message, format!("{empty} is empty: there is nothing to attach"));
     // A name the engine would not take: control characters, or over 190 bytes.
     let long = format!("{}.txt", "n".repeat(187));
     for name in ["tab\tname.txt", long.as_str()] {
-        let (message, hint) = w.json(["attach", "alpha", &source(name, b"x")]).fails(2, "usage");
+        let (message, hint) = w.json(["attach", "alpha", &source(name, b"x")]).fails("usage");
         assert_eq!(
             message,
             format!(
@@ -769,7 +767,7 @@ fn attach_refuses_more_than_the_engine_uploads() {
     fs::File::create(&big).unwrap().set_len(100 * 1024 * 1024 + 1).unwrap();
     let (message, hint) = w
         .json(["attach".as_ref(), "alpha".as_ref(), big.as_os_str()])
-        .fails(1, "error");
+        .fails("error");
     assert_eq!(
         message,
         format!(
@@ -791,24 +789,24 @@ fn detach_takes_the_link_out_and_leaves_the_file() {
     );
     let before = w.read("Work/Pics.md");
     // Never unasked.
-    let (message, hint) = w.json(["detach", "pics", "pic.png"]).fails(2, "usage");
+    let (message, hint) = w.json(["detach", "pics", "pic.png"]).fails("usage");
     assert_eq!(
         message,
         "detach asks before it acts, and cannot ask here (no terminal, or a machine output mode)"
     );
     assert_eq!(hint, "Pass --yes to go ahead.");
-    let (message, hint) = w.json(["detach", "pics", "nope.png", "--yes"]).fails(4, "not_found");
+    let (message, hint) = w.json(["detach", "pics", "nope.png", "--yes"]).fails("not_found");
     assert_eq!(message, "Work/Pics.md has no attachment named \"nope.png\"");
     assert_eq!(hint, "Its attachments: pic.png, two.pdf.");
-    let (_, hint) = w.json(["detach", "alpha", "x.png", "--yes"]).fails(4, "not_found");
+    let (_, hint) = w.json(["detach", "alpha", "x.png", "--yes"]).fails("not_found");
     assert_eq!(hint, "The note has no attachments.");
-    let (message, hint) = w.json(["detach", "grid", "x.png", "--yes"]).fails(1, "read_only");
+    let (message, hint) = w.json(["detach", "grid", "x.png", "--yes"]).fails("read_only");
     assert_eq!(message, "Work/Grid.md is read-only here: this note is too large");
     assert_eq!(
         hint,
         "Remove the attachment in Apple Notes; the change still syncs here."
     );
-    w.json(["detach", "no such note", "x", "--yes"]).fails(4, "not_found");
+    w.json(["detach", "no such note", "x", "--yes"]).fails("not_found");
     assert_eq!(w.read("Work/Pics.md"), before);
     // A link alone on its line goes with the line; one in a sentence leaves the sentence.
     let detached = w.run(["detach", "pics", "pic.png", "--yes"]);
@@ -863,7 +861,7 @@ fn a_note_that_cannot_be_written_is_never_replaced() {
             }
             let mut command = vec![args[0], "Notes/Alpha.md"];
             command.extend(&args[1..]);
-            let (message, _) = w.json(&command).fails(1, "error");
+            let (message, _) = w.json(&command).fails("error");
             assert_eq!(message, refusal, "{mode:o} {command:?}");
             set(0o644);
             assert_eq!(w.read("Notes/Alpha.md"), ALPHA, "{mode:o} {command:?}");
@@ -907,7 +905,7 @@ fn export_pdf_writes_a_pdf_beside_the_note_once() {
     assert_eq!(exported.summary(), pdf.display().to_string());
     assert!(fs::read(&pdf).unwrap().starts_with(b"%PDF-"));
     // Never over a file that is there.
-    let (message, hint) = w.json(["export-pdf", "alpha"]).fails(2, "exists");
+    let (message, hint) = w.json(["export-pdf", "alpha"]).fails("exists");
     assert_eq!(
         (message.as_str(), hint.as_str()),
         ("Already exists (not overwritten): Alpha.pdf", "")
@@ -937,14 +935,14 @@ fn new_folder_makes_a_directory() {
     assert!(w.path("Work/Archive").is_dir());
     assert_eq!(w.json(["new-folder", "Top/level"]).ok()["folder"], "Toplevel");
     assert_eq!(w.json(["new-folder", "Rooted", "--in", "/"]).ok()["folder"], "Rooted");
-    let (message, hint) = w.json(["new-folder", "Work"]).fails(2, "exists");
+    let (message, hint) = w.json(["new-folder", "Work"]).fails("exists");
     assert_eq!(
         (message.as_str(), hint.as_str()),
         ("folder \"Work\" already exists", "")
     );
-    let (message, _) = w.json(["new-folder", "Archive", "--in", "Work"]).fails(2, "exists");
+    let (message, _) = w.json(["new-folder", "Archive", "--in", "Work"]).fails("exists");
     assert_eq!(message, "folder \"Work/Archive\" already exists");
-    w.json(["new-folder", "X", "--in", "Nope"]).fails(4, "not_found");
+    w.json(["new-folder", "X", "--in", "Nope"]).fails("not_found");
     for (name, message) in [
         ("  ", "the folder name is empty"),
         (".Old", "A name cannot start with a dot: those are skipped by sync."),
@@ -957,7 +955,7 @@ fn new_folder_makes_a_directory() {
             "That folder name holds note attachments: it is skipped by sync.",
         ),
     ] {
-        let said = w.json(["new-folder", name]).fails(2, "usage");
+        let said = w.json(["new-folder", name]).fails("usage");
         assert_eq!((said.0.as_str(), said.1.as_str()), (message, USAGE_HINT), "{name:?}");
     }
     assert!(!w.exists(".Old") && !w.exists("Attachments") && !w.exists("attachments"));
@@ -981,39 +979,37 @@ fn rename_folder_renames_it_where_it_is() {
         w.json(["rename-folder", "Work/Kept", "Kept"]).ok()["folder"],
         "Work/Kept"
     );
-    let (message, hint) = w.json(["rename-folder", "Notes", "Work"]).fails(2, "exists");
+    let (message, hint) = w.json(["rename-folder", "Notes", "Work"]).fails("exists");
     assert_eq!(
         (message.as_str(), hint.as_str()),
         ("A folder with that name already exists.", "")
     );
-    for (name, code, exit, message) in [
+    for (name, code, message) in [
         (
             ".Old",
             "usage",
-            2,
             "A name cannot start with a dot: those are skipped by sync.",
         ),
         (
             "Attachments",
             "usage",
-            2,
             "That folder name holds note attachments: it is skipped by sync.",
         ),
-        (" ", "error", 1, "Name is empty."),
+        (" ", "error", "Name is empty."),
     ] {
-        let said = w.json(["rename-folder", "Notes", name]).fails(exit, code);
+        let said = w.json(["rename-folder", "Notes", name]).fails(code);
         assert_eq!(said.0, message, "{name:?}");
     }
-    let (message, _) = w.json(["rename-folder", "", "Everything"]).fails(1, "error");
+    let (message, _) = w.json(["rename-folder", "", "Everything"]).fails("error");
     assert_eq!(message, "All Notes cannot be renamed.");
-    w.json(["rename-folder", "Nope", "X"]).fails(4, "not_found");
+    w.json(["rename-folder", "Nope", "X"]).fails("not_found");
     assert!(w.exists("Notes/Alpha.md"));
 }
 
 #[test]
 fn delete_folder_moves_it_to_the_trash_when_told_to() {
     let Some(w) = World::seeded() else { return };
-    let (message, hint) = w.json(["delete-folder", "Work"]).fails(2, "usage");
+    let (message, hint) = w.json(["delete-folder", "Work"]).fails("usage");
     assert_eq!(
         message,
         "delete-folder asks before it acts, and cannot ask here (no terminal, or a machine output mode)"
@@ -1021,14 +1017,14 @@ fn delete_folder_moves_it_to_the_trash_when_told_to() {
     assert_eq!(hint, "Pass --yes to go ahead.");
     // The root is refused before anything is asked.
     for args in [vec!["delete-folder", ""], vec!["delete-folder", "/", "--yes"]] {
-        let (message, hint) = w.json(&args).fails(1, "error");
+        let (message, hint) = w.json(&args).fails("error");
         assert_eq!(
             (message.as_str(), hint.as_str()),
             ("All Notes cannot be deleted.", ""),
             "{args:?}"
         );
     }
-    w.json(["delete-folder", "Nope", "--yes"]).fails(4, "not_found");
+    w.json(["delete-folder", "Nope", "--yes"]).fails("not_found");
     assert!(w.exists("Work/Beta.md"));
     let deleted = w.run(["delete-folder", "work", "--yes"]);
     assert_eq!(deleted.ok(), json!({"action": "delete-folder", "folder": "Work"}));

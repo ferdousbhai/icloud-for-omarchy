@@ -1,5 +1,6 @@
 //! Attachments: the strip of what the open note links to, and files made
-//! attachments of it from the file chooser, a drop or a paste. Each file is
+//! attachments of it from the file chooser (the desktop's portal, behind
+//! `omui::FilePicker`), a drop or a paste. Each file is
 //! copied into the folder's attachments/ and linked on a line of its own;
 //! the next sync uploads it. A link deleted from the text removes its
 //! attachment (Save anyway? asks first).
@@ -9,8 +10,9 @@ use std::rc::Rc;
 
 use gtk::{gdk, gio, glib, prelude::*};
 use omui::icons::name;
+use omui::tr;
 
-use crate::window::Ui;
+use crate::window::{Ui, as_is};
 
 /// How large a picture's thumbnail is in the strip.
 const THUMB: (i32, i32) = (46, 36);
@@ -41,7 +43,8 @@ impl Strip {
             .child(&items)
             .build();
         widget.append(&scroller);
-        let hint = omui::label("Delete a link to remove its attachment", "caption");
+        let hint = omui::label("", "caption");
+        omui::i18n::bind_label(&hint, "Delete a link to remove its attachment");
         hint.add_css_class("dim-label");
         hint.set_wrap(false);
         widget.append(&hint);
@@ -118,7 +121,8 @@ impl Ui {
             buffer.insert(&mut iter, &format!("{before}{}{after}", links.join("\n")));
             buffer.place_cursor(&iter);
         }
-        self.set_notice(&errors.join(" "));
+        // The library's refusals, in English.
+        self.set_notice(as_is(errors.join(" ")));
         self.editor.view.grab_focus();
     }
 }
@@ -130,22 +134,24 @@ pub fn connect(ui: &Rc<Ui>) {
     let weak = Rc::downgrade(ui);
     action.connect_activate(move |_, _| {
         let Some(ui) = weak.upgrade() else { return };
-        let dialog = gtk::FileDialog::builder()
-            .title("Attach files")
-            .modal(true)
-            .initial_folder(&gio::File::for_path(glib::home_dir()))
-            .build();
-        let weak = Rc::downgrade(&ui);
-        dialog.open_multiple(Some(&ui.window), gio::Cancellable::NONE, move |chosen| {
-            let (Some(ui), Ok(files)) = (weak.upgrade(), chosen) else {
-                return;
-            };
-            let paths = (0..files.n_items())
-                .filter_map(|i| files.item(i).and_downcast::<gio::File>())
-                .filter_map(|file| file.path())
-                .collect();
-            ui.attach_files(paths, None);
-        });
+        let (chosen, failed) = (Rc::downgrade(&ui), Rc::downgrade(&ui));
+        ask_for_files(
+            ui.picker.as_ref(),
+            move |paths| {
+                if let Some(ui) = chosen.upgrade() {
+                    ui.attach_files(paths, None);
+                }
+            },
+            move |why| {
+                if let Some(detail) = why.detail() {
+                    eprintln!("icloud-notes: the file chooser: {why} ({detail})");
+                }
+                if let Some(ui) = failed.upgrade() {
+                    // Written again in the new language after a switch.
+                    ui.set_notice(move || why.to_string());
+                }
+            },
+        );
     });
     ui.window.add_action(&action);
 
@@ -213,4 +219,95 @@ pub fn connect(ui: &Rc<Ui>) {
         glib::Propagation::Stop
     });
     ui.editor.view.add_controller(keys);
+}
+
+/// Asks `picker` for the files to attach, from the home folder: `chosen`
+/// gets them, `failed` why no dialog could be shown (its text is for the
+/// window, in the language of the moment each time it is written; its
+/// detail for the log). Closing the dialog does neither.
+pub fn ask_for_files(
+    picker: &dyn omui::FilePicker,
+    chosen: impl FnOnce(Vec<PathBuf>) + 'static,
+    failed: impl FnOnce(omui::PickError) + 'static,
+) {
+    let options = omui::PickOptions {
+        multiple: true,
+        folder: Some(glib::home_dir()),
+        accept_label: Some(tr("_Attach")),
+        ..omui::PickOptions::new(&tr("Attach files"))
+    };
+    picker.open(
+        options,
+        Box::new(move |picked| match picked {
+            Ok(paths) => chosen(paths),
+            Err(omui::PickError::Cancelled) => {}
+            Err(why) => failed(why),
+        }),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use super::*;
+
+    /// What a request answered: the files, or the failure.
+    #[derive(Debug, Default, PartialEq)]
+    struct Heard {
+        chosen: Option<Vec<PathBuf>>,
+        failed: Option<String>,
+    }
+
+    fn ask(picker: &omui::FakeFilePicker) -> Heard {
+        let heard = Rc::new(RefCell::new(Heard::default()));
+        let (chosen, failed) = (heard.clone(), heard.clone());
+        ask_for_files(
+            picker,
+            move |paths| chosen.borrow_mut().chosen = Some(paths),
+            move |why| failed.borrow_mut().failed = Some(why.to_string()),
+        );
+        Rc::try_unwrap(heard).unwrap().into_inner()
+    }
+
+    #[test]
+    fn the_files_picked_are_attached() {
+        let picker = omui::FakeFilePicker::new();
+        let files = vec![PathBuf::from("/tmp/a.png"), PathBuf::from("/tmp/b.pdf")];
+        picker.answer(Ok(files.clone()));
+        assert_eq!(ask(&picker).chosen, Some(files));
+        let asked = picker.asked();
+        assert_eq!(asked.len(), 1);
+        let (saving, options) = &asked[0];
+        assert!(!saving, "it opens files");
+        assert!(options.multiple, "several at once");
+        assert_eq!(options.title, "Attach files");
+        assert_eq!(options.folder, Some(glib::home_dir()));
+    }
+
+    #[test]
+    fn a_dialog_closed_attaches_nothing_and_says_nothing() {
+        let picker = omui::FakeFilePicker::new();
+        picker.answer(Err(omui::PickError::Cancelled));
+        assert_eq!(ask(&picker), Heard::default());
+    }
+
+    /// The window is told omui's words for the failure, not what GIO said
+    /// of it, which is for the log.
+    #[test]
+    fn a_picker_that_fails_says_why() {
+        let _language = omui::i18n::lock_language();
+        let picker = omui::FakeFilePicker::new();
+        picker.answer(Err(omui::PickError::Unavailable(omui::PickDetail::new(
+            "Cannot autolaunch D-Bus without X11 $DISPLAY",
+        ))));
+        assert_eq!(
+            ask(&picker),
+            Heard {
+                chosen: None,
+                failed: Some("No file chooser is available on this desktop.".into())
+            }
+        );
+    }
 }

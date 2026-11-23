@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use icloud_session::cli::{EXIT_ERROR, EXIT_SIGN_IN};
+use icloud_session::cli::EXIT_ERROR;
 use icloud_session::output::CliError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -85,11 +85,11 @@ pub fn record_left(app: &str, folder: &Path) -> io::Result<Left> {
 }
 
 /// What every command that would reach iCloud answers once the app left:
-/// `left_icloud`, exit 3 (not set up for iCloud here).
+/// `left_icloud` (not set up for iCloud here).
 pub fn left_error(what: &str, left: &Left) -> CliError {
     CliError::new(
         "left_icloud",
-        EXIT_SIGN_IN,
+        EXIT_ERROR,
         format!(
             "{what} left iCloud on this computer; Omacloud syncs {} now",
             left.folder.display()
@@ -128,7 +128,7 @@ pub fn confirm(mode: icloud_session::output::Mode, yes: bool, what: &str, questi
     if !icloud_session::output::interactive(mode) {
         return Err(CliError::new(
             "usage",
-            icloud_session::cli::EXIT_USAGE,
+            EXIT_ERROR,
             format!("leaving iCloud for {what} is for good on this computer, and nobody can be asked here"),
         )
         .hint("pass --yes only when the person asked to leave iCloud for this"));
@@ -144,7 +144,11 @@ pub fn confirm(mode: icloud_session::output::Mode, yes: bool, what: &str, questi
     }
 }
 
-/// Runs `omacloud <args> --json`, giving the envelope's `data`.
+/// Runs `omacloud <args> --json`, giving the envelope's `data`. A failure's
+/// error object is looked for on stderr, its last line (where Omarchy's
+/// command lines put it), and then on stdout (where an older omacloud put
+/// it); its `code` names the failure, as `omacloud_<code>`, whatever the
+/// exit code said.
 fn omacloud(args: &[&str]) -> Result<Value, CliError> {
     let out = Command::new(omacloud_bin()).args(args).arg("--json").output();
     let out = match out {
@@ -152,7 +156,7 @@ fn omacloud(args: &[&str]) -> Result<Value, CliError> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             return Err(CliError::new(
                 "omacloud_missing",
-                EXIT_SIGN_IN,
+                EXIT_ERROR,
                 "leaving iCloud hands the folder to Omacloud, which isn't installed",
             )
             .hint(format!(
@@ -167,28 +171,26 @@ fn omacloud(args: &[&str]) -> Result<Value, CliError> {
             ));
         }
     };
-    let v: Value = serde_json::from_slice(&out.stdout).map_err(|_| {
-        CliError::new(
-            "omacloud",
-            EXIT_ERROR,
-            format!(
-                "omacloud {} gave no answer: {}",
-                args.join(" "),
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
-        )
-    })?;
+    let v: Value = icloud_session::output::error_line(&out.stderr)
+        .filter(|_| !out.status.success())
+        .map_or_else(|| serde_json::from_slice(&out.stdout), Ok)
+        .map_err(|_| {
+            CliError::new(
+                "omacloud",
+                EXIT_ERROR,
+                format!(
+                    "omacloud {} gave no answer: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ),
+            )
+        })?;
     if v["ok"].as_bool() == Some(true) {
         return Ok(v["data"].clone());
     }
     let code = v["error"]["code"].as_str().unwrap_or("error");
     let message = v["error"]["message"].as_str().unwrap_or("omacloud failed");
-    let exit = out
-        .status
-        .code()
-        .and_then(|c| u8::try_from(c).ok())
-        .unwrap_or(EXIT_ERROR);
-    let mut e = CliError::new(&format!("omacloud_{code}"), exit, format!("omacloud: {message}"));
+    let mut e = CliError::new(&format!("omacloud_{code}"), EXIT_ERROR, format!("omacloud: {message}"));
     if let Some(h) = v["error"]["hint"].as_str() {
         e = e.hint(h);
     }
@@ -214,7 +216,7 @@ pub fn omacloud_ready(folder: &Path) -> Result<(), CliError> {
     let Ok(rel) = folder.strip_prefix(&home) else {
         return Err(CliError::new(
             "omacloud_folder_off",
-            EXIT_SIGN_IN,
+            EXIT_ERROR,
             format!("Omacloud syncs {}, not {}", home.display(), folder.display()),
         ));
     };
@@ -232,7 +234,7 @@ pub fn omacloud_ready(folder: &Path) -> Result<(), CliError> {
                 .map_or_else(String::new, |c| c.as_os_str().to_string_lossy().into_owned());
             Err(CliError::new(
                 "omacloud_folder_off",
-                EXIT_SIGN_IN,
+                EXIT_ERROR,
                 format!("Omacloud doesn't sync ~/{top} on this computer"),
             )
             .hint(format!(
@@ -245,7 +247,7 @@ pub fn omacloud_ready(folder: &Path) -> Result<(), CliError> {
 fn not_set_up() -> CliError {
     CliError::new(
         "omacloud_not_set_up",
-        EXIT_SIGN_IN,
+        EXIT_ERROR,
         "leaving iCloud hands the folder to Omacloud, which isn't set up on this computer",
     )
     .hint("run `omacloud init` (or open the Omacloud app), then leave again")

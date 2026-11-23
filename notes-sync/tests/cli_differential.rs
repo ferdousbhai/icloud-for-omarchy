@@ -193,9 +193,12 @@ struct Run {
     /// Holds `vault/`, `requests.json` and `stdout.json`; removed on drop.
     tmp: tempfile::TempDir,
     exit: i32,
-    /// stdout (`--quiet`: the result's data or the error object), the run's
-    /// temp dir replaced by `@OUT@`.
+    /// stdout (`--quiet`: the result's data; empty when the run failed), the
+    /// run's temp dir replaced by `@OUT@`.
     stdout: String,
+    /// The error object a failed run wrote as the last line of stderr (one
+    /// line, then a newline), normalized as stdout is; empty when it worked.
+    error: String,
     stderr: String,
     started_ms: i64,
 }
@@ -273,10 +276,14 @@ fn run_binary(scenario: &Scenario) -> Run {
     let stdout =
         normalize_lock_hash(&String::from_utf8_lossy(&output.stdout).replace(&*out.to_string_lossy(), "@OUT@"));
     std::fs::write(out.join("stdout.json"), &stdout).unwrap();
+    let error = icloud_session::output::error_line(&output.stderr)
+        .map(|line| normalize_lock_hash(&format!("{line}\n").replace(&*out.to_string_lossy(), "@OUT@")))
+        .unwrap_or_default();
     Run {
         tmp,
         exit: output.status.code().unwrap_or(-1),
         stdout,
+        error,
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         started_ms,
     }
@@ -322,6 +329,9 @@ fn record(run: &Run, name: &str) {
     std::fs::create_dir_all(&dest).unwrap();
     std::fs::write(dest.join("exit"), format!("{}\n", run.exit)).unwrap();
     std::fs::write(dest.join("stdout.json"), &run.stdout).unwrap();
+    if !run.error.is_empty() {
+        std::fs::write(dest.join("error.json"), &run.error).unwrap();
+    }
     // No log means no requests were sent; recorded as an empty one, so a
     // later run that starts sending requests is caught.
     match std::fs::read(run.log_path()) {
@@ -370,6 +380,15 @@ fn compare(scenario: &Scenario, run: &Run, name: &str) -> Vec<String> {
             failures.push(format!(
                 "stdout differs:\n--- expected\n{want}\n--- got\n{}\nstderr:\n{stderr}",
                 run.stdout
+            ));
+        }
+        // A failure's error object moved from stdout to stderr: it is held
+        // to its recording all the same.
+        let want = std::fs::read_to_string(expected.join("error.json")).unwrap_or_default();
+        if want != run.error {
+            failures.push(format!(
+                "the error on stderr differs:\n--- expected\n{want}\n--- got\n{}\nstderr:\n{stderr}",
+                run.error
             ));
         }
     }
@@ -910,7 +929,7 @@ fn read_only_commands_do_not_migrate_and_locked_ones_go_all_the_way() {
     assert!(!expected("tiny-status-v2/vault").join(STATE_DIR).exists());
     assert_eq!(std::fs::read_to_string(expected("tiny-status-v2/exit")).unwrap(), "1\n");
     assert_eq!(
-        read_json(&expected("tiny-status-v2/stdout.json"))["error"]["code"],
+        read_json(&expected("tiny-status-v2/error.json"))["error"]["code"],
         "vault_needs_update"
     );
 
@@ -923,24 +942,29 @@ fn read_only_commands_do_not_migrate_and_locked_ones_go_all_the_way() {
     );
 }
 
-/// A failing scenario's `--quiet` stdout is the contract error object (and
-/// nothing else): `{"ok":false,"error":{"code","message","hint"?}}`, with
-/// the code its exit code belongs to.
+/// A failing scenario's `--quiet` stdout is empty, its stderr ends with the
+/// contract error object, `{"ok":false,"error":{"code","message","hint"?}}`,
+/// whose code is what tells the failure apart, and it exits 1.
 #[test]
 fn failing_scenarios_record_the_error_object() {
-    for (name, code, exit) in [
-        // An HTTP 410 for an attachment: iCloud refused it, exit 1 (a 5xx is 5).
-        ("asset-clone-download-failed", "cloudkit_request_failed", "1"),
-        ("tiny-clone-wrong-account", "requested_account_mismatch", "3"),
-        ("tiny-newer-layout", "vault_from_newer_tool", "1"),
-        ("tiny-status-v2", "vault_needs_update", "1"),
+    for (name, code) in [
+        // An HTTP 410 for an attachment: iCloud refused it.
+        ("asset-clone-download-failed", "cloudkit_request_failed"),
+        ("tiny-clone-wrong-account", "requested_account_mismatch"),
+        ("tiny-newer-layout", "vault_from_newer_tool"),
+        ("tiny-status-v2", "vault_needs_update"),
     ] {
-        let stdout = read_json(&expected(name).join("stdout.json"));
-        assert_eq!(stdout["ok"], false, "{name}");
-        assert_eq!(stdout["error"]["code"], code, "{name}");
+        assert_eq!(
+            std::fs::read_to_string(expected(name).join("stdout.json")).unwrap(),
+            "",
+            "{name}"
+        );
+        let error = read_json(&expected(name).join("error.json"));
+        assert_eq!(error["ok"], false, "{name}");
+        assert_eq!(error["error"]["code"], code, "{name}");
         assert_eq!(
             std::fs::read_to_string(expected(name).join("exit")).unwrap().trim(),
-            exit,
+            "1",
             "{name}"
         );
     }

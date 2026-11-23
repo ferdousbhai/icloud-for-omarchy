@@ -17,7 +17,7 @@
 {"do":"key","keys":"Tab"}
 {"do":"type","text":"someday"}
 {"do":"key","keys":"Return"}
-{"do":"wait","toasts":["wants a due date like 2026-10-10, \"2026-10-10 17:30\", today, \"tomorrow 9:00\", 17:30 or +2h, not \"someday\""]}
+{"do":"wait","toasts":["Cannot read \"someday\" as a due date: write one like 2026-10-10, \"2026-10-10 17:30\", today, \"tomorrow 9:00\", 17:30 or +2h"]}
 {"do":"shot","path":"toast.png"}
 
 # Return on the first reminder: its dialog, the keyboard in its title, closed unsaved with Escape.

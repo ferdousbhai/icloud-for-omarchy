@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use icloud_app::leave;
-use icloud_session::cli::{EXIT_ERROR, EXIT_NOT_FOUND};
-use icloud_session::output::{CliError, Mode, Response};
+use icloud_session::cli::EXIT_ERROR;
+use icloud_session::output::{self, CliError, Mode, Response};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -176,7 +176,7 @@ pub fn run(mode: Mode, apps: Vec<App>, yes: bool) -> Result<Response, CliError> 
             let list: Vec<String> = skipped.iter().map(|s| format!("{}: {}", s.app, s.why)).collect();
             return Err(CliError::new(
                 "not_found",
-                EXIT_NOT_FOUND,
+                EXIT_ERROR,
                 format!("nothing to leave ({})", list.join("; ")),
             ));
         }
@@ -261,13 +261,19 @@ pub fn run(mode: Mode, apps: Vec<App>, yes: bool) -> Result<Response, CliError> 
     Ok(Response::new(json!({ "left": left, "skipped": skipped, "failed": failed }), summary).exit(exit))
 }
 
-/// `icloud-<app> leave --yes --json`, its envelope's data or error.
+/// `icloud-<app> leave --yes --json`, its envelope's data or error. The
+/// envelope is on stdout when it succeeded; a failure leaves stdout empty and
+/// puts its error object on the last line of stderr, whose `code` is kept.
 fn run_one(app: App) -> Result<Value, CliError> {
     let out = Command::new(app.bin())
         .args(["leave", "--yes", "--json"])
         .output()
         .map_err(|e| CliError::new("error", EXIT_ERROR, format!("{} did not run: {e}", app.bin())))?;
-    let v: Value = serde_json::from_slice(&out.stdout).map_err(|_| {
+    let answer = match output::error_line(&out.stderr) {
+        Some(error) if !out.status.success() => Ok(error),
+        _ => serde_json::from_slice::<Value>(&out.stdout),
+    };
+    let v: Value = answer.map_err(|_| {
         CliError::new(
             "error",
             EXIT_ERROR,
@@ -281,14 +287,9 @@ fn run_one(app: App) -> Result<Value, CliError> {
     if v["ok"].as_bool() == Some(true) {
         return Ok(v["data"].clone());
     }
-    let exit = out
-        .status
-        .code()
-        .and_then(|c| u8::try_from(c).ok())
-        .unwrap_or(EXIT_ERROR);
     Err(CliError::new(
         v["error"]["code"].as_str().unwrap_or("error"),
-        exit,
+        EXIT_ERROR,
         v["error"]["message"].as_str().unwrap_or("failed").to_string(),
     ))
 }

@@ -45,10 +45,20 @@ pub fn stub_engine() -> PathBuf {
 
 /// The real engine, which the stub forwards `vault-info` to and the cassette
 /// tests run: `ICLOUD_NOTES_SYNC_REAL` when set, else the one cargo built
-/// beside this test.
+/// beside the `ICLOUD_NOTES_BIN` binary (bin/check and the package's check()
+/// build both into one directory), else beside this test. The binary comes
+/// first because newer cargo keeps test executables in a build directory of
+/// their own, away from the binaries.
 pub fn real_engine() -> PathBuf {
+    let beside = |exe: PathBuf| exe.parent().map(|dir| dir.join("icloud-notes-sync"));
     let path = std::env::var_os("ICLOUD_NOTES_SYNC_REAL")
         .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("ICLOUD_NOTES_BIN")
+                .filter(|bin| !bin.is_empty())
+                .and_then(|bin| beside(PathBuf::from(bin)))
+                .filter(|engine| engine.is_file())
+        })
         .unwrap_or_else(|| {
             let exe = std::env::current_exe().unwrap();
             exe.parent().unwrap().parent().unwrap().join("icloud-notes-sync")
@@ -100,14 +110,46 @@ impl Drop for World {
     }
 }
 
+/// What a run with no binary to drive comes to: `Ok` when it may pass
+/// having run nothing (it asked to, outside CI), else why it fails.
+fn missing_binary(skip: bool, ci: bool) -> Result<(), &'static str> {
+    match (skip, ci) {
+        (true, false) => Ok(()),
+        (true, true) => Err(
+            "ICLOUD_NOTES_BLACKBOX=skip is not for CI: build icloud-notes and name it in \
+             ICLOUD_NOTES_BIN",
+        ),
+        (false, _) => Err(
+            "ICLOUD_NOTES_BIN names no icloud-notes binary to drive. Build it and name it (bin/check does both: \
+             cargo build -p icloud-notes -p icloud-notes-sync --bins, then \
+             ICLOUD_NOTES_BIN=$PWD/target/debug/icloud-notes), or set ICLOUD_NOTES_BLACKBOX=skip to leave the \
+             suite out of this run",
+        ),
+    }
+}
+
+#[test]
+fn a_run_without_a_binary_fails_unless_it_asked_to_skip_and_never_passes_in_ci() {
+    assert!(missing_binary(true, false).is_ok());
+    assert!(missing_binary(false, false).is_err());
+    assert!(missing_binary(false, true).is_err());
+    assert!(missing_binary(true, true).is_err());
+}
+
 impl World {
     /// A world with an empty vault path (nothing there yet) and the fake
-    /// icloud-session signed in. `None` when `ICLOUD_NOTES_BIN` names no
-    /// binary: there is nothing to drive, so the test has nothing to say.
+    /// icloud-session signed in. With no binary to drive (`ICLOUD_NOTES_BIN`
+    /// unset) the test fails: a suite that passes having run nothing proves
+    /// nothing. `None`, for a test to pass on, only when the run said so
+    /// itself with `ICLOUD_NOTES_BLACKBOX=skip`, and never in CI.
     pub fn new() -> Option<World> {
-        let Some(bin) = std::env::var_os("ICLOUD_NOTES_BIN").filter(|b| !b.is_empty()) else {
-            eprintln!("skipped: ICLOUD_NOTES_BIN names no icloud-notes binary (bin/check sets it)");
-            return None;
+        let set = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+        let Some(bin) = set("ICLOUD_NOTES_BIN") else {
+            let skip = set("ICLOUD_NOTES_BLACKBOX").is_some_and(|value| value == "skip");
+            match missing_binary(skip, set("CI").is_some()) {
+                Ok(()) => return None,
+                Err(why) => panic!("{why}"),
+            }
         };
         let bin = PathBuf::from(bin);
         assert!(bin.is_file(), "ICLOUD_NOTES_BIN={} is not a file", bin.display());
@@ -632,6 +674,12 @@ impl Run {
         serde_json::from_str(&self.out).unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {self:#?}"))
     }
 
+    /// The error object a failed run wrote as the last line of stderr.
+    pub fn error_doc(&self) -> Value {
+        let last = self.err.lines().last().unwrap_or_default();
+        serde_json::from_str(last).unwrap_or_else(|e| panic!("stderr's last line is not JSON ({e}): {self:#?}"))
+    }
+
     /// The result of a run that worked, read from the envelope
     /// `{"ok":true,"data","summary"}`: `ok` first, exactly those keys.
     pub fn data(&self) -> Value {
@@ -655,14 +703,20 @@ impl Run {
         self.data()
     }
 
-    /// Asserts the contract's machine failure: exit `exit`, stderr empty, and
-    /// on stdout one document `{"ok":false,"error":{"code","message","hint"?}}`
-    /// with `ok` first. Gives `(message, hint)`, the hint "" when left out.
+    /// Asserts the contract's machine failure: exit 1 (every failure's), stdout
+    /// empty (it holds only results), and on stderr one line, the document
+    /// `{"ok":false,"error":{"code","message","hint"?}}` with `ok` first, whose
+    /// `code` is what tells the failure apart. Gives `(message, hint)`, the
+    /// hint "" when left out.
     #[track_caller]
-    pub fn fails(&self, exit: i32, code: &str) -> (String, String) {
-        assert_eq!((self.code, self.err.as_str()), (exit, ""), "{self:#?}");
-        assert!(self.out.starts_with("{\n    \"ok\": false,"), "{self:#?}");
-        let doc = self.doc();
+    pub fn fails(&self, code: &str) -> (String, String) {
+        assert_eq!((self.code, self.out.as_str()), (1, ""), "{self:#?}");
+        assert!(
+            self.err.starts_with("{\"ok\":false,") && self.err.ends_with("}\n"),
+            "{self:#?}"
+        );
+        assert_eq!(self.err.lines().count(), 1, "{self:#?}");
+        let doc = self.error_doc();
         assert_eq!(sorted_keys(&doc), ["error", "ok"], "{self:#?}");
         let error = doc["error"].as_object().unwrap();
         assert_eq!(error["code"], code, "{self:#?}");
@@ -676,10 +730,10 @@ impl Run {
         (error["message"].as_str().unwrap().to_string(), hint.unwrap_or_default())
     }
 
-    /// Asserts a text-mode failure: exit `exit`, stdout empty, `error:
-    /// MESSAGE` and, when `hint` is not empty, `hint: HINT` on stderr.
+    /// Asserts a text-mode failure: exit 1, stdout empty, `error: MESSAGE`
+    /// and, when `hint` is not empty, `hint: HINT` on stderr.
     #[track_caller]
-    pub fn fails_in_text(&self, exit: i32, message: &str, hint: &str) {
+    pub fn fails_in_text(&self, message: &str, hint: &str) {
         let hint = if hint.is_empty() {
             String::new()
         } else {
@@ -687,7 +741,7 @@ impl Run {
         };
         assert_eq!(
             (self.code, self.out.as_str(), self.err.as_str()),
-            (exit, "", format!("error: {message}\n{hint}").as_str()),
+            (1, "", format!("error: {message}\n{hint}").as_str()),
             "{self:#?}"
         );
     }

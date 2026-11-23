@@ -7,15 +7,16 @@
 //! text on a terminal, the JSON envelope `{"ok":true,"data","summary"}` when
 //! piped, and `--json`/`--styled`/`--quiet`/`--ids-only`/`--count` to choose.
 //! A failure in a machine mode is `{"ok":false,"error":{"code","message","hint"?}}`
-//! on stdout; in text mode `error:`/`hint:` lines on stderr. Progress (sync
-//! on a terminal, upload steps) goes to stderr.
+//! on one line of stderr; in text mode `error:`/`hint:` lines on stderr.
+//! Stdout holds only results. Progress (sync on a terminal, upload steps)
+//! goes to stderr.
 //!
-//! Exit codes, as in every iCloud tool (docs/CLI.md): 0 ok, 1 error (also
-//! some items of a `download`/`upload`/`delete` failed: the data still lists
-//! every item, each failed one with its `error`), 2 usage (or `delete`
-//! without `--yes` when nobody can be asked), 3 not signed in (or iCloud
-//! Photos not enabled for the account), 4 not found, 5 a service unavailable
-//! (offline, network, icloud-sessiond, keyring, Apple 5xx).
+//! Exit codes, Omarchy's as in every iCloud tool (docs/CLI.md): 0 ok and 1
+//! for any failure, including some items of a `download`/`upload`/`delete`
+//! failing (the data still lists every item, each failed one with its
+//! `error`) and `status` while signed out. The error's `code` says which
+//! failure it was (`usage`, `sign_in_required`, `photos_unavailable`,
+//! `not_found`, `offline`, ...), so a caller branches on that.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -38,7 +39,7 @@ use icloud_photos::sync::{self, Mode, Progress, Report};
 use icloud_photos::thumbs::{self, Downloader, Job, Priority, Targets};
 use icloud_photos::transport::{Error, Result as LibResult, Transport};
 use icloud_photos::upload::{self, BatchEvent, Step};
-use icloud_session::cli::{self, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SIGN_IN};
+use icloud_session::cli::{self, EXIT_ERROR};
 use icloud_session::output::{self, CliError, Mode as OutMode, OutputFlags, Response, SIGN_IN_HINT};
 use icloud_session::time::{days_from_civil, rfc3339};
 use serde_json::{Value, json};
@@ -52,21 +53,21 @@ download, delete, restore: the items that succeeded; upload: the new asset
 ids), --count the number of results (list, albums; the ids above;
 prune-cache: files removed). Flags
 combine: ids-only > count > quiet > json > styled. A failure is
-{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or
-error:/hint: lines on stderr in text mode. Progress goes to stderr.
+{\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on one line of
+stderr, or error:/hint: lines on stderr in text mode; stdout holds only
+results. Progress goes to stderr.
 
-Exit codes:
-  0 ok
-  1 error (cancelled, error, io, http 4xx), or some items of download, upload,
-    delete or restore failed (the data lists each item with its error)
-  2 usage, or delete without --yes when nobody can be asked
-  3 sign_in_required (icloud-session sign-in; status also exits 3 when
-    signed out), photos_unavailable (iCloud Photos is not on for this
-    Apple ID), session_rejected (iCloud keeps refusing the session although
-    icloud-sessiond still holds it: sign in again)
-  4 not_found
-  5 offline, network, session_service (icloud-sessiond unreachable),
-    keyring_unavailable, bad_response, http 5xx
+Exit codes: 0 ok, 1 any failure. Some items of download, upload, delete or
+restore failing also exits 1 (the data lists each item with its error), and
+so does status while signed out. The error code tells failures apart:
+  usage (also delete without --yes when nobody can be asked), not_found,
+  cancelled, error, io, http (a 5xx with a hint);
+  sign_in_required (icloud-session sign-in), photos_unavailable (iCloud
+    Photos is not on for this Apple ID), session_rejected (iCloud keeps
+    refusing the session although icloud-sessiond still holds it: sign in
+    again);
+  offline, network, session_service (icloud-sessiond unreachable),
+    keyring_unavailable, bad_response
 
 ICLOUD_SESSION_MOCK=1 with ICLOUD_SESSION_MOCK_URL talks to the fake CloudKit server instead of Apple.";
 
@@ -74,7 +75,7 @@ ICLOUD_SESSION_MOCK=1 with ICLOUD_SESSION_MOCK_URL talks to the fake CloudKit se
 #[command(
     name = "icloud-photos",
     version,
-    about = "iCloud Photos from the command line. With no command, opens the app.",
+    about = "iCloud Photos from the command line. With no command, or `open`, opens the app.",
     after_help = AFTER_HELP
 )]
 struct Cli {
@@ -154,10 +155,12 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         out: Option<PathBuf>,
     },
-    /// Download the original if needed and open it in the default app (the viewer's Open).
+    /// Open the Photos window; with an item id, download that original if
+    /// needed and open it in the default app instead (the viewer's Open).
     #[command(after_help = AFTER_HELP)]
     Open {
-        id: String,
+        /// The item to open in the default app; without one, the window opens.
+        id: Option<String>,
         /// Open iCloud's large JPEG preview instead of the original.
         #[arg(long)]
         medium: bool,
@@ -197,7 +200,7 @@ enum Command {
     /// Move items to Recently Deleted in iCloud (on every device).
     ///
     /// Asks in text mode on a terminal (stdin and stdout); anywhere else
-    /// --yes is required (a usage error, exit 2, otherwise). The data is
+    /// --yes is required (a usage error otherwise). The data is
     /// [{id, deleted, already, error?}]; an item iCloud has deleted already
     /// (a delete run before) is done, with already true. Exits 1 if any
     /// item failed.
@@ -295,7 +298,7 @@ fn other(msg: impl Into<String>) -> Fail {
 }
 
 fn not_found(msg: impl Into<String>) -> CliError {
-    CliError::new("not_found", EXIT_NOT_FOUND, msg)
+    CliError::new("not_found", EXIT_ERROR, msg)
 }
 
 fn cancelled(msg: impl Into<String>) -> CliError {
@@ -330,9 +333,9 @@ fn classify(fail: Fail) -> CliError {
     };
     match e {
         Error::Session(session) => with_sign_in_hint(output::session_failure(&session), sign_in_hint()),
-        // An I/O error, local or the session's, reads the same (`io`, exit 1).
+        // An I/O error, local or the session's, reads the same (`io`).
         Error::Io(e) => output::session_failure(&icloud_session::Error::Io(e)),
-        e @ Error::NotOffered(_) => CliError::new("photos_unavailable", EXIT_SIGN_IN, e.to_string())
+        e @ Error::NotOffered(_) => CliError::new("photos_unavailable", EXIT_ERROR, e.to_string())
             .hint("turn on iCloud Photos for this Apple ID (on an Apple device or icloud.com), then try again"),
         e => CliError::new("error", EXIT_ERROR, e.to_string()),
     }
@@ -424,7 +427,9 @@ fn run(cli: Cli, mode: OutMode) -> Res<Response> {
             | Command::Info { .. }
             | Command::PruneCache
             | Command::Config { .. }
-            | Command::Leave { .. } => {}
+            | Command::Leave { .. }
+            // The window, which shows for itself that Photos left iCloud here.
+            | Command::Open { id: None, .. } => {}
             _ => return Err(leave::left_error("Photos", &left).into()),
         }
     }
@@ -441,7 +446,8 @@ fn run(cli: Cli, mode: OutMode) -> Res<Response> {
         Command::Info { id } => info(&ctx, &id),
         Command::Thumb { id, out } => thumb(&ctx, &id, out.as_deref()),
         Command::Download { ids, all, medium, out } => download(&ctx, ids, all, medium, out.as_deref()),
-        Command::Open { id, medium } => open(&ctx, &id, medium),
+        Command::Open { id: Some(id), medium } => open(&ctx, &id, medium),
+        Command::Open { id: None, medium } => open_window(medium),
         Command::Copy { id } => copy(&ctx, &id),
         Command::Wallpaper { id } => wallpaper(&ctx, &id),
         Command::Upload { files, album, no_sync } => upload_cmd(&ctx, &files, album.as_deref(), no_sync),
@@ -544,7 +550,7 @@ fn status(ctx: &Ctx) -> Res<Response> {
     let resp = Response::new(v, summary).human(human);
     // left iCloud, being signed out is no failure
     Ok(if signed_in == Some(false) && left.is_none() {
-        resp.exit(EXIT_SIGN_IN)
+        resp.exit(EXIT_ERROR)
     } else {
         resp
     })
@@ -840,6 +846,16 @@ fn thumb(ctx: &Ctx, id: &str, out: Option<&Path>) -> Res<Response> {
     };
     let text = path.display().to_string();
     Ok(Response::new(json!({ "id": id, "path": path, "cache_path": cached }), text).ids(vec![id.to_owned()]))
+}
+
+/// `open` with no id: the window takes this process's place (with no
+/// arguments, as the desktop entry's `icloud-photos open` starts it), or this
+/// says why it could not.
+fn open_window(medium: bool) -> Res<Response> {
+    if medium {
+        return Err(usage("--medium opens an item: give its id").into());
+    }
+    Err(icloud_app::cli::open_app("icloud-photos").into())
 }
 
 /// The viewer's Open: the original (downloaded first when it is not yet),
@@ -1184,13 +1200,9 @@ fn upload_cmd(ctx: &Ctx, files: &[PathBuf], album: Option<&str>, no_sync: bool) 
     if failed > 0 {
         summary.push_str(&format!(", {failed} failed"));
     }
-    let code = if sign_in_lapsed {
-        EXIT_SIGN_IN
-    } else if failed > 0 {
-        EXIT_ERROR
-    } else {
-        0
-    };
+    // A sign-in that lapsed part-way is a failure like a failed file: the
+    // data's items say which, and their errors say why.
+    let code = if sign_in_lapsed || failed > 0 { EXIT_ERROR } else { 0 };
     // With nothing uploaded the text is the summary (the failures are on stderr).
     Ok(Response::new(v, summary)
         .human(lines.join("\n"))
@@ -1348,7 +1360,7 @@ fn resync_failed(e: &Error) -> Error {
 /// `[{id, <key>: bool, already: bool, error?}]` (`already`: it was so
 /// before this run) and the ids that went through; exit 1 if
 /// any item failed. A sign-in that lapsed before anything was done is the
-/// sign-in error; one that lapsed part-way keeps the report and exits 3.
+/// sign-in error; one that lapsed part-way keeps the report and exits 1.
 struct Changed<'a> {
     ctx: &'a Ctx,
     key: &'static str,
@@ -1405,10 +1417,10 @@ impl<'a> Changed<'a> {
         if self.signed_out && self.ok.is_empty() {
             return Err(Error::sign_in().into());
         }
-        let code = match (self.signed_out, self.failed) {
-            (true, _) => EXIT_SIGN_IN,
-            (false, 0) => 0,
-            (false, _) => EXIT_ERROR,
+        let code = if self.signed_out || self.failed > 0 {
+            EXIT_ERROR
+        } else {
+            0
         };
         if self.ctx.text() {
             // Every line is already out.
@@ -1794,30 +1806,30 @@ mod exit_tests {
     }
 
     #[test]
-    fn failures_follow_the_shared_exit_mapping() {
+    fn failures_follow_the_shared_code_mapping_and_all_exit_1() {
         let s = || "x".to_owned();
         let t = |exit, code: &str, hint| (exit, code.to_owned(), hint);
-        assert_eq!(exit_and_code(S::Offline(s())), t(5, "offline", true));
-        assert_eq!(exit_and_code(S::Network(s())), t(5, "network", true));
-        assert_eq!(exit_and_code(S::BadResponse(s())), t(5, "bad_response", true));
-        assert_eq!(exit_and_code(S::Service(s())), t(5, "session_service", true));
+        assert_eq!(exit_and_code(S::Offline(s())), t(1, "offline", true));
+        assert_eq!(exit_and_code(S::Network(s())), t(1, "network", true));
+        assert_eq!(exit_and_code(S::BadResponse(s())), t(1, "bad_response", true));
+        assert_eq!(exit_and_code(S::Service(s())), t(1, "session_service", true));
         assert_eq!(
             exit_and_code(S::KeyringUnavailable(s())),
-            t(5, "keyring_unavailable", true)
+            t(1, "keyring_unavailable", true)
         );
-        assert_eq!(exit_and_code(Error::http(503, "x")), t(5, "http", true));
-        assert_eq!(exit_and_code(Error::http(421, "x")), t(3, "session_rejected", true));
-        assert_eq!(exit_and_code(Error::http(401, "x")), t(3, "session_rejected", true));
+        assert_eq!(exit_and_code(Error::http(503, "x")), t(1, "http", true));
+        assert_eq!(exit_and_code(Error::http(421, "x")), t(1, "session_rejected", true));
+        assert_eq!(exit_and_code(Error::http(401, "x")), t(1, "session_rejected", true));
         assert_eq!(exit_and_code(Error::http(404, "x")), t(1, "http", false));
         assert_eq!(
             exit_and_code(Error::NotOffered("ckdatabasews".into())),
-            t(3, "photos_unavailable", true)
+            t(1, "photos_unavailable", true)
         );
         let rejected = classify(Fail::Err(Error::http(421, "x")));
         assert_eq!(rejected.hint.as_deref(), Some(sign_in_hint().as_str()));
         assert!(rejected.message.contains("HTTP 421"), "{}", rejected.message);
         let sign_in = classify(Fail::Err(Error::sign_in()));
-        assert_eq!((sign_in.code.as_str(), sign_in.exit), ("sign_in_required", 3));
+        assert_eq!((sign_in.code.as_str(), sign_in.exit), ("sign_in_required", 1));
         assert_eq!(sign_in.hint, Some(sign_in_hint()));
         assert_eq!(exit_and_code(Error::Other(s())), t(1, "error", false));
         // I/O reads the same whether it was Photos' own or the session's.
@@ -1830,7 +1842,7 @@ mod exit_tests {
         assert_eq!(exit_and_code(daemon), t(1, "error", false));
         assert_eq!(
             exit_and_code(S::FindMyAuthRequired),
-            t(3, "find_my_auth_required", true)
+            t(1, "find_my_auth_required", true)
         );
         assert_eq!(
             exit_and_code(Error::CloudKit {
@@ -1839,8 +1851,13 @@ mod exit_tests {
             }),
             t(1, "error", false)
         );
-        assert_eq!(classify(not_found(s()).into()).exit, 4);
-        assert_eq!(classify(usage(s()).into()).exit, 2);
-        assert_eq!(classify(cancelled(s()).into()).exit, 1);
+        for (e, code) in [
+            (not_found(s()), "not_found"),
+            (usage(s()), "usage"),
+            (cancelled(s()), "cancelled"),
+        ] {
+            let e = classify(e.into());
+            assert_eq!((e.code.as_str(), e.exit), (code, 1));
+        }
     }
 }

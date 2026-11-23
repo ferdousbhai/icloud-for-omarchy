@@ -1,5 +1,5 @@
-//! Known errors (`src/cmd/errors.rs`): messages, hints, codes and exit
-//! codes. Sign-in failures are all `SignInRequired` (icloud-session owns
+//! Known errors (`src/cmd/errors.rs`): messages, hints, codes, and the
+//! exit code every failure shares, 1. Sign-in failures are all `SignInRequired` (icloud-session owns
 //! sign-in). Originally derived from icloud-md's tests.
 
 use icloud_notes_sync::cloudkit::CkError;
@@ -11,11 +11,12 @@ fn not_cloned() -> Error {
     }
 }
 
-/// Every known error: its class name, code, whether it has a hint, and its
-/// exit code (the shared table: 1 error, 2 usage, 3 not signed in / not set
-/// up, 4 not found, 5 a service unavailable).
+/// Every known error: its class name, code, whether it has a hint, and the
+/// kind of failure its code names, numbered as the exit codes once were (1
+/// error, 2 usage, 3 not signed in / not set up, 4 not found, 5 a service
+/// unavailable). Every one exits 1 now: a caller tells them apart by code.
 #[test]
-fn every_known_error_has_its_class_name_code_hint_and_exit_code() {
+fn every_known_error_has_its_class_name_code_hint_and_exits_1() {
     let dir = || "/some/dir".to_string();
     let zone_failed = |code: &str| {
         Error::CloudKit(CkError::ZoneFetchFailed {
@@ -290,18 +291,18 @@ fn every_known_error_has_its_class_name_code_hint_and_exit_code() {
             1,
         ),
     ];
-    for (error, name, code, has_hint, exit) in errors {
+    for (error, name, code, has_hint, kind) in errors {
         assert_eq!(error.code(), code, "{name}");
         assert_eq!(error.hint().is_some(), has_hint, "{name} hint");
-        assert_eq!(error.exit_code(), exit, "{name} ({code})");
-        // Every exit-5 error tells what to do.
-        assert!(exit != 5 || error.hint().is_some(), "{name}");
+        assert_eq!(error.exit_code(), 1, "{name} ({code})");
+        // Every failure of a service tells what to do.
+        assert!(kind != 5 || error.hint().is_some(), "{name}");
     }
 }
 
 #[test]
-fn sign_in_required_exits_3_with_the_reauthenticate_marker() {
-    assert_eq!(Error::SignInRequired.exit_code(), 3);
+fn sign_in_required_exits_1_with_the_reauthenticate_marker() {
+    assert_eq!(Error::SignInRequired.exit_code(), 1);
     assert_eq!(Error::SignInRequired.code(), "sign_in_required");
     // The hint every iCloud tool gives.
     assert_eq!(

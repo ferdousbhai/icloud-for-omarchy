@@ -131,12 +131,14 @@ Map data (c) OpenStreetMap contributors, available under the Open Database
 License (https://www.openstreetmap.org/copyright).
 
 ============================================================================
-notes/, photos/, findmy/ and reminders/ (icloud-notes, icloud-photos,
-icloud-findmy, icloud-reminders): omui, with Strata and Lucide
+notes/, photos/, findmy/, reminders/ and sessiond/ (icloud-notes,
+icloud-photos, icloud-findmy, icloud-reminders, icloud-session): omui, with
+Strata and Lucide
 ============================================================================
 
 The Notes, Photos, Find My and Reminders windows (icloud-notes-app,
-icloud-photos-app, icloud-findmy-app, icloud-reminders-app) take their look, their icons and their widgets from omui (https://github.com/ferdousbhai/omui, MIT, by the
+icloud-photos-app, icloud-findmy-app, icloud-reminders-app) and the sign-in
+window (icloud-session-signin) take their look, their icons and their widgets from omui (https://github.com/ferdousbhai/omui, MIT, by the
 author of this repository), a git dependency pinned by `rev` in Cargo.toml.
 Through it the binaries hold code adapted from Strata and the Lucide icons.
 

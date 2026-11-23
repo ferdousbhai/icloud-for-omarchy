@@ -29,7 +29,7 @@ curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/dow
 
 | Directory | Package | What it is |
 |---|---|---|
-| [notes/](notes/README.md), [notes-sync/](notes-sync/README.md) | `icloud-notes` | Apple Notes in GTK4 (`icloud-notes-app`) and the `icloud-notes` command (no toolkit; it starts the app when given no command), synced with iCloud by its engine, icloud-notes-sync (notes-sync/, in Rust, originally derived from icloud-md), which the package installs off PATH. |
+| [notes/](notes/README.md), [notes-sync/](notes-sync/README.md) | `icloud-notes` | Apple Notes in GTK4 and the `icloud-notes` command (no toolkit; `icloud-notes open`, or no command, starts the app), synced with iCloud by its engine, icloud-notes-sync (notes-sync/, in Rust, originally derived from icloud-md), which the package installs off PATH. |
 | [photos/](photos/README.md) | `icloud-photos` | iCloud Photos in GTK4: browse, download, upload and delete. |
 | [findmy/](findmy/README.md) | `icloud-findmy` | Find My devices in GTK4: locate, play a sound, Lost Mode, history trail. |
 | [reminders/](reminders/README.md) | `icloud-reminders` | iCloud Reminders in GTK4 with Omarchy's current theme, and a systemd timer that notifies through Omarchy's notifications when a reminder falls due. |
@@ -38,6 +38,33 @@ curl -fsSL https://github.com/ferdousbhai/icloud-for-omarchy/releases/latest/dow
 
 The shared sign-in's design (the daemon, its D-Bus interface, the session
 files) is in [session/README.md](session/README.md#design).
+
+## Keyboard shortcuts
+
+Every window closes on `Ctrl+W` and quits on `Ctrl+Q`, and lists its
+shortcuts on `?` and `F1` (on `F1` and `Ctrl+?` in Notes and the sign-in
+window, where a text field has the keyboard); the rest is each app's own,
+listed in a table in its README. Keys without Ctrl do nothing while a text
+field has the keyboard.
+
+| App | Shortcuts | In short |
+|---|---|---|
+| Notes | [table](notes/README.md#keyboard-shortcuts) | `Ctrl+N` new note, `Ctrl+F` search, `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, `Ctrl+B` / `Ctrl+I` / `Ctrl+K` styles, arrows walk the panes |
+| Photos | [table](photos/README.md#keyboard-shortcuts) | `Ctrl+R` sync, `Ctrl+U` upload, `Ctrl+,` preferences; in the viewer `Left` / `Right`, `Ctrl+S`, `Ctrl+O`, `Ctrl+C`, `Delete` |
+| Find My | [table](findmy/README.md#keyboard-shortcuts) | `Ctrl+R` refresh |
+| Reminders | [table](reminders/README.md#keyboard-shortcuts) | `Ctrl+N` new reminder, `Ctrl+R` sync |
+
+## Names
+
+Each app has one name, Omarchy's way: `icloud-photos`, `icloud-notes`,
+`icloud-findmy` and `icloud-reminders` are the command, the package, the
+desktop entry, the icon, and the window's Wayland app id (Hyprland's
+`class`); `<name> open` opens the window. The sign-in window's is
+`icloud-session`. After upgrading from an earlier version: a Hyprland window rule
+that matched the old class (`com.ferdousbhai.IcloudPhotos` and the like,
+or `io.github.ferdousbhai.ICloudSession` for the sign-in window) needs
+the short name instead, and a launcher that pinned or ranked the old desktop
+entry sees the new one as new. The `<name>-app` commands keep working.
 
 ## Calendar, Mail and the rest of iCloud
 
@@ -63,7 +90,7 @@ aren't available from iCloud on the web either.
 
 Notes, Photos, Find My, Reminders, iCloud Drive and the shared sign-in have scriptable CLIs with one
 output contract: text on a terminal, a JSON envelope when piped (`--quiet`
-for the bare result), JSON errors with stable codes, and shared exit codes;
+for the bare result), JSON errors with stable codes on stderr, and exit 0 on success, 1 on any failure;
 see [docs/CLI.md](docs/CLI.md).
 `icloud-session skill install` installs the agent skill
 ([docs/skills/icloud/SKILL.md](docs/skills/icloud/SKILL.md)) to `~/.agents/skills/icloud`, linked

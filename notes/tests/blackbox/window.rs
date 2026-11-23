@@ -35,7 +35,7 @@ fn no_arguments_open_the_app() {
     assert!(opens_the_window(&w, &mut app));
     // While it is open the command line reads, and leaves changes to it.
     w.run(["list"]).ok();
-    let (message, _) = w.json(["new", "While open"]).fails(1, "vault_busy");
+    let (message, _) = w.json(["new", "While open"]).fails("vault_busy");
     assert!(
         message.ends_with(" is open and owns the notes vault while it is open."),
         "{message}"
@@ -49,6 +49,13 @@ fn no_arguments_open_the_app() {
         w.json(["status"]).ok()["lock"],
         json!({"held_by": null, "app_open": false})
     );
+}
+
+#[test]
+fn open_opens_the_app() {
+    let Some(w) = World::seeded() else { return };
+    let mut app = w.spawn(["open"]);
+    assert!(opens_the_window(&w, &mut app));
 }
 
 #[test]

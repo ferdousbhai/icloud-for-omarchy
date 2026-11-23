@@ -8,13 +8,13 @@
 # only the result's data on stdout; --json (or no flag: the stub's stdout
 # is never a terminal) the envelope {"ok":true,"data","summary"}; --styled
 # text. In --quiet/--json a failure is the contract error object
-# {"ok":false,"error":{code,message,hint?}} on stdout, pretty-printed over
-# several lines (here sometimes with its keys sorted: key order and layout
-# are not part of the contract), and stderr carries no JSON; in --styled it
-# is "error: ..." / "hint: ..." on stderr. Progress and notices go to
-# stderr. status, push --dry-run and diff report their changes in the
-# result and exit 0, a sign-in required exits 3, a usage error 2, offline 5
-# (the codes every iCloud tool shares). vault-info is the real engine's
+# {"ok":false,"error":{code,message,hint?}} on one line of stderr, its last
+# (here sometimes with its keys sorted: key order is not part of the
+# contract), and stdout stays empty; in --styled it is "error: ..." /
+# "hint: ..." on stderr. Progress and notices go to stderr. status, push
+# --dry-run and diff report their changes in the result and exit 0; every
+# failure exits 1, its kind in the error's code (Omarchy's exit codes, which
+# every iCloud tool follows). vault-info is the real engine's
 # ($ICLOUD_NOTES_SYNC_REAL, which the suite names): it reads the test's
 # vault as the app would.
 # background is the engine's step with its decision taken from
@@ -23,10 +23,10 @@
 # with "synced":true and "step" beside the halves; settling, idle,
 # signed_out or session_unavailable answers {"synced":false,"step"}, exit 0.
 #
-# ICLOUD_NOTES_SYNC_STUB_EXIT=N (with ICLOUD_NOTES_SYNC_STUB_ERROR=CODE,
+# ICLOUD_NOTES_SYNC_STUB_EXIT=1 (with ICLOUD_NOTES_SYNC_STUB_ERROR=CODE,
 # default "internal", and optionally ICLOUD_NOTES_SYNC_STUB_MESSAGE /
 # ICLOUD_NOTES_SYNC_STUB_HINT): sync, pull, push, clone, diff, status and
-# history fail at once with exit N and that error, giving no answer, as the
+# history fail at once with exit 1 and that error, giving no answer, as the
 # engine does for a vault it cannot use (not_cloned_directory,
 # account_mismatch, ...). The real `sync` gives no answer only when it never
 # starts (vault_busy, vault_lock, usage): a vault it cannot use fails each
@@ -41,7 +41,7 @@
 # ICLOUD_NOTES_SYNC_STUB_PUSH_SKIPPED=1: a push (alone, or as a sync's half)
 # that left one change for the next push (outcome.skipped): it worked.
 # ICLOUD_NOTES_SYNC_STUB_TOO_MANY=1: a push (alone, or as a sync's half)
-# refuses to delete most of the vault (too_many_deletions, exit 2, with the
+# refuses to delete most of the vault (too_many_deletions, exit 1, with the
 # engine's message and hint) unless it is run with --yes; a sync's pull runs
 # all the same. --yes is taken by push and sync, and logged ("sync --yes").
 # ICLOUD_NOTES_SYNC_STUB_GATE=FILE: a sync, pull or push waits while FILE
@@ -92,28 +92,33 @@ result() {
     text) printf '%s\n' "${2:-stub}" ;;
   esac
 }
-# fail CODE MESSAGE HINT EXIT [sorted]: the failure in the run's mode, then exit.
+# fail CODE MESSAGE HINT [sorted]: the failure in the run's mode, on
+# stderr, then exit 1.
 fail() {
   if [ "$mode" = text ]; then
     echo "error: $2" >&2
     [ -n "$3" ] && echo "hint: $3" >&2
-  elif [ -n "${5:-}" ]; then
-    printf '{\n  "error": {\n    "code": "%s",\n' "$1"
-    [ -n "$3" ] && printf '    "hint": "%s",\n' "$3"
-    printf '    "message": "%s"\n  },\n  "ok": false\n}\n' "$2"
+  elif [ -n "${4:-}" ]; then
+    {
+      printf '{"error":{"code":"%s",' "$1"
+      [ -n "$3" ] && printf '"hint":"%s",' "$3"
+      printf '"message":"%s"},"ok":false}\n' "$2"
+    } >&2
   else
-    printf '{\n  "ok": false,\n  "error": {\n    "code": "%s",\n    "message": "%s"' "$1" "$2"
-    [ -n "$3" ] && printf ',\n    "hint": "%s"' "$3"
-    printf '\n  }\n}\n'
+    {
+      printf '{"ok":false,"error":{"code":"%s","message":"%s"' "$1" "$2"
+      [ -n "$3" ] && printf ',"hint":"%s"' "$3"
+      printf '}}\n'
+    } >&2
   fi
-  exit "$4"
+  exit 1
 }
 stub_fail() {
   [ -n "${ICLOUD_NOTES_SYNC_STUB_EXIT:-}" ] || return 0
   local code="${ICLOUD_NOTES_SYNC_STUB_ERROR:-internal}"
   local message="${ICLOUD_NOTES_SYNC_STUB_MESSAGE:-stub failure}"
   echo "stub: failing with $code" >&2
-  fail "$code" "$message" "${ICLOUD_NOTES_SYNC_STUB_HINT:-}" "$ICLOUD_NOTES_SYNC_STUB_EXIT" sorted
+  fail "$code" "$message" "${ICLOUD_NOTES_SYNC_STUB_HINT:-}" sorted
 }
 # progress N: the engine's machine-mode progress on stderr (one line per
 # fetched page and per processed note), which nobody's log should show.
@@ -159,11 +164,11 @@ elif [ "$1" = "sync" ] || [ "$1" = "background" ]; then
   # pull/push below, plus ICLOUD_NOTES_SYNC_STUB_OFFLINE=1 (the push finds
   # no network) and ICLOUD_NOTES_SYNC_STUB_PULL_ADDS=FILE (the pull writes
   # that note and reports it, as a pull from iCloud would).
-  # ICLOUD_NOTES_SYNC_STUB_PUSH_FAIL / ICLOUD_NOTES_SYNC_STUB_PULL_FAIL=CODE:EXIT
+  # ICLOUD_NOTES_SYNC_STUB_PUSH_FAIL / ICLOUD_NOTES_SYNC_STUB_PULL_FAIL=CODE
   # (sync only, before the other switches): that half fails with that code
-  # and exit; the run exits by the engine's worse-half rule (3 if either
-  # half exited 3, else the higher), and a push failing sign_in_required,
-  # session_rejected, offline or network leaves the pull out.
+  # (and its exit_code 1); the run exits 1 when either half failed, and a
+  # push failing sign_in_required, session_rejected, offline or network
+  # leaves the pull out.
   [ -n "${ICLOUD_NOTES_SYNC_STUB_LOG:-}" ] && echo "$1${yes:+ --yes}" >> "$ICLOUD_NOTES_SYNC_STUB_LOG"
   [ -n "${ICLOUD_NOTES_SYNC_STUB_SLEEP:-}" ] && sleep "$ICLOUD_NOTES_SYNC_STUB_SLEEP"
   gate
@@ -173,12 +178,12 @@ elif [ "$1" = "sync" ] || [ "$1" = "background" ]; then
     local forced
     [ "$1" = push ] && forced="${ICLOUD_NOTES_SYNC_STUB_PUSH_FAIL:-}" || forced="${ICLOUD_NOTES_SYNC_STUB_PULL_FAIL:-}"
     if [ -n "$forced" ]; then
-      printf '{"ok":false,"exit_code":%s,"error":{"code":"%s","message":"stub %s failed with %s"}}' \
-        "${forced#*:}" "${forced%%:*}" "$1" "${forced%%:*}"
+      printf '{"ok":false,"exit_code":1,"error":{"code":"%s","message":"stub %s failed with %s"}}' \
+        "$forced" "$1" "$forced"
       return
     fi
     if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_OFFLINE:-}" ]; then
-      printf '{"ok":false,"exit_code":5,"error":{"code":"offline","message":"offline: dns error: no network"}}'
+      printf '{"ok":false,"exit_code":1,"error":{"code":"offline","message":"offline: dns error: no network"}}'
       return
     fi
     if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_PUSH_REFUSED:-}" ]; then
@@ -187,7 +192,7 @@ elif [ "$1" = "sync" ] || [ "$1" = "background" ]; then
       return
     fi
     if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_TOO_MANY:-}" ] && [ -z "$yes" ]; then
-      printf '{"ok":false,"exit_code":2,"error":{"code":"too_many_deletions","message":"%s","hint":"%s"}}' "$too_many_message" "$too_many_hint"
+      printf '{"ok":false,"exit_code":1,"error":{"code":"too_many_deletions","message":"%s","hint":"%s"}}' "$too_many_message" "$too_many_hint"
       return
     fi
     if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_PUSH_SKIPPED:-}" ]; then
@@ -196,11 +201,11 @@ elif [ "$1" = "sync" ] || [ "$1" = "background" ]; then
     fi
     if [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = 1 ] || [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = "$1" ]; then
       if [ "${ICLOUD_NOTES_SYNC_STUB_SIGNIN:-}" = rejected ]; then
-        printf '{"ok":false,"exit_code":3,"error":{"code":"session_rejected","message":"%s","hint":"%s"}}' "$rejected_message" "$sign_in_hint"
+        printf '{"ok":false,"exit_code":1,"error":{"code":"session_rejected","message":"%s","hint":"%s"}}' "$rejected_message" "$sign_in_hint"
       elif [ "${ICLOUD_NOTES_SYNC_STUB_SIGNIN:-}" = marker ]; then
         printf '{"ok":false,"exit_code":1,"error":{"code":"internal","message":"Run \\"icloud-md reauthenticate\\" to sign in interactively."}}'
       else
-        printf '{"ok":false,"exit_code":3,"error":{"code":"sign_in_required","message":"%s","hint":"%s"}}' "$sign_in_message" "$sign_in_hint"
+        printf '{"ok":false,"exit_code":1,"error":{"code":"sign_in_required","message":"%s","hint":"%s"}}' "$sign_in_message" "$sign_in_hint"
       fi
       return
     fi
@@ -220,13 +225,7 @@ elif [ "$1" = "sync" ] || [ "$1" = "background" ]; then
     *'"code":"offline"'* | *'"code":"network"'* | *'"code":"sign_in_required"'* | *'"code":"session_rejected"'*) ;;
     *) pull_json=$(half pull) ;;
   esac
-  # half_exit JSON: a half's exit_code (0 for none).
-  half_exit() { local e; e=$(printf '%s' "$1" | sed -n 's/^{"ok":[a-z]*,"exit_code":\([0-9]*\).*/\1/p'); echo "${e:-0}"; }
-  push_exit=$(half_exit "$push_json") pull_exit=$(half_exit "$pull_json")
-  if [ "$push_exit" = 3 ] || [ "$pull_exit" = 3 ]; then code=3
-  elif [ "$push_exit" -gt "$pull_exit" ]; then code=$push_exit
-  else code=$pull_exit
-  fi
+  case "$push_json$pull_json" in *'"ok":false'*) code=1 ;; esac
   info=$("$ICLOUD_NOTES_SYNC_REAL" --quiet vault-info . 2>/dev/null) || info=null
   result "{${step:+\"synced\":true,\"step\":\"$step\",}\"push\":$push_json,\"pull\":$pull_json,\"vault_info\":${info:-null}}"
   exit "$code"
@@ -262,15 +261,14 @@ elif [ "$1" = "clone" ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_EXIT:-}" ]; then
   stub_fail
 elif [ "$1" = "clone" ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_CLONE:-}" ]; then
   # A clone into the last argument: the state file and one note.
-  # ICLOUD_NOTES_SYNC_STUB_CLONE=partial then fails (cloudkit_request_failed,
-  # exit 1), as the real clone that fails part way does: what it wrote is
+  # ICLOUD_NOTES_SYNC_STUB_CLONE=partial then fails (cloudkit_request_failed), as the real clone that fails part way does: what it wrote is
   # recorded, for a pull to finish.
   dir="${@: -1}"
   mkdir -p "$dir/.icloud-notes" "$dir/Notes"
   echo '{"layoutVersion":4,"titleMode":"in-body","folders":{"DefaultFolder-CloudKit":{"name":"Notes","dirName":"Notes"}},"notes":{"id-c":{"file":"Notes/Cloned.md","recordChangeTag":"t","modificationDate":0}}}' > "$dir/.icloud-notes/state.json"
   printf -- '---\napple-note-id: id-c\n---\n# Cloned\n' > "$dir/Notes/Cloned.md"
   progress 3
-  [ "$ICLOUD_NOTES_SYNC_STUB_CLONE" = partial ] && fail cloudkit_request_failed "Attachment download failed: HTTP 410" "" 1
+  [ "$ICLOUD_NOTES_SYNC_STUB_CLONE" = partial ] && fail cloudkit_request_failed "Attachment download failed: HTTP 410" ""
   result '{"written":1}' "Cloned 1 notes" '{"lines":["Cloned 1 notes"]}'
 elif [ "$1" = "diff" ]; then
   # The diff's text is only in meta.text (the real engine's epoch diff,
@@ -291,20 +289,20 @@ elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
   # ICLOUD_NOTES_SYNC_STUB_SLEEP: seconds a run takes.
   # ICLOUD_NOTES_SYNC_STUB_EXPIRED: 1 refuses every run, or "pull"/"push"
   # only that one (a push with nothing to send never asks iCloud).
-  # ICLOUD_NOTES_SYNC_STUB_SIGNIN: how a refusal is reported: "code" exit 3
-  # with plain text and no error object, whatever the mode (so no code);
-  # "marker" exit 1 with only icloud-md's text marker, which the app no
-  # longer takes for a sign-in; "rejected" exit 3 and the code
-  # session_rejected (Apple refused a session icloud-session still holds;
-  # the sync skips its pull after it too); unset, exit 3 and the code
-  # sign_in_required, as the real tool does.
+  # ICLOUD_NOTES_SYNC_STUB_SIGNIN: how a refusal is reported (each exits
+  # 1): "code" with plain text and no error object, whatever the mode (so
+  # no code, which the app does not take for a sign-in); "marker" with only
+  # icloud-md's text marker, which the app no longer takes for a sign-in
+  # either; "rejected" with the code session_rejected (Apple refused a
+  # session icloud-session still holds; the sync skips its pull after it
+  # too); unset, with the code sign_in_required, as the real tool does.
   # ICLOUD_NOTES_SYNC_STUB_TAKE_LOCK: the real engine takes the vault's lock
   # here (restore of a note that isn't there, so nothing changes): through
   # the descriptor the app handed down it must get it, without it it must
-  # find the vault busy (its error object is on stdout).
+  # find the vault busy (its error object is on stderr).
   if [ -n "${ICLOUD_NOTES_SYNC_STUB_TAKE_LOCK:-}" ]; then
-    with=$("$ICLOUD_NOTES_SYNC_REAL" --quiet --wait 0 restore no-such-note.md . 2>/dev/null)
-    without=$(env -u ICLOUD_NOTES_LOCK_FD "$ICLOUD_NOTES_SYNC_REAL" --quiet --wait 0 restore no-such-note.md . 2>/dev/null)
+    with=$("$ICLOUD_NOTES_SYNC_REAL" --quiet --wait 0 restore no-such-note.md . 2>&1 >/dev/null)
+    without=$(env -u ICLOUD_NOTES_LOCK_FD "$ICLOUD_NOTES_SYNC_REAL" --quiet --wait 0 restore no-such-note.md . 2>&1 >/dev/null)
     case "$with" in *vault_busy*) echo "stub: the engine found the vault busy despite the lock handed down" >&2; exit 1 ;; esac
     case "$without" in *vault_busy*) ;; *) echo "stub: the engine got the vault without the lock: $without" >&2; exit 1 ;; esac
   fi
@@ -312,23 +310,23 @@ elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
   gate
   [ "$1" = pull ] && progress 3
   stub_fail
-  # ICLOUD_NOTES_SYNC_STUB_OFFLINE: iCloud out of reach, exit 5; the error
-  # object (sorted keys) is the only place the code is.
+  # ICLOUD_NOTES_SYNC_STUB_OFFLINE: iCloud out of reach; the error object
+  # (sorted keys) is the only place the code is.
   if [ -n "${ICLOUD_NOTES_SYNC_STUB_OFFLINE:-}" ]; then
-    fail offline "offline: dns error: no network" "check the network connection and try again" 5 sorted
+    fail offline "offline: dns error: no network" "check the network connection and try again" sorted
   fi
   if [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = 1 ] || [ "${ICLOUD_NOTES_SYNC_STUB_EXPIRED:-}" = "$1" ]; then
     case "${ICLOUD_NOTES_SYNC_STUB_SIGNIN:-}" in
       code)
         echo "$sign_in_message" >&2
-        exit 3 ;;
+        exit 1 ;;
       marker)
         echo 'Run "icloud-md reauthenticate" to sign in interactively.' >&2
         exit 1 ;;
       rejected)
-        fail session_rejected "$rejected_message" "$sign_in_hint" 3 ;;
+        fail session_rejected "$rejected_message" "$sign_in_hint" ;;
       *)
-        fail sign_in_required "$sign_in_message" "$sign_in_hint" 3 ;;
+        fail sign_in_required "$sign_in_message" "$sign_in_hint" ;;
     esac
   fi
   if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_PUSH_REFUSED:-}" ]; then
@@ -336,7 +334,7 @@ elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
     exit 1
   fi
   if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_TOO_MANY:-}" ] && [ -z "$yes" ]; then
-    fail too_many_deletions "$too_many_message" "$too_many_hint" 2
+    fail too_many_deletions "$too_many_message" "$too_many_hint"
   fi
   if [ "$1" = push ] && [ -n "${ICLOUD_NOTES_SYNC_STUB_PUSH_SKIPPED:-}" ]; then
     result "$skipped_result" "$skipped_message" "{\"lines\":$skipped_lines}"
@@ -345,5 +343,5 @@ elif [ "$1" = "pull" ] || [ "$1" = "push" ]; then
   result "{\"stub\":\"$1\",\"ok\":true}" "stub $1 ok" "{\"lines\":[\"stub $1 ok\"]}"
 else
   echo "stub: unknown args: ${orig[*]}" >&2
-  exit 2
+  exit 1
 fi

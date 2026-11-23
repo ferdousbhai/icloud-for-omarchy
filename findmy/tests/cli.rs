@@ -11,7 +11,8 @@ use std::process::Output;
 use std::sync::Arc;
 
 use icloud_app::testing::{
-    assert_cli_links_no_gtk, assert_no_command_runs_the_app, code, command, envelope, stderr, stdout,
+    assert_cli_links_no_gtk, assert_no_command_runs_the_app, code, command, envelope, failure, failure_code, stderr,
+    stdout,
 };
 use icloud_findmy::history::{History, RETENTION_SECS};
 use icloud_findmy::models::Fix;
@@ -164,8 +165,7 @@ fn locate_gives_up_on_a_device_with_only_an_old_fix() {
 fn locate_refuses_a_wait_too_long_to_count() {
     let env = start();
     let out = env.run(&["locate", IPHONE, "--wait", "18446744073709551615"]);
-    assert_eq!(code(&out), 2, "{}", stderr(&out));
-    let err = envelope(&out.stdout);
+    let err = failure(&out);
     assert_eq!(err["error"]["code"], "usage");
     assert!(err["error"]["message"].as_str().unwrap().contains("--wait"), "{err}");
 }
@@ -174,7 +174,7 @@ fn locate_refuses_a_wait_too_long_to_count() {
 fn play_sound_needs_yes_without_a_terminal() {
     let env = start();
     let out = env.styled(&["play-sound", "Test's iPhone"]);
-    assert_eq!(code(&out), 2);
+    assert_eq!(code(&out), 1);
     assert!(stderr(&out).contains("--yes"), "{}", stderr(&out));
     assert!(env.actions().is_empty());
 
@@ -197,25 +197,20 @@ fn play_sound_needs_yes_without_a_terminal() {
 fn ambiguous_or_unknown_names_list_the_devices_and_act_on_none() {
     let env = start();
     let out = env.styled(&["play-sound", "test's", "--yes"]);
-    assert_eq!(code(&out), 2);
+    assert_eq!(code(&out), 1);
     let err = stderr(&out);
     assert!(err.starts_with("error: \"test's\" matches 4 devices\nhint: "), "{err}");
     assert!(err.contains(IPHONE), "{err}");
 
     let out = env.styled(&["play-sound", "nokia", "--yes"]);
-    assert_eq!(code(&out), 4);
+    assert_eq!(code(&out), 1);
     assert!(stderr(&out).contains("no device matches"), "{}", stderr(&out));
-    // The same as machine-readable codes (not found exits 4, ambiguous 2);
-    // the failure envelope is on stdout in a machine mode, the device list
-    // in the hint.
-    for (name, want, exit) in [("nokia", "not_found", 4), ("test's", "ambiguous", 2)] {
+    // Both exit 1; the machine-readable code tells them apart. The failure
+    // object is on stderr in a machine mode, the device list in the hint.
+    for (name, want) in [("nokia", "not_found"), ("test's", "ambiguous")] {
         let out = env.run(&["play-sound", name, "--yes", "--json"]);
-        let err = envelope(&out.stdout);
-        assert_eq!(
-            (code(&out), err["error"]["code"].as_str()),
-            (exit, Some(want)),
-            "{name}"
-        );
+        let err = failure(&out);
+        assert_eq!(err["error"]["code"].as_str(), Some(want), "{name}");
         assert!(!err["error"]["message"].as_str().unwrap().contains('\n'), "{err}");
         assert!(err["error"]["hint"].as_str().unwrap().contains(MAC), "{err}");
     }
@@ -231,12 +226,11 @@ fn ambiguous_or_unknown_names_list_the_devices_and_act_on_none() {
 fn lost_mode_sends_phone_and_message() {
     let env = start();
     let out = env.run(&["lost-mode", "macbook", "--phone", "+1555", "--message", "Lost"]);
-    assert_eq!(code(&out), 2, "refused without --yes on a non-terminal");
-    let err = envelope(&out.stdout);
+    let err = failure(&out);
     assert_eq!(err["error"]["code"], "usage");
     assert!(err["error"]["hint"].as_str().unwrap().contains("--yes"), "{err}");
     let out = env.run(&["lost-mode", "macbook", "--phone", "+1555", "--yes"]);
-    assert_eq!(code(&out), 2, "--message is required");
+    assert_eq!(failure_code(&out), "usage", "--message is required");
     assert!(env.actions().is_empty());
 
     let done = env.json(&[
@@ -291,10 +285,10 @@ fn history_shows_the_trail_by_name_or_offline_by_id() {
     assert!(stderr(&out).starts_with("note: "), "{}", stderr(&out));
     // An unknown ID needs the server, which is gone: count 0 is not faked.
     let out = run_at(dead, env.dir.path(), &["history", "nothing", "--count"]);
-    assert_eq!(code(&out), 5, "{}", stdout(&out));
+    assert_eq!(failure_code(&out), "offline");
 
     let out = env.run(&["history", "iphone", "--since", "soon"]);
-    assert_eq!(code(&out), 2);
+    assert_eq!(failure_code(&out), "usage");
 }
 
 #[test]
@@ -327,7 +321,7 @@ fn prune_history_deletes_rows_past_retention() {
 }
 
 #[test]
-fn usage_errors_exit_2() {
+fn usage_errors_are_code_usage_and_exit_1() {
     let env = start();
     for args in [
         &["frobnicate"][..],
@@ -337,7 +331,7 @@ fn usage_errors_exit_2() {
         &["devices", "--bogus"],
     ] {
         let out = env.run(args);
-        assert_eq!(code(&out), 2, "{args:?}: {}", stderr(&out));
+        assert_eq!(failure_code(&out), "usage", "{args:?}");
     }
     // Help never touches the network or the history.
     let help = |args: &[&str]| {
@@ -368,27 +362,26 @@ fn usage_errors_exit_2() {
             assert!(
                 text.contains(&format!("Usage: icloud-findmy {cmd}"))
                     && text.contains("JSON:")
-                    && text.contains("Exit codes"),
+                    && text.contains("Exit codes: 0 ok, 1 any failure"),
                 "{text}"
             );
         }
     }
     assert!(env.actions().is_empty());
-    // A usage error with --json is the JSON error object; --json may come
-    // before the command.
+    // A usage error with --json is the JSON error object, on one line of
+    // stderr and nothing else; --json may come before the command.
     let out = env.run(&["--json", "locate"]);
-    assert_eq!(code(&out), 2);
-    let env_err = envelope(&out.stdout);
+    let env_err = failure(&out);
     assert_eq!(env_err["ok"], false);
     assert_eq!(env_err["error"]["code"], "usage");
     assert_eq!(env_err["error"]["hint"], "run `icloud-findmy --help`");
-    assert!(stderr(&out).is_empty(), "{}", stderr(&out));
+    assert_eq!(stderr(&out).lines().count(), 1, "{}", stderr(&out));
     // Piped with no flag is a machine too.
     let out = env.run(&["locate"]);
-    assert_eq!(envelope(&out.stdout)["error"]["code"], "usage");
+    assert_eq!(failure_code(&out), "usage");
     // In text mode clap's own message goes to stderr, nothing to stdout.
     let out = env.run(&["locate", "--styled"]);
-    assert_eq!(code(&out), 2);
+    assert_eq!(code(&out), 1);
     assert!(out.stdout.is_empty(), "{}", stdout(&out));
     assert!(stderr(&out).starts_with("error: "), "{}", stderr(&out));
     let listed = env.json(&["--json", "devices"]);
@@ -409,15 +402,14 @@ fn answering(status: u16) -> String {
 }
 
 #[test]
-fn find_my_password_needed_exits_3() {
+fn find_my_password_needed_is_find_my_auth_required() {
     let tmp = tempfile::tempdir().unwrap();
     let out = styled_at(&answering(450), tmp.path(), &["devices"]);
-    assert_eq!(code(&out), 3, "{}", stderr(&out));
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
     assert!(stderr(&out).contains("authorize-find-my"), "{}", stderr(&out));
 
     let out = run_at(&answering(450), tmp.path(), &["devices", "--json"]);
-    assert_eq!(code(&out), 3);
-    let err = envelope(&out.stdout);
+    let err = failure(&out);
     assert_eq!(err["ok"], false);
     assert_eq!(err["error"]["code"], "find_my_auth_required");
     // The remediation is the hint, not part of the message.
@@ -432,36 +424,36 @@ fn find_my_password_needed_exits_3() {
 }
 
 #[test]
-fn server_errors_exit_5_and_other_http_errors_1() {
+fn server_errors_are_http_with_a_hint_and_other_http_errors_without() {
     let tmp = tempfile::tempdir().unwrap();
     let out = run_at(&answering(503), tmp.path(), &["devices"]);
-    assert_eq!(code(&out), 5, "{}", stderr(&out));
-    assert_eq!(envelope(&out.stdout)["error"]["code"], "http");
-    assert!(envelope(&out.stdout)["error"]["hint"].is_string());
+    let err = failure(&out);
+    assert_eq!(err["error"]["code"], "http");
+    assert!(err["error"]["hint"].is_string());
     let out = run_at(&answering(404), tmp.path(), &["devices"]);
-    assert_eq!(code(&out), 1, "{}", stderr(&out));
-    assert_eq!(envelope(&out.stdout)["error"]["code"], "http");
+    let err = failure(&out);
+    assert_eq!(err["error"]["code"], "http");
+    assert!(err["error"]["hint"].is_null(), "{err}");
 }
 
 #[test]
-fn offline_exits_5() {
+fn offline_is_code_offline_with_a_hint() {
     let tmp = tempfile::tempdir().unwrap();
     for args in [&["devices"][..], &["devices", "--json"], &["locate", "x", "--quiet"]] {
         let out = run_at("http://127.0.0.1:9", tmp.path(), args);
-        assert_eq!(code(&out), 5, "{args:?}: {}", stdout(&out));
-        let err = envelope(&out.stdout);
+        let err = failure(&out);
         assert_eq!(err["error"]["code"], "offline", "{err}");
         assert!(err["error"]["hint"].is_string(), "{err}");
-        assert!(out.stderr.is_empty(), "{}", stderr(&out));
+        assert_eq!(stderr(&out).lines().count(), 1, "{}", stderr(&out));
     }
     let out = styled_at("http://127.0.0.1:9", tmp.path(), &["devices"]);
-    assert_eq!(code(&out), 5);
+    assert_eq!(code(&out), 1);
     assert!(out.stdout.is_empty());
     assert!(stderr(&out).starts_with("error: offline: "), "{}", stderr(&out));
 }
 
 #[test]
-fn a_bad_answer_exits_5() {
+fn a_bad_answer_is_bad_response() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = tiny_http::Server::from_listener(listener, None).unwrap();
@@ -472,23 +464,22 @@ fn a_bad_answer_exits_5() {
     });
     let tmp = tempfile::tempdir().unwrap();
     let out = run_at(&base, tmp.path(), &["devices"]);
-    assert_eq!(code(&out), 5, "{}", stdout(&out));
-    assert_eq!(envelope(&out.stdout)["error"]["code"], "bad_response");
-    assert!(envelope(&out.stdout)["error"]["hint"].is_string());
+    let err = failure(&out);
+    assert_eq!(err["error"]["code"], "bad_response");
+    assert!(err["error"]["hint"].is_string());
 }
 
 #[test]
-fn signed_out_exits_3() {
+fn signed_out_is_sign_in_required() {
     // Mock mode has no daemon to confirm a 421 with: it means signed out.
     let tmp = tempfile::tempdir().unwrap();
     let out = styled_at(&answering(421), tmp.path(), &["devices"]);
-    assert_eq!(code(&out), 3, "{}", stderr(&out));
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
     let err = stderr(&out);
     assert!(err.starts_with("error: sign in to iCloud required"), "{err}");
     assert!(err.contains("\nhint: run `icloud-session sign-in`"), "{err}");
     let out = run_at(&answering(421), tmp.path(), &["devices"]);
-    assert_eq!(code(&out), 3);
-    let err = envelope(&out.stdout);
+    let err = failure(&out);
     assert_eq!(err["error"]["code"], "sign_in_required");
     assert!(
         err["error"]["hint"]
@@ -573,8 +564,9 @@ fn output_modes() {
     );
 }
 
-/// A machine-mode failure is one JSON document on stdout and nothing on
-/// stderr; a text-mode one is `error:` (and `hint:`) on stderr only.
+/// A machine-mode failure is the JSON error object on one line of stderr
+/// and nothing on stdout, which holds only results; a text-mode one is
+/// `error:` (and `hint:`) on stderr only. Either exits 1.
 #[test]
 fn errors_go_where_the_mode_says() {
     let env = start();
@@ -584,9 +576,8 @@ fn errors_go_where_the_mode_says() {
         &["locate", "nokia", "--count"],
     ] {
         let out = env.run(args);
-        assert_eq!(code(&out), 4, "{args:?}");
-        assert!(out.stderr.is_empty(), "{args:?}: {}", stderr(&out));
-        let err = envelope(&out.stdout);
+        let err = failure(&out);
+        assert_eq!(stderr(&out).lines().count(), 1, "{args:?}: {}", stderr(&out));
         // Parsed map order depends on serde_json's preserve_order (feature
         // unification); the byte check below pins `ok` first.
         let mut keys: Vec<&String> = err.as_object().unwrap().keys().collect();
@@ -595,14 +586,10 @@ fn errors_go_where_the_mode_says() {
         let mut fields: Vec<&String> = err["error"].as_object().unwrap().keys().collect();
         fields.sort();
         assert_eq!(fields, ["code", "hint", "message"]);
-        assert!(
-            stdout(&out).trim_start().starts_with("{\n  \"ok\": false,"),
-            "{}",
-            stdout(&out)
-        );
+        assert!(stderr(&out).starts_with("{\"ok\":false,"), "{}", stderr(&out));
     }
     let out = env.styled(&["locate", "nokia"]);
-    assert_eq!(code(&out), 4);
+    assert_eq!(code(&out), 1);
     assert!(out.stdout.is_empty());
     let err = stderr(&out);
     assert!(err.starts_with("error: no device matches \"nokia\"\nhint: "), "{err}");
@@ -624,4 +611,74 @@ fn the_command_line_binary_does_not_link_gtk() {
 #[test]
 fn no_command_runs_the_app_beside_it() {
     assert_no_command_runs_the_app(env!("CARGO_BIN_EXE_icloud-findmy"), "icloud-findmy");
+}
+
+/// `icloud-findmy open` is what the desktop entry runs: it becomes the
+/// window's binary (`$ICLOUD_FINDMY_APP` here, standing in for
+/// /usr/lib/icloud-findmy/icloud-findmy-app), with no arguments, and its
+/// exit is the window's. Help lists it, and help and the version need no
+/// display.
+#[test]
+fn open_runs_the_window_and_help_needs_no_display() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = tmp.path().join("icloud-findmy-app");
+    let marker = tmp.path().join("ran");
+    icloud_app::testing::write_script(
+        &app,
+        &format!("#!/bin/sh\necho \"$#\" > '{}'\nexit 0\n", marker.display()),
+    );
+    let run = |args: &[&str], app: &Path| {
+        // A test thread forking while the script was open for writing holds
+        // its fd until that child execs: "Text file busy" for a moment.
+        for _ in 0..50 {
+            let out = std::process::Command::new(env!("CARGO_BIN_EXE_icloud-findmy"))
+                .args(args)
+                .env("ICLOUD_FINDMY_APP", app)
+                .env("ICLOUD_SESSION_MOCK", "1")
+                .env("ICLOUD_SESSION_MOCK_URL", "http://127.0.0.1:9")
+                .env_remove("DISPLAY")
+                .env_remove("WAYLAND_DISPLAY")
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap();
+            if !stderr(&out).contains("Text file busy") {
+                return out;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("{} stayed busy", app.display());
+    };
+    let out = run(&["open"], &app);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(out.stdout.is_empty(), "{}", stdout(&out));
+    assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "0");
+
+    // No window to start is a failure like any other, on one line of stderr
+    // when piped.
+    let out = run(&["open"], &tmp.path().join("missing"));
+    assert_eq!(failure_code(&out), "error");
+    assert!(
+        failure(&out)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot open the app")
+    );
+    assert_eq!(stderr(&out).lines().count(), 1, "{}", stderr(&out));
+
+    for args in [&["--help"][..], &["help"]] {
+        let out = run(args, &app);
+        assert_eq!(code(&out), 0, "{args:?}");
+        let help = stdout(&out);
+        assert!(
+            help.lines()
+                .any(|l| l.trim_start().starts_with("open ") && l.contains("Open the Find My window")),
+            "{help}"
+        );
+    }
+    let out = run(&["open", "--help"], &app);
+    assert_eq!(code(&out), 0);
+    assert!(stdout(&out).contains("Usage: icloud-findmy open"), "{}", stdout(&out));
+    let out = run(&["--version"], &app);
+    assert_eq!(code(&out), 0);
+    assert!(stdout(&out).starts_with("icloud-findmy "), "{}", stdout(&out));
 }

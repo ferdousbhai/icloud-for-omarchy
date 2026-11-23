@@ -10,7 +10,10 @@
 #   bin/qa [notes|photos|findmy|reminders|<app>/dev/qa/<script>.jsonl ...]   (default: all four apps' scripts)
 #
 # A script fails on a command that fails, on GLib logging a warning or a critical, or on ending without `quit`; the
-# run then prints each command beside its answer and the app's output. A script's `shot`s are written under
+# run then prints each command beside its answer and the app's output. A script may instead close the windows with
+# omui's `{"do":"close"}`, so that the app ends by itself once its work is done, and end with a
+# command that cannot answer within omui's five seconds: a script <name>.after beside it then checks what the app
+# left (bash, with QA_ROOT the run's scratch root, its home/, config/, data/... and QA_FAKE_LOG the fake's output). A script's `shot`s are written under
 # target/qa/<app>/, the app's working directory.
 #   QA_TIMEOUT=120   seconds before one script's run is stopped
 #   QA_VERBOSE=1     the commands and answers, and the app's output, of a script that passed too
@@ -125,6 +128,12 @@ run() {
   app_pid=$!
   wait "$app_pid" || status=$?
   app_pid=""
+  # What the app left once it ended, for a script that ends it as a person would (`close`, then a command that
+  # never answers): <script>.after, run with the scratch root and the fake's log, must pass too.
+  if (( status == 0 )) && [[ -f ${script%.jsonl}.after ]]; then
+    QA_ROOT=$root QA_FAKE_LOG=$root/fake.log bash "${script%.jsonl}.after" >> "$root/app.log" 2>&1 || status=$?
+    (( status == 0 )) || echo "qa: $app/${script##*/}: its .after check failed" >&2
+  fi
   if (( status != 0 || ${QA_VERBOSE:-0} )); then
     # Each command beside its answer; the failure that ended the run comes last.
     grep -Ev '^[[:space:]]*(#|$)' "$script" | awk -v answers="$root/answers" '

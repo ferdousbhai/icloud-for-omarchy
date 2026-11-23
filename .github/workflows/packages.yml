@@ -1,5 +1,5 @@
 name: Native packages
-# Started by bin/release on the release tag; changes are checked locally by bin/check.
+# Started by bin/release on the release tag; every push is checked by check.yml, and locally by bin/check.
 on:
   workflow_dispatch:
 permissions:

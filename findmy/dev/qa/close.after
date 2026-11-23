@@ -1,0 +1,5 @@
+# After close.jsonl: the slow Lost Mode reached the fake with the number typed, and the fake had sent its answer before
+# the app ended (bin/qa runs this once the app has exited).
+set -euo pipefail
+grep -q 'lostDevice.* -> 200' "$QA_FAKE_LOG" || { echo "close.after: no Lost Mode reached the fake"; cat "$QA_FAKE_LOG"; exit 1; }
+grep -qx 'answered lostDevice' "$QA_FAKE_LOG" || { echo "close.after: the app ended before its Lost Mode was answered"; cat "$QA_FAKE_LOG"; exit 1; }

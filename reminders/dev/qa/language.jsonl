@@ -1,0 +1,60 @@
+# The shortcuts: F1 opens the overlay and Escape closes it; `?` opens and closes it while no text field has the
+# keyboard, and in the line that adds a reminder it is only a character typed.
+{"do":"wait","role":"list-item","name":"Milk","visible":true,"timeout_ms":15000}
+{"do":"key","keys":"F1"}
+{"do":"wait","dialog":"Keyboard shortcuts"}
+{"do":"wait","role":"label","name":"Add a reminder","visible":true}
+{"do":"shot","path":"shortcuts.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"focus","role":"list-item","name":"Milk"}
+{"do":"key","keys":"question"}
+{"do":"wait","dialog":"Keyboard shortcuts"}
+{"do":"key","keys":"question"}
+{"do":"wait","dialog":null}
+{"do":"key","keys":"<Control>n"}
+{"do":"wait","role":"text-box","name":"New reminder (Ctrl+N)","focused":true}
+{"do":"key","keys":"question"}
+{"do":"wait","role":"text-box","name":"New reminder (Ctrl+N)","text":"?"}
+{"do":"wait","dialog":null}
+{"do":"key","keys":"BackSpace"}
+{"do":"wait","role":"text-box","name":"New reminder (Ctrl+N)","text":""}
+
+# A reminder due tomorrow, all day, in Groceries: its row says "Tomorrow" in the language.
+{"do":"click","role":"list-item","name":"Groceries, 2"}
+{"do":"wait","role":"list-item","name":"Eggs","visible":true}
+{"do":"type","text":"Tea","role":"text-box","name":"New reminder (Ctrl+N)"}
+{"do":"type","text":"tomorrow","role":"text-box","name":"Due: tomorrow 9:00"}
+{"do":"key","keys":"Return"}
+{"do":"wait","role":"list-item","name":"Tea","visible":true}
+{"do":"wait","role":"label","name":"Tomorrow","visible":true}
+
+# Omarchy's language switched: the window's own text follows at once, the reminders' titles and the lists' names
+# (the user's) stay as they are.
+{"do":"language","code":"da","made_up":true}
+{"do":"wait","role":"toggle-button","name":"[da] Show Completed"}
+{"do":"wait","role":"button","name":"[da] Sync Now (Ctrl+R)"}
+{"do":"wait","role":"list-item","name":"[da] Upcoming, 5"}
+{"do":"wait","role":"list-item","name":"Groceries, 3"}
+{"do":"wait","role":"text-box","name":"[da] New reminder (Ctrl+N)"}
+{"do":"wait","role":"label","name":"[da] Tomorrow","visible":true}
+{"do":"wait","role":"list-item","name":"Tea","visible":true}
+{"do":"wait","role":"checkbox","name":"[da] Mark as Completed","in":{"role":"list-item","name":"Tea"}}
+{"do":"shot","path":"danish.png"}
+# Its dialog opens in the language too.
+{"do":"focus","role":"list-item","name":"Tea"}
+{"do":"key","keys":"Return"}
+{"do":"wait","dialog":"[da] Edit Reminder"}
+{"do":"wait","role":"text-box","name":"[da] Title","focused":true,"text":"Tea"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+
+# Right to left, and back to English.
+{"do":"language","code":"ar","made_up":true}
+{"do":"wait","role":"toggle-button","name":"[ar] Show Completed"}
+{"do":"shot","path":"arabic.png"}
+{"do":"language","code":"en"}
+{"do":"wait","role":"toggle-button","name":"Show Completed"}
+{"do":"wait","role":"list-item","name":"Upcoming, 5"}
+{"do":"wait","role":"label","name":"Tomorrow","visible":true}
+{"do":"quit"}

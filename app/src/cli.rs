@@ -1,38 +1,69 @@
 //! The apps' command-line helpers, on top of `icloud_session::output`.
 
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use icloud_session::cli::{EXIT_ERROR, EXIT_USAGE};
+use icloud_session::cli::EXIT_ERROR;
 use icloud_session::output::{self, CliError, Mode, SIGN_IN_HINT};
 use serde_json::Value;
 
 /// `main` of an app's command-line binary `name` (`icloud-reminders`): with
-/// a command it runs `cli`; with none it opens the app by running
-/// `<name>-app` in its place, from the same directory as this binary, else
-/// from `PATH`.
+/// a command it runs `cli`; with none it opens the app, as `name open` does
+/// ([`open_app`]).
 pub fn main(name: &str, cli: fn() -> u8) -> ! {
     if std::env::args_os().len() > 1 {
         std::process::exit(cli().into());
     }
-    let app_name = format!("{name}-app");
-    let app = std::env::current_exe()
-        .ok()
-        .map(|exe| exe.with_file_name(&app_name))
-        .filter(|p| p.is_file())
-        .unwrap_or_else(|| PathBuf::from(&app_name));
-    // Only returns on failure; on success the app replaces this process.
-    let err = Command::new(&app).exec();
-    eprintln!(
-        "{name}: cannot open the app ({}: {err}); run `{name} help` for the command line",
-        app.display()
-    );
+    let err = open_app(name);
+    eprintln!("{name}: {}; run `{name} help` for the command line", err.message);
     std::process::exit(EXIT_ERROR.into());
 }
 
+/// The window's binary of the app `name`, `<name>-app`. A package installs
+/// it as `/usr/lib/<name>/<name>-app`, beside nothing else, so that `name`
+/// is the one command on `PATH` (Omarchy's one name for the command, the
+/// package, the desktop entry, the icon and the window). In order:
+///
+/// - `$ICLOUD_<APP>_APP` (`ICLOUD_PHOTOS_APP`), for tests and development;
+/// - `../lib/<name>/<name>-app` from this executable's directory, which is
+///   `/usr/lib/<name>/` for `/usr/bin/<name>`;
+/// - `<name>-app` beside this executable (a cargo build, `target/debug/`);
+/// - `<name>-app` from `PATH` (the package keeps that command for scripts
+///   and key bindings written before the move).
+pub fn app_binary(name: &str) -> PathBuf {
+    let variable = format!("{}_APP", name.to_uppercase().replace('-', "_"));
+    if let Some(path) = std::env::var_os(&variable).filter(|p| !p.is_empty()) {
+        return path.into();
+    }
+    let exe = std::env::current_exe().ok();
+    app_binary_from(name, exe.as_deref().and_then(Path::parent))
+}
+
+/// [`app_binary`] after the variable, for an executable in `dir`.
+fn app_binary_from(name: &str, dir: Option<&Path>) -> PathBuf {
+    let app_name = format!("{name}-app");
+    let candidates = dir
+        .into_iter()
+        .flat_map(|dir| [dir.join("../lib").join(name).join(&app_name), dir.join(&app_name)]);
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from(&app_name))
+}
+
+/// Opens the app `name`'s window by running its binary ([`app_binary`]) in
+/// this process's place, with no arguments. Only returns when it could not,
+/// with why, for the caller to report as it reports its other failures.
+pub fn open_app(name: &str) -> CliError {
+    let app = app_binary(name);
+    // On success the window replaces this process.
+    let err = Command::new(&app).arg0(format!("{name}-app")).exec();
+    other(format!("cannot open the app ({}: {err})", app.display()))
+}
+
 pub fn usage(msg: impl Into<String>) -> CliError {
-    CliError::new("usage", EXIT_USAGE, msg)
+    CliError::new("usage", EXIT_ERROR, msg)
 }
 
 pub fn other(msg: impl Into<String>) -> CliError {
@@ -66,7 +97,7 @@ pub fn session_failure(e: &icloud_session::Error) -> CliError {
 
 /// Asks unless `yes`, and only when someone can answer
 /// ([`output::interactive`]: text mode, stdin and stdout a terminal);
-/// otherwise refuses (exit 2) without `--yes`.
+/// otherwise refuses (`usage`) without `--yes`.
 pub fn confirm(mode: Mode, cmd: &str, yes: bool, question: &str) -> Result<(), CliError> {
     if yes {
         return Ok(());
@@ -107,6 +138,26 @@ pub fn fold(s: &str) -> String {
 mod tests {
     use super::*;
 
+    /// A package puts the window under /usr/lib/<name>/, a cargo build
+    /// beside the command; with neither the command on PATH is run.
+    #[test]
+    fn the_app_binary_is_found_where_a_package_or_a_build_puts_it() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        let lib = root.path().join("lib/icloud-x");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&lib).unwrap();
+        assert_eq!(app_binary_from("icloud-x", Some(&bin)), PathBuf::from("icloud-x-app"));
+        assert_eq!(app_binary_from("icloud-x", None), PathBuf::from("icloud-x-app"));
+        std::fs::write(bin.join("icloud-x-app"), "").unwrap();
+        assert_eq!(app_binary_from("icloud-x", Some(&bin)), bin.join("icloud-x-app"));
+        std::fs::write(lib.join("icloud-x-app"), "").unwrap();
+        assert_eq!(
+            app_binary_from("icloud-x", Some(&bin)),
+            bin.join("../lib/icloud-x/icloud-x-app")
+        );
+    }
+
     #[test]
     fn only_the_sign_in_hint_is_swapped() {
         let http = |status| icloud_session::Error::Http {
@@ -114,10 +165,10 @@ mod tests {
             body: "x".into(),
         };
         let rejected = session_failure(&http(421));
-        assert_eq!((rejected.code.as_str(), rejected.exit), ("session_rejected", 3));
+        assert_eq!((rejected.code.as_str(), rejected.exit), ("session_rejected", 1));
         assert_eq!(rejected.hint, Some(sign_in_hint()));
         let offline = session_failure(&icloud_session::Error::Offline("x".into()));
-        assert_eq!((offline.code.as_str(), offline.exit), ("offline", 5));
+        assert_eq!((offline.code.as_str(), offline.exit), ("offline", 1));
         assert_eq!(offline.hint.as_deref(), Some(output::NETWORK_HINT));
         assert_eq!(session_failure(&http(404)).hint, None);
     }
@@ -126,7 +177,7 @@ mod tests {
     fn confirm_refuses_where_nobody_can_answer() {
         assert!(confirm(Mode::Json, "delete", true, "Delete?").is_ok());
         let e = confirm(Mode::Json, "delete", false, "Delete?").unwrap_err();
-        assert_eq!((e.code.as_str(), e.exit), ("usage", 2));
+        assert_eq!((e.code.as_str(), e.exit), ("usage", 1));
         assert_eq!(e.hint.as_deref(), Some("pass --yes to delete without asking"));
     }
 

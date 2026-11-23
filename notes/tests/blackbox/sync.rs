@@ -55,7 +55,7 @@ fn syncing_needs_a_cloned_vault_the_engine_and_a_sign_in_in_that_order() {
             .cmd([command])
             .env("ICLOUD_NOTES_SYNC_BIN", &nowhere)
             .run()
-            .fails(3, "not_cloned");
+            .fails("not_cloned");
         assert_eq!(message, format!("no notes cloned at {}", w.vault.display()));
     }
     w.state("in-body", &[], None);
@@ -66,24 +66,24 @@ fn syncing_needs_a_cloned_vault_the_engine_and_a_sign_in_in_that_order() {
             w.cmd([command])
                 .env("ICLOUD_NOTES_SYNC_BIN", &nowhere)
                 .run()
-                .fails(5, "sync_tool_missing");
+                .fails("sync_tool_missing");
             let held = w.hold_lock("Notes (pid 1)");
-            w.run([command]).fails(1, "vault_busy");
+            w.run([command]).fails("vault_busy");
             drop(held);
         }
     }
     for command in ["sync", "pull", "push"] {
-        let (message, hint) = w.run([command]).fails(3, "sign_in_required");
+        let (message, hint) = w.run([command]).fails("sign_in_required");
         assert_eq!(
             (message.as_str(), hint.as_str()),
             ("sign in to iCloud required", SIGN_IN_HINT)
         );
         w.text([command])
-            .fails_in_text(3, "sign in to iCloud required", SIGN_IN_HINT);
+            .fails_in_text("sign in to iCloud required", SIGN_IN_HINT);
     }
     w.session.stop();
     for command in ["sync", "pull", "push"] {
-        let (message, hint) = w.run([command]).fails(5, "session_service");
+        let (message, hint) = w.run([command]).fails("session_service");
         assert_eq!(
             (message.as_str(), hint.as_str()),
             (
@@ -96,7 +96,7 @@ fn syncing_needs_a_cloned_vault_the_engine_and_a_sign_in_in_that_order() {
         .cmd(["sync"])
         .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/bus")
         .run();
-    no_bus.fails(5, "session_service");
+    no_bus.fails("session_service");
     // The engine ran for none of it, and nobody was asked to sign in.
     assert_eq!(w.stub_log(), [""; 0]);
     assert_eq!((w.session.sign_ins(), w.session.reports()), (0, 0));
@@ -199,41 +199,37 @@ fn no_network_is_said_in_this_tools_words() {
     let offline = error("offline", "offline: dns error: no network");
     let sync = stub(w.cmd(["sync"]), &[("OFFLINE", "1")]).run();
     assert_eq!(
-        failed(&sync, 5, "offline"),
+        failed(&sync, 1, "offline"),
         json!({
             "ok": false,
             "error": {"code": "offline", "message": OFFLINE, "hint": NETWORK_HINT},
             // The pull was left out: it is reported as failing the way the push did.
-            "runs": [ran("push", 5, offline.clone()), ran("pull", 5, offline)],
-            "log": format!("$ icloud-notes-sync --quiet sync\n(exit 5)\npush: {OFFLINE}; the next sync tries again."),
+            "runs": [ran("push", 1, offline.clone()), ran("pull", 1, offline)],
+            "log": format!("$ icloud-notes-sync --quiet sync\n(exit 1)\npush: {OFFLINE}; the next sync tries again."),
         })
     );
     assert_eq!(sync.summary(), format!("sync failed: {OFFLINE}"));
     // In text: the log on stdout, the failure on stderr.
     let text = stub(w.cmd(["sync"]).styled(), &[("OFFLINE", "1")]).run();
-    assert_eq!(text.code, 5);
+    assert_eq!(text.code, 1);
     assert_eq!(
         text.out,
-        format!("$ icloud-notes-sync --quiet sync\n(exit 5)\npush: {OFFLINE}; the next sync tries again.\n")
+        format!("$ icloud-notes-sync --quiet sync\n(exit 1)\npush: {OFFLINE}; the next sync tries again.\n")
     );
     assert_eq!(text.err, format!("error: {OFFLINE}\nhint: {NETWORK_HINT}\n"));
     // A pull alone: the engine's error document, whatever its layout and key order.
     let pull = stub(w.cmd(["pull"]), &[("OFFLINE", "1")]).run();
-    let data = failed(&pull, 5, "offline");
+    let data = failed(&pull, 1, "offline");
     assert_eq!(
         data["error"],
         json!({"code": "offline", "message": OFFLINE, "hint": NETWORK_HINT})
     );
     assert_eq!(
         data["log"],
-        format!("$ icloud-notes-sync --json pull\n(exit 5)\npull: {OFFLINE}; the next sync tries again.")
+        format!("$ icloud-notes-sync --json pull\n(exit 1)\npull: {OFFLINE}; the next sync tries again.")
     );
     assert_eq!(
-        failed(
-            &stub(w.cmd(["sync"]), &[("PUSH_FAIL", "network:5")]).run(),
-            5,
-            "network"
-        )["error"]["hint"],
+        failed(&stub(w.cmd(["sync"]), &[("PUSH_FAIL", "network")]).run(), 1, "network")["error"]["hint"],
         NETWORK_HINT
     );
     assert_eq!(w.session.reports(), 0);
@@ -243,7 +239,7 @@ fn no_network_is_said_in_this_tools_words() {
 fn the_engines_own_error_comes_through_with_its_exit() {
     let Some(w) = World::seeded() else { return };
     let mismatch = [
-        ("EXIT", "3"),
+        ("EXIT", "1"),
         ("ERROR", "account_mismatch"),
         ("MESSAGE", "another account's vault"),
         ("HINT", "use its own vault"),
@@ -253,34 +249,34 @@ fn the_engines_own_error_comes_through_with_its_exit() {
     // error. Its stderr is in the log.
     let sync = stub(w.cmd(["sync"]), &mismatch).run();
     assert_eq!(
-        failed(&sync, 3, "account_mismatch"),
+        failed(&sync, 1, "account_mismatch"),
         json!({
             "ok": false,
             "error": said,
-            "runs": [ran("push", 3, json!({"error": said})), ran("pull", 3, json!({"error": said}))],
-            "log": "$ icloud-notes-sync --quiet sync\nstub: failing with account_mismatch\n(exit 3)\n\
+            "runs": [ran("push", 1, json!({"error": said})), ran("pull", 1, json!({"error": said}))],
+            "log": "$ icloud-notes-sync --quiet sync\nstub: failing with account_mismatch\n(exit 1)\n\
                     sync failed: another account's vault\nuse its own vault",
         })
     );
     assert_eq!(sync.summary(), "sync failed: another account's vault");
     assert_eq!(
-        failed(&stub(w.cmd(["pull"]), &mismatch).run(), 3, "account_mismatch")["error"],
+        failed(&stub(w.cmd(["pull"]), &mismatch).run(), 1, "account_mismatch")["error"],
         said
     );
     let text = stub(w.cmd(["push"]).styled(), &mismatch).run();
     assert_eq!(
         (text.code, text.err.as_str()),
-        (3, "error: another account's vault\nhint: use its own vault\n")
+        (1, "error: another account's vault\nhint: use its own vault\n")
     );
     assert!(
         text.out
-            .ends_with("(exit 3)\npush failed: another account's vault\nuse its own vault\n"),
+            .ends_with("(exit 1)\npush failed: another account's vault\nuse its own vault\n"),
         "{text:#?}"
     );
     // Not a sign-in, whatever the exit code says.
     assert_eq!(w.session.reports(), 0);
-    let unavailable = stub(w.cmd(["pull"]), &[("EXIT", "5"), ("ERROR", "cloudkit_request_failed")]).run();
-    let data = failed(&unavailable, 5, "cloudkit_request_failed");
+    let unavailable = stub(w.cmd(["pull"]), &[("EXIT", "1"), ("ERROR", "cloudkit_request_failed")]).run();
+    let data = failed(&unavailable, 1, "cloudkit_request_failed");
     assert_eq!(
         data["error"],
         json!({"code": "cloudkit_request_failed", "message": "stub failure"})
@@ -291,21 +287,21 @@ fn the_engines_own_error_comes_through_with_its_exit() {
 fn the_worse_half_of_a_sync_decides() {
     let Some(w) = World::seeded() else { return };
     let halves = |push: &str, pull: &str| stub(w.cmd(["sync"]), &[("PUSH_FAIL", push), ("PULL_FAIL", pull)]).run();
-    // The higher exit code; 3 beats every other; a tie goes to the pull.
+    // Every failure exits 1, so the code decides: one a person must fix
+    // beats every other, a specific reason beats the generic error, and a
+    // tie goes to the pull.
+    failed(&halves("cloudkit_request_failed", "bad_response"), 1, "bad_response");
     failed(
-        &halves("cloudkit_request_failed:1", "bad_response:5"),
-        5,
-        "bad_response",
+        &halves("bad_response", "cloudkit_request_failed"),
+        1,
+        "cloudkit_request_failed",
     );
-    failed(
-        &halves("bad_response:5", "cloudkit_request_failed:1"),
-        5,
-        "bad_response",
-    );
-    failed(&halves("bad_response:5", "account_mismatch:3"), 3, "account_mismatch");
-    failed(&halves("account_mismatch:3", "bad_response:5"), 3, "account_mismatch");
-    let tie = halves("first:4", "second:4");
-    let data = failed(&tie, 4, "second");
+    failed(&halves("too_many_deletions", "internal"), 1, "too_many_deletions");
+    failed(&halves("internal", "network"), 1, "network");
+    failed(&halves("bad_response", "account_mismatch"), 1, "account_mismatch");
+    failed(&halves("account_mismatch", "bad_response"), 1, "account_mismatch");
+    let tie = halves("first", "second");
+    let data = failed(&tie, 1, "second");
     assert_eq!(
         data["error"],
         json!({"code": "second", "message": "stub pull failed with second"})
@@ -313,17 +309,17 @@ fn the_worse_half_of_a_sync_decides() {
     assert_eq!(
         data["runs"],
         json!([
-            ran("push", 4, error("first", "stub push failed with first")),
-            ran("pull", 4, error("second", "stub pull failed with second"))
+            ran("push", 1, error("first", "stub push failed with first")),
+            ran("pull", 1, error("second", "stub pull failed with second"))
         ])
     );
     assert_eq!(
         data["log"],
-        "$ icloud-notes-sync --quiet sync\n(exit 4)\npush failed: stub push failed with first\npull failed: stub pull failed with second"
+        "$ icloud-notes-sync --quiet sync\n(exit 1)\npush failed: stub push failed with first\npull failed: stub pull failed with second"
     );
     // One half failing fails the sync, with the other half's result kept.
-    let one = stub(w.cmd(["sync"]), &[("PULL_FAIL", "bad_response:5")]).run();
-    let data = failed(&one, 5, "bad_response");
+    let one = stub(w.cmd(["sync"]), &[("PULL_FAIL", "bad_response")]).run();
+    let data = failed(&one, 1, "bad_response");
     assert_eq!(data["runs"][0], ran("push", 0, json!({"stub": "push", "ok": true})));
 }
 
@@ -385,33 +381,35 @@ fn a_refused_sign_in_is_reported_to_icloud_session() {
         json!({"error": {"code": "sign_in_required", "message": "sign in to iCloud required", "hint": SIGN_IN_HINT}});
     let pull = stub(w.cmd(["pull"]), &[("EXPIRED", "1")]).run();
     assert_eq!(
-        failed(&pull, 3, "sign_in_required"),
+        failed(&pull, 1, "sign_in_required"),
         json!({
             "ok": false,
             "error": {"code": "sign_in_required", "message": message, "hint": SIGN_IN_HINT},
-            "runs": [ran("pull", 3, engine_said.clone())],
-            "log": format!("$ icloud-notes-sync --json pull\n(exit 3)\npull failed: sign in to iCloud required\n{SIGN_IN_HINT}"),
+            "runs": [ran("pull", 1, engine_said.clone())],
+            "log": format!("$ icloud-notes-sync --json pull\n(exit 1)\npull failed: sign in to iCloud required\n{SIGN_IN_HINT}"),
         })
     );
     assert_eq!(w.session.reports(), 1);
     // In a sync the pull is not run after it, and not reported.
     let sync = stub(w.cmd(["sync"]), &[("EXPIRED", "1")]).run();
     assert_eq!(
-        failed(&sync, 3, "sign_in_required")["runs"],
-        json!([ran("push", 3, engine_said)])
+        failed(&sync, 1, "sign_in_required")["runs"],
+        json!([ran("push", 1, engine_said)])
     );
     assert_eq!(sync.summary(), format!("sync failed: {message}"));
     assert_eq!(w.session.reports(), 2);
-    // Exit 3 with no error document at all is taken for one too.
+    // A failure with no error document says nothing of a sign-in, whatever
+    // its text: every failure exits 1, so only the code could. It is a
+    // failed pull, and nobody is told.
     let bare = stub(w.cmd(["pull"]), &[("EXPIRED", "1"), ("SIGNIN", "code")]).run();
-    let data = failed(&bare, 3, "sign_in_required");
-    assert_eq!(data["error"]["message"], message);
-    assert_eq!(data["runs"], json!([ran("pull", 3, Value::Null)]));
+    let data = failed(&bare, 1, "sync_failed");
+    assert_eq!(data["error"]["message"], "pull failed; see the log");
+    assert_eq!(data["runs"], json!([ran("pull", 1, Value::Null)]));
     assert_eq!(
         data["log"],
-        "$ icloud-notes-sync --json pull\nsign in to iCloud required\n(exit 3)"
+        "$ icloud-notes-sync --json pull\nsign in to iCloud required\n(exit 1)"
     );
-    assert_eq!(w.session.reports(), 3);
+    assert_eq!(w.session.reports(), 2);
     assert_eq!(w.session.sign_ins(), 0, "a command never opens the sign-in window");
 }
 
@@ -420,7 +418,7 @@ fn a_session_apple_rejected_is_not_reported_again() {
     let Some(w) = World::seeded() else { return };
     let rejected = "Apple refused the iCloud session although icloud-sessiond still holds it (HTTP 401)";
     let pull = stub(w.cmd(["pull"]), &[("EXPIRED", "1"), ("SIGNIN", "rejected")]).run();
-    let data = failed(&pull, 3, "session_rejected");
+    let data = failed(&pull, 1, "session_rejected");
     assert_eq!(
         data["error"],
         json!({"code": "session_rejected", "message": rejected, "hint": SIGN_IN_HINT})
@@ -430,12 +428,12 @@ fn a_session_apple_rejected_is_not_reported_again() {
     let both = stub(
         w.cmd(["sync"]),
         &[
-            ("PUSH_FAIL", "cloudkit_request_failed:1"),
-            ("PULL_FAIL", "session_rejected:3"),
+            ("PUSH_FAIL", "cloudkit_request_failed"),
+            ("PULL_FAIL", "session_rejected"),
         ],
     )
     .run();
-    let data = failed(&both, 3, "session_rejected");
+    let data = failed(&both, 1, "session_rejected");
     assert_eq!(
         data["error"],
         json!({"code": "session_rejected", "message": "stub pull failed with session_rejected"})
@@ -453,10 +451,10 @@ fn a_sign_in_icloud_session_vouches_for_is_tried_once_more() {
     // the failure reported.
     let retried = stub(
         w.cmd(["pull"]),
-        &[("EXPIRED", "pull"), ("PULL_FAIL", "cloudkit_transient:5")],
+        &[("EXPIRED", "pull"), ("PULL_FAIL", "cloudkit_transient")],
     )
     .run();
-    let data = failed(&retried, 5, "cloudkit_transient");
+    let data = failed(&retried, 1, "cloudkit_transient");
     let commands: Vec<&str> = data["runs"]
         .as_array()
         .unwrap()
@@ -468,7 +466,7 @@ fn a_sign_in_icloud_session_vouches_for_is_tried_once_more() {
     assert_eq!(w.stub_log(), ["pull", "sync"]);
     // Still refused after the retry: reported once more, and that is all.
     let again = stub(w.cmd(["sync"]), &[("EXPIRED", "1")]).run();
-    failed(&again, 3, "sign_in_required");
+    failed(&again, 1, "sign_in_required");
     assert_eq!(w.stub_log(), ["pull", "sync", "sync", "sync"]);
     assert_eq!(w.session.reports(), 3);
 }
@@ -482,7 +480,7 @@ fn only_a_yes_on_sync_or_push_confirms_mass_deletions() {
     let message = "5 of the 6 notes tracked here have no file any more (or an empty one). Pushing that would move them all to \
                    Recently Deleted, so nothing was pushed.";
     let sync = stub(w.cmd(["sync"]), &too_many).run();
-    let data = failed(&sync, 2, "too_many_deletions");
+    let data = failed(&sync, 1, "too_many_deletions");
     // The engine's message and hint, whose commands are this tool's.
     assert_eq!(data["error"]["message"], message);
     let hint = data["error"]["hint"].as_str().unwrap();
@@ -496,14 +494,14 @@ fn only_a_yes_on_sync_or_push_confirms_mass_deletions() {
         (&json!(false), &json!(true))
     );
     let push = stub(w.cmd(["push"]), &too_many).run();
-    assert_eq!(failed(&push, 2, "too_many_deletions")["error"], data["error"]);
+    assert_eq!(failed(&push, 1, "too_many_deletions")["error"], data["error"]);
     let text = stub(w.cmd(["push"]).styled(), &too_many).run();
-    assert_eq!((text.code, text.err), (2, format!("error: {message}\nhint: {hint}\n")));
+    assert_eq!((text.code, text.err), (1, format!("error: {message}\nhint: {hint}\n")));
     // A change's --push never confirms them.
     let changed = stub(w.cmd(["toggle", "alpha", "2", "--push"]), &too_many).run();
     assert_eq!(
         (changed.code, &changed.data()["sync"]["error"]["code"]),
-        (2, &json!("too_many_deletions"))
+        (1, &json!("too_many_deletions"))
     );
     let background = stub(w.cmd(["--sync"]), &too_many).run();
     assert_eq!(background.code, 1);
@@ -551,7 +549,7 @@ fn a_change_with_push_syncs_after_it_under_the_same_lock() {
     }
     assert_eq!(w.stub_log().len(), 12);
     // A change that was refused syncs nothing.
-    w.run(["toggle", "beta", "1", "--push"]).fails(1, "not_a_list_item");
+    w.run(["toggle", "beta", "1", "--push"]).fails("not_a_list_item");
     assert_eq!(w.stub_log().len(), 12);
 }
 
@@ -560,7 +558,7 @@ fn a_change_stays_done_when_its_push_fails() {
     let Some(mut w) = World::seeded() else { return };
     // The sync ran and failed: its result, with the failure in it.
     let offline = stub(w.cmd(["new", "Offline", "--push"]), &[("OFFLINE", "1")]).run();
-    assert_eq!((offline.code, offline.err.as_str()), (5, ""));
+    assert_eq!((offline.code, offline.err.as_str()), (1, ""));
     let data = offline.data();
     assert_eq!(
         data["sync"]["error"],
@@ -573,10 +571,10 @@ fn a_change_stays_done_when_its_push_fails() {
     assert_eq!(offline.summary(), "Created Notes/Offline.md; not synced");
     assert_eq!(w.read("Notes/Offline.md"), "# Offline\n");
     let text = stub(w.cmd(["new", "Offline 2", "--push"]).styled(), &[("OFFLINE", "1")]).run();
-    assert_eq!(text.code, 5);
+    assert_eq!(text.code, 1);
     assert!(
         text.out
-            .starts_with("Created Notes/Offline 2.md\n$ icloud-notes-sync --quiet sync\n(exit 5)\n"),
+            .starts_with("Created Notes/Offline 2.md\n$ icloud-notes-sync --quiet sync\n(exit 1)\n"),
         "{text:#?}"
     );
     assert_eq!(
@@ -586,7 +584,7 @@ fn a_change_stays_done_when_its_push_fails() {
     // The sync never started: only the failure.
     w.session.set_signed_in(false);
     let signed_out = w.run(["write", "offline", "--body", "# Offline\nkept\n", "--push"]);
-    assert_eq!(signed_out.code, 3);
+    assert_eq!(signed_out.code, 1);
     let data = signed_out.data();
     assert_eq!((&data["action"], &data["changed"]), (&json!("write"), &json!(true)));
     assert_eq!(
@@ -602,7 +600,7 @@ fn a_change_stays_done_when_its_push_fails() {
     let unknown = w.run(["toggle", "alpha", "2", "--push"]);
     assert_eq!(
         (unknown.code, &unknown.data()["sync"]["error"]["code"]),
-        (5, &json!("session_service"))
+        (1, &json!("session_service"))
     );
     let missing = w
         .cmd(["toggle", "alpha", "2", "--push"])
@@ -610,7 +608,7 @@ fn a_change_stays_done_when_its_push_fails() {
         .run();
     assert_eq!(
         (missing.code, &missing.data()["sync"]["error"]["code"]),
-        (5, &json!("sync_tool_missing"))
+        (1, &json!("sync_tool_missing"))
     );
     assert_eq!(w.stub_log(), ["sync", "sync"]);
 }
@@ -637,7 +635,7 @@ fn clone_fills_a_new_vault_as_the_signed_in_account() {
         })
     );
     assert_eq!(cloned.summary(), "clone done");
-    assert_eq!(w.run(["clone", "--count"]).code, 2, "cloned once");
+    assert_eq!(w.run(["clone", "--count"]).code, 1, "cloned once");
     let ran_engine = fs::read_to_string(&log).unwrap();
     assert!(
         ran_engine.contains(&format!("cwd={vault} lock=yes argv={command}\n")),
@@ -645,7 +643,7 @@ fn clone_fills_a_new_vault_as_the_signed_in_account() {
     );
     assert_eq!(w.read("Notes/Cloned.md"), "---\napple-note-id: id-c\n---\n# Cloned\n");
     assert_eq!(w.run(["--ids-only", "list"]).out, "Notes/Cloned.md\n");
-    let (message, hint) = w.run(["clone"]).fails(2, "already_cloned");
+    let (message, hint) = w.run(["clone"]).fails("already_cloned");
     assert_eq!(message, format!("{vault} is already cloned"));
     assert_eq!(hint, "Run `icloud-notes pull` to fetch what changed.");
 }
@@ -654,7 +652,7 @@ fn clone_fills_a_new_vault_as_the_signed_in_account() {
 fn clone_signed_out_does_nothing_but_make_the_directory() {
     let Some(w) = World::new() else { return };
     w.session.set_signed_in(false);
-    w.run(["clone"]).fails(3, "sign_in_required");
+    w.run(["clone"]).fails("sign_in_required");
     assert!(w.vault.is_dir() && !w.exists(".icloud-notes"));
     assert_eq!(w.session.sign_ins(), 0, "never a sign-in window");
 }

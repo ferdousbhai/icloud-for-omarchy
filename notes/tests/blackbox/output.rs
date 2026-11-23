@@ -195,16 +195,16 @@ fn a_failure_is_the_error_object_in_every_machine_mode() {
     ] {
         let said = w
             .run(flags.iter().copied().chain(["read", "nothing like it"]))
-            .fails(4, "not_found");
+            .fails("not_found");
         assert_eq!((said.0.as_str(), said.1.as_str()), (message, hint), "{flags:?}");
     }
-    w.text(["read", "nothing like it"]).fails_in_text(4, message, hint);
+    w.text(["read", "nothing like it"]).fails_in_text(message, hint);
     // A failure with no hint has no `hint` key (fails() checks), and no hint: line.
-    let (said, hint) = w.json(["toggle", "alpha", "1"]).fails(1, "not_a_list_item");
+    let (said, hint) = w.json(["toggle", "alpha", "1"]).fails("not_a_list_item");
     assert_eq!(
         (said.as_str(), hint.as_str()),
         ("line 1 of Notes/Alpha.md is not a list item", "")
     );
     w.text(["toggle", "alpha", "1"])
-        .fails_in_text(1, "line 1 of Notes/Alpha.md is not a list item", "");
+        .fails_in_text("line 1 of Notes/Alpha.md is not a list item", "");
 }

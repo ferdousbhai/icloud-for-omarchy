@@ -107,11 +107,13 @@ half, so a note renamed here and edited elsewhere is settled in one sync
 run's entries in the half, with its error. A `push` by itself still
 refuses it. Its data holds both results plus vault-info's answer, a
 failed half's error included (no separate error object); the process exits
-with the worse half (`Response::exit`).
+1 when either half failed (`Response::exit`), each half's error code saying
+why.
 icloud-session's `Offline` and `Network` errors are the errors `offline` and
 `network`, its `Service` and `KeyringUnavailable` the errors `session_service`
-and `keyring_unavailable` (all exit 5, with a hint) rather than `internal`
-(exit 1). The run exits 3 if either half did, else the higher half's code.
+and `keyring_unavailable` (each with a hint) rather than `internal`. Every
+failure exits 1, as Omarchy's command lines do; the code is what tells them
+apart.
 
 In a machine mode (`--json`, `--quiet`, piped), progress goes to stderr as
 `icloud-notes:progress:...` lines
@@ -592,7 +594,7 @@ count) and refuses the whole run, before sending anything,
 when they are more than 3 and more than half of the account's own notes
 tracked (`push::too_many_deletions`, the rule icloud-reminders' folder
 applies to a list; notes someone else shares are never deleted from here,
-so they don't count): the error `too_many_deletions`, exit 2, with a hint. `push --yes` and
+so they don't count): the error `too_many_deletions`, with a hint. `push --yes` and
 `sync --yes` (`PushOptions::allow_deletes`) push it. `status` and `push
 --dry-run` list the deletions as before and add a warning. In a `sync` it is
 the push half's error; the pull still runs (it never writes a deleted note's
@@ -1018,7 +1020,7 @@ The Notes app guards the other end (`notes/src/notesbackend.cpp`
 attachment the note lists is never autosaved; Ctrl+S asks "Save anyway?"
 with "This removes the attachment NAME from this note on all your
 devices.". `icloud-notes write` refuses such text without `--yes`
-(`usage`, exit 2), as does `detach`.
+(`usage`), as does `detach`.
 
 Not measured against a real account: that an update carrying only
 `Deleted` (no other field) is accepted for these two record types (Apple's

@@ -11,6 +11,12 @@
 //! JSON body): `GET /fake/actions` lists them, so a test or an agent can
 //! check what the app sent without a real device ringing.
 //!
+//! A `lostDevice` whose phone number is [`SLOW_PHONE`] is answered only
+//! after [`SLOW`], and the fake prints `answered lostDevice` once it has
+//! sent that answer: the window's QA script closes the window while such a
+//! request is on its way, and its `.after` check reads the line to see that
+//! the app stayed until its request was answered.
+//!
 //! `POST /fake/sign-out` answers every Find My request 421 (signed out), and
 //! `POST /fake/find-my-password` answers them 450 (Find My wants the Apple
 //! password), until the app's Sign In (`/mock/reauthenticate`).
@@ -18,9 +24,17 @@
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use icloud_session::time::now_ms;
 use serde_json::{Value, json};
+
+/// The phone number that makes a `lostDevice` slow.
+const SLOW_PHONE: &str = "+1 555 0199";
+/// How long a slow `lostDevice` waits before it is answered: longer than an
+/// app that did not wait would take to end, well inside a QA command's five
+/// seconds.
+const SLOW: Duration = Duration::from_secs(2);
 
 /// One server's state: how far the iPhone has walked, and the actions sent.
 #[derive(Default)]
@@ -98,6 +112,9 @@ fn route(state: &State, path: &str, sent: &Value) -> (u16, Value) {
         }
         "/fmipservice/client/web/lostDevice" => {
             record("lostDevice");
+            if sent["ownerNbr"] == SLOW_PHONE {
+                std::thread::sleep(SLOW);
+            }
             (200, fixture("lostDevice"))
         }
         "/fake/actions" => (200, json!(state.actions())),
@@ -127,11 +144,17 @@ fn handle(mut request: tiny_http::Request, state: &State) -> std::io::Result<()>
     eprintln!("{} {} -> {status} {device}", request.method(), request.url());
 
     let header = tiny_http::Header::from_bytes("Content-Type", "application/json").expect("header");
+    let path = request.url().split('?').next().unwrap_or_default();
+    let endpoint = path.rsplit('/').next().unwrap_or_default().to_owned();
     request.respond(
         tiny_http::Response::from_data(serde_json::to_vec(&reply)?)
             .with_status_code(status)
             .with_header(header),
-    )
+    )?;
+    if matches!(endpoint.as_str(), "playSound" | "lostDevice") {
+        eprintln!("answered {endpoint}");
+    }
+    Ok(())
 }
 
 /// Serves requests on `listener` forever, one thread per request, recording

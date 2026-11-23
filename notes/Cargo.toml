@@ -31,12 +31,13 @@ required-features = ["ui"]
 
 [features]
 default = ["ui"]
-ui = ["dep:gtk", "dep:omui", "dep:async-channel", "dep:cairo-rs", "dep:pangocairo"]
+ui = ["dep:icloud-app-ui", "dep:gtk", "dep:omui", "dep:async-channel", "dep:cairo-rs", "dep:pangocairo"]
 # The window driven by a script (bin/qa): omui's scripted QA, which a release build leaves out.
-qa = ["ui", "omui/qa"]
+qa = ["ui", "omui/qa", "icloud-app-ui/qa"]
 
 # tests/blackbox/ drives the icloud-notes binary ICLOUD_NOTES_BIN names, as
-# a separate process (bin/check names the one built here).
+# a separate process (bin/check names the one built here). Without one it
+# fails; ICLOUD_NOTES_BLACKBOX=skip leaves it out of a run, but not in CI.
 [[test]]
 name = "blackbox"
 path = "tests/blackbox/main.rs"
@@ -58,6 +59,9 @@ rustix = { version = "1", features = ["fs", "process"] }
 serde_json.workspace = true
 # ReportSignInRequired, which icloud-session's API keeps to itself.
 zbus.workspace = true
+# The application under the one name, the catalog test, and with `qa` the QA scripts' language switch and close
+# (app/ui/): the window's alone.
+icloud-app-ui = { workspace = true, optional = true }
 gtk = { workspace = true, optional = true }
 omui = { workspace = true, optional = true }
 async-channel = { workspace = true, optional = true }

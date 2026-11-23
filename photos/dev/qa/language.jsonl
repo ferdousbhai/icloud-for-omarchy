@@ -1,0 +1,31 @@
+# The window follows a switch of language as it runs (omui's QA `language` with `made_up` gives every string a made-up
+# translation, "[da] ..."): the tooltips, the albums and their counts, the month headers (a format the catalog
+# holds), the viewer's place in the album, and back again. Album and file names are the user's, and stay.
+{"do":"wait","role":"progress-bar","name":"Loading","visible":false,"timeout_ms":30000}
+{"do":"wait","role":"button","name":"Sync Now (Ctrl+R)","visible":true}
+{"do":"wait","role":"label","name":"September 2026","visible":true}
+{"do":"language","code":"da","made_up":true}
+{"do":"wait","role":"button","name":"[da] Sync Now (Ctrl+R)","visible":true}
+{"do":"wait","role":"button","name":"[da] Upload Photos (Ctrl+U)","visible":true}
+{"do":"wait","role":"list-item","name":"[da] All Photos, 120","visible":true}
+{"do":"wait","role":"list-item","name":"Trips, 40","visible":true}
+{"do":"wait","role":"label","name":"[da] September 2026","visible":true}
+{"do":"wait","role":"button","name":"IMG_1120.JPG","visible":true}
+{"do":"shot","path":"language-da.png"}
+{"do":"click","role":"button","name":"IMG_1120.JPG"}
+{"do":"wait","role":"label","name":"[da] 1 of 120","visible":true}
+{"do":"wait","role":"button","name":"[da] Delete (Del)","visible":true}
+
+# Switched while the viewer is open: its line and buttons follow at once.
+{"do":"language","code":"ar","made_up":true}
+{"do":"wait","role":"label","name":"[ar] 1 of 120","visible":true}
+{"do":"wait","role":"button","name":"[ar] Delete (Del)","visible":true}
+{"do":"shot","path":"language-ar-viewer.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","role":"list-item","name":"[ar] All Photos, 120","visible":true}
+{"do":"shot","path":"language-ar.png"}
+{"do":"language","code":"en"}
+{"do":"wait","role":"button","name":"Sync Now (Ctrl+R)","visible":true}
+{"do":"wait","role":"list-item","name":"All Photos, 120","visible":true}
+{"do":"wait","role":"label","name":"September 2026","visible":true}
+{"do":"quit"}

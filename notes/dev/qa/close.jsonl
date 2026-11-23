@@ -1,0 +1,54 @@
+# Notes on a scratch vault and the stub engine: undo in the note, and closing with edits that cannot be saved.
+{"do":"wait","role":"list-item","name":"Notes","visible":true}
+{"do":"wait","role":"label","name":"Ready.","visible":true}
+{"do":"key","keys":"Down"}
+{"do":"key","keys":"Right"}
+{"do":"wait","role":"list-item","name":"Trip ideas","visible":true}
+{"do":"key","keys":"Down"}
+{"do":"key","keys":"Down"}
+{"do":"key","keys":"Return"}
+{"do":"wait","role":"text-box","name":"Note","focused":true,"text":"# Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
+
+# Opening the note is not an edit: Ctrl+Z right away leaves it as it is, never empty or the note shown before.
+{"do":"key","keys":"<Control>z"}
+{"do":"wait","role":"text-box","name":"Note","text":"# Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
+{"do":"wait","role":"label","name":"● unsaved","visible":false}
+
+# Ctrl+Z takes back what was typed and Ctrl+Shift+Z brings it again, GTK's own undo of the text. Undone back to the
+# saved text, the note is not unsaved: that is decided by the text, not by counting edits.
+{"do":"type","text":"x"}
+{"do":"wait","role":"text-box","name":"Note","text":"x# Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
+{"do":"key","keys":"<Control>z"}
+{"do":"wait","role":"text-box","name":"Note","text":"# Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
+{"do":"key","keys":"<Control><Shift>z"}
+{"do":"wait","role":"text-box","name":"Note","text":"x# Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
+{"do":"key","keys":"<Control>z"}
+{"do":"wait","role":"text-box","name":"Note","text":"# Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
+{"do":"wait","role":"label","name":"● unsaved","visible":false}
+
+# A conflict marker is an edit the guardrails hold back, so autosave leaves it in the editor.
+{"do":"type","text":"<<<<<<< "}
+{"do":"wait","role":"text-box","name":"Note","text":"<<<<<<< # Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
+{"do":"wait","role":"label","name":"● unsaved","visible":true}
+
+# Ctrl+W closes through the window's guard, which asks before the edits go. Escape answers with what loses nothing:
+# the window stays, and so do the edits.
+{"do":"key","keys":"<Control>w"}
+{"do":"wait","dialog":"Discard your unsaved edits?"}
+{"do":"shot","path":"discard.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"wait","role":"text-box","name":"Note","visible":true,"text":"<<<<<<< # Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
+
+# Ctrl+Q asks the same, and Enter is Keep Editing too: the button that discards is never the default.
+{"do":"key","keys":"<Control>q"}
+{"do":"wait","dialog":"Discard your unsaved edits?"}
+{"do":"key","keys":"Return"}
+{"do":"wait","dialog":null}
+{"do":"wait","role":"text-box","name":"Note","visible":true,"text":"<<<<<<< # Trip ideas\nKyoto in spring for the cherry blossoms.\n"}
+{"do":"key","keys":"<Control>q"}
+{"do":"wait","dialog":"Discard your unsaved edits?"}
+{"do":"click","role":"button","name":"Keep Editing"}
+{"do":"wait","dialog":null}
+{"do":"wait","role":"label","name":"● unsaved","visible":true}
+{"do":"quit"}

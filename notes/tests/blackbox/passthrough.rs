@@ -83,19 +83,18 @@ fn the_output_flags_and_the_wait_go_to_the_engine_as_given() {
 #[test]
 fn the_engines_exit_code_and_error_are_the_commands() {
     let Some(w) = World::seeded() else { return };
-    for code in ["3", "4", "5"] {
-        let diff = w
-            .cmd(["--json", "diff", "alpha", "e9"])
-            .env("ICLOUD_NOTES_SYNC_STUB_EXIT", code)
-            .env("ICLOUD_NOTES_SYNC_STUB_ERROR", "some_code")
-            .run();
-        assert_eq!(diff.code.to_string(), code);
-        // The engine's own document, in its own layout.
-        assert_eq!(
-            diff.doc(),
-            json!({"ok": false, "error": {"code": "some_code", "message": "stub failure"}})
-        );
-    }
+    let diff = w
+        .cmd(["--json", "diff", "alpha", "e9"])
+        .env("ICLOUD_NOTES_SYNC_STUB_EXIT", "1")
+        .env("ICLOUD_NOTES_SYNC_STUB_ERROR", "some_code")
+        .run();
+    // The engine's exit, 1, and its own error document, in its own layout,
+    // on stderr; nothing on stdout.
+    assert_eq!((diff.code, diff.out.as_str()), (1, ""), "{diff:#?}");
+    assert_eq!(
+        diff.error_doc(),
+        json!({"ok": false, "error": {"code": "some_code", "message": "stub failure"}})
+    );
 }
 
 #[test]
@@ -110,12 +109,12 @@ fn the_note_is_found_here_before_the_engine_runs() {
         w.cmd(&args)
             .env("ICLOUD_NOTES_SYNC_BIN", &engine)
             .run()
-            .fails(4, "not_found");
+            .fails("not_found");
     }
     w.cmd(["history", "same title"])
         .env("ICLOUD_NOTES_SYNC_BIN", &engine)
         .run()
-        .fails(2, "ambiguous");
+        .fails("ambiguous");
     let ran = fs::read_to_string(&log).unwrap_or_default();
     assert!(ran.lines().all(|l| l.contains(" vault-info ")), "{ran}");
 }
@@ -123,7 +122,7 @@ fn the_note_is_found_here_before_the_engine_runs() {
 #[test]
 fn restore_asks_first_and_keeps_the_yes_to_itself() {
     let Some(w) = World::seeded() else { return };
-    let (message, hint) = w.run(["restore", "alpha"]).fails(2, "usage");
+    let (message, hint) = w.run(["restore", "alpha"]).fails("usage");
     assert_eq!(
         message,
         "restore asks before it acts, and cannot ask here (no terminal, or a machine output mode)"
@@ -145,7 +144,7 @@ fn leave_hands_the_vault_to_the_engine() {
     assert_eq!(ran, argv(&w.vault, &format!("--json leave {vault}")));
     assert_eq!(
         (left.code, left.err),
-        (2, format!("stub: unknown args: --json leave {vault}\n"))
+        (1, format!("stub: unknown args: --json leave {vault}\n"))
     );
     assert_eq!(
         recorded(&w, &["--styled", "leave", "--yes"]).1,
@@ -171,7 +170,7 @@ fn without_the_engine_they_say_it_is_missing() {
             .cmd(&args)
             .env("ICLOUD_NOTES_SYNC_BIN", &nowhere)
             .run()
-            .fails(5, "sync_tool_missing");
+            .fails("sync_tool_missing");
         assert_eq!(said.0, "the sync engine (icloud-notes-sync) is missing.", "{args:?}");
         assert_eq!(
             said.1, "Reinstall icloud-notes: sudo pacman -S icloud-notes",
@@ -194,16 +193,16 @@ fn they_need_a_cloned_vault_except_leave() {
         vec!["diff", "x", "e1"],
         vec!["restore", "x", "--yes"],
     ] {
-        w.run(&args).fails(3, "not_cloned");
+        w.run(&args).fails("not_cloned");
     }
     // leave is the engine's to refuse, once there is a directory to run it in.
-    let (message, hint) = w.run(["leave"]).fails(1, "error");
+    let (message, hint) = w.run(["leave"]).fails("error");
     assert_eq!(
         (message, hint.as_str()),
         (format!("cannot enter {}", w.vault.display()), "")
     );
     fs::create_dir(&w.vault).unwrap();
     let left = w.run(["leave"]);
-    assert_eq!(left.code, 2);
+    assert_eq!(left.code, 1);
     assert!(left.err.starts_with("stub: unknown args: --json leave "), "{left:#?}");
 }

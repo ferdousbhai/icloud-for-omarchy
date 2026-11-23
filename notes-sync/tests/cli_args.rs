@@ -29,12 +29,15 @@ fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
-/// A machine-mode failure: exactly one JSON document on stdout,
-/// `{"ok":false,"error":{"code","message","hint"?}}`, and nothing on
-/// stderr. Returns the `error` object.
+/// A machine-mode failure: exit 1, nothing on stdout (it holds only
+/// results), and `{"ok":false,"error":{"code","message","hint"?}}` on the
+/// last line of stderr. Returns the `error` object.
 fn machine_error(o: &Output) -> Value {
-    assert_eq!(stderr(o), "", "stderr must be empty");
-    let doc: Value = serde_json::from_str(&stdout(o)).expect("one JSON document on stdout");
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(o));
+    assert_eq!(stdout(o), "", "stdout must be empty");
+    let err = stderr(o);
+    let last = err.lines().last().expect("the error on stderr");
+    let doc: Value = serde_json::from_str(last).expect("the error object on stderr's last line");
     let mut keys: Vec<&String> = doc.as_object().unwrap().keys().collect();
     keys.sort();
     assert_eq!(keys, ["error", "ok"], "{doc}");
@@ -76,21 +79,21 @@ fn vault_shape_flags_live_on_the_commands_that_own_them() {
 }
 
 #[test]
-fn usage_error_exits_2_with_the_error_object_on_stdout() {
+fn usage_error_exits_1_with_the_error_object_on_stderr() {
     for flag in ["--json", "--quiet"] {
         let o = run_here(&[flag, "pull", "--nope"]);
-        assert_eq!(o.status.code(), Some(2));
+        assert_eq!(o.status.code(), Some(1));
         let error = machine_error(&o);
         assert_eq!(error["code"], "usage");
         assert_eq!(error["hint"], "run `icloud-notes-sync --help`");
     }
     // Piped without a flag: still the machine form.
     let piped = run_here(&["pull", "--nope"]);
-    assert_eq!(piped.status.code(), Some(2));
+    assert_eq!(piped.status.code(), Some(1));
     assert_eq!(machine_error(&piped)["code"], "usage");
 
     let human = run_here(&["--styled", "pull", "--nope"]);
-    assert_eq!(human.status.code(), Some(2));
+    assert_eq!(human.status.code(), Some(1));
     assert!(stdout(&human).is_empty());
     assert!(stderr(&human).starts_with("error:"), "{}", stderr(&human));
 }
@@ -98,10 +101,10 @@ fn usage_error_exits_2_with_the_error_object_on_stdout() {
 #[test]
 fn no_command_is_a_usage_error() {
     let o = run_here(&["--json"]);
-    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(o.status.code(), Some(1));
     assert_eq!(machine_error(&o)["message"], "no command given");
     let human = run_here(&["--styled"]);
-    assert_eq!(human.status.code(), Some(2));
+    assert_eq!(human.status.code(), Some(1));
     assert!(stderr(&human).contains("error: no command given"), "{}", stderr(&human));
 }
 
@@ -109,11 +112,11 @@ fn no_command_is_a_usage_error() {
 fn status_outside_a_vault_is_a_known_error() {
     let tmp = tempfile::tempdir().unwrap();
     let o = run(&["--json", "status"], tmp.path());
-    assert_eq!(o.status.code(), Some(3));
+    assert_eq!(o.status.code(), Some(1));
     assert_eq!(machine_error(&o)["code"], "not_cloned_directory");
 
     let human = run(&["--styled", "status"], tmp.path());
-    assert_eq!(human.status.code(), Some(3));
+    assert_eq!(human.status.code(), Some(1));
     assert!(stdout(&human).is_empty());
     assert!(stderr(&human).starts_with("error: "), "{}", stderr(&human));
     assert!(
@@ -123,10 +126,10 @@ fn status_outside_a_vault_is_a_known_error() {
     );
 }
 
-/// icloud-sessiond out of reach is `session_service`, exit 5 (a service
+/// icloud-sessiond out of reach is `session_service` (a service
 /// unavailable), not an internal error.
 #[test]
-fn an_unreachable_session_daemon_is_session_service_exit_5() {
+fn an_unreachable_session_daemon_is_session_service() {
     let vault = tempfile::tempdir().unwrap();
     copy_dir(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/differential/expected/tiny-clone/vault"),
@@ -145,7 +148,7 @@ fn an_unreachable_session_daemon_is_session_service_exit_5() {
         .env("XDG_RUNTIME_DIR", runtime.path())
         .output()
         .expect("binary runs");
-    assert_eq!(o.status.code(), Some(5), "{}", stderr(&o));
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
     let error = machine_error(&o);
     assert_eq!(error["code"], "session_service");
     assert!(error["hint"].is_string());
@@ -167,7 +170,7 @@ fn copy_dir(from: &Path, to: &Path) {
 fn diff_with_an_invalid_ref_is_a_usage_error() {
     let tmp = tempfile::tempdir().unwrap();
     let o = run(&["--json", "diff", "Note.md", "a..b..c"], tmp.path());
-    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(o.status.code(), Some(1));
     let error = machine_error(&o);
     assert_eq!(error["code"], "usage");
     assert_eq!(error["hint"], "run `icloud-notes-sync --help`");
@@ -262,18 +265,18 @@ fn vault_info_counts_its_notes() {
 }
 
 /// A failed `sync` half is reported inside the data (no separate error
-/// object), and the run exits with the worse half: here both halves find
-/// no vault (exit 3).
+/// object), and the run exits 1: here both halves find no vault, each half
+/// saying so in its code, with its own exit code, 1.
 #[test]
 fn a_failed_sync_half_is_in_the_data_only() {
     let tmp = tempfile::tempdir().unwrap();
     let o = run(&["--quiet", "sync", "."], tmp.path());
-    assert_eq!(o.status.code(), Some(3), "{}", stderr(&o));
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
     assert!(!stderr(&o).contains("\"ok\""), "{}", stderr(&o));
     let data: Value = serde_json::from_str(&stdout(&o)).expect("one JSON document on stdout");
     for half in ["push", "pull"] {
         assert_eq!(data[half]["ok"], false, "{data}");
-        assert_eq!(data[half]["exit_code"], 3, "{data}");
+        assert_eq!(data[half]["exit_code"], 1, "{data}");
         assert_eq!(data[half]["error"]["code"], "not_cloned_directory", "{data}");
     }
     assert!(data["vault_info"].is_object(), "{data}");
@@ -286,6 +289,6 @@ fn a_failed_sync_half_is_in_the_data_only() {
     );
 
     let human = run(&["--styled", "sync", "."], tmp.path());
-    assert_eq!(human.status.code(), Some(3));
+    assert_eq!(human.status.code(), Some(1));
     assert_eq!(stderr(&human).matches("error: ").count(), 2, "{}", stderr(&human));
 }

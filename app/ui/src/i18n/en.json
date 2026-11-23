@@ -1,0 +1,17 @@
+{
+  "Apple ended the iCloud session (it expired, the password was changed, or it was signed out on another device)": "Apple ended the iCloud session (it expired, the password was changed, or it was signed out on another device)",
+  "Could not open Find My's password page: {}": "Could not open Find My's password page: {}",
+  "Could not start signing in: {}": "Could not start signing in: {}",
+  "Enter Password": "Enter Password",
+  "Find My needs your Apple password": "Find My needs your Apple password",
+  "Find My needs your Apple password (to stop being asked: icloud-session set-password)": "Find My needs your Apple password (to stop being asked: icloud-session set-password)",
+  "Finish in the Apple window…": "Finish in the Apple window…",
+  "Sign In": "Sign In",
+  "Signed out of iCloud": "Signed out of iCloud",
+  "Signing in…": "Signing in…",
+  "The iCloud account file could not be read": "The iCloud account file could not be read",
+  "The iCloud session in the keyring was damaged": "The iCloud session in the keyring was damaged",
+  "The iCloud session was removed from the keyring": "The iCloud session was removed from the keyring",
+  "The keyring held another Apple ID's iCloud session": "The keyring held another Apple ID's iCloud session",
+  "{}. {}": "{}. {}"
+}

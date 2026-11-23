@@ -81,4 +81,13 @@
 # Wide again: the buttons are back.
 {"do":"resize","width":900,"height":700}
 {"do":"wait","role":"button","name":"Bold (Ctrl+B)","visible":true}
+
+# Attaching when the desktop has no file chooser: the window says so in omui's words, not GIO's, and in the language
+# of the moment as it changes.
+{"do":"picker","fail":"unavailable"}
+{"do":"action","name":"win.attach"}
+{"do":"wait","role":"label","name":"No file chooser is available on this desktop.","visible":true}
+{"do":"language","code":"da","made_up":true}
+{"do":"wait","role":"label","name":"[da] No file chooser is available on this desktop.","visible":true}
+{"do":"language","code":"en"}
 {"do":"quit"}

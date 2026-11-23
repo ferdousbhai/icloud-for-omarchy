@@ -10,18 +10,19 @@
 //! `{"ok":true,"data","summary"}` when piped or with `--json`; `--quiet`
 //! (data only), `--styled` (text), `--ids-only`, `--count`, combinable
 //! (ids-only > count > quiet > json > styled). A failure is
-//! `{"ok":false,"error":{"code","message","hint"?}}` on stdout in those
-//! machine modes, `error:`/`hint:` on stderr in text mode. The JSON is laid
-//! out as the Qt app's command line laid it out (`json.rs`), so a caller
-//! sees the bytes it saw before.
+//! `{"ok":false,"error":{"code","message","hint"?}}` on one line of stderr
+//! in those machine modes, `error:`/`hint:` on stderr in text mode, so
+//! stdout only ever holds a result. A result's JSON is laid out as the Qt
+//! app's command line laid it out (`json.rs`), so a caller sees the bytes it
+//! saw before.
 //!
-//! Exit codes, as in every iCloud tool: 0 ok, 1 error, 2 usage or invalid
-//! request, 3 not signed in or not cloned, 4 not found, 5 offline or a
-//! service (icloud-session, the engine) unavailable. `push --dry-run` and
+//! Exit codes are Omarchy's, as in every iCloud tool: 0 on success, 1 on any
+//! failure; the error's `code` says which (`usage`, `not_found`,
+//! `sign_in_required`, `not_cloned`, `offline`, …). `push --dry-run` and
 //! `diff` report their changes and exit 0; a sync, pull, push or clone that
 //! ran but failed prints its result (with `error` in it: the engine's own
-//! code, message, hint and exit when it gave one, sync_failed/1 only when
-//! it did not) and exits with the failure's code.
+//! code, message and hint when it gave one, sync_failed only when it did
+//! not) and exits 1.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -32,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use icloud_session::cli::{EXIT_ERROR, EXIT_NOT_FOUND, EXIT_OK, EXIT_SIGN_IN, EXIT_UNAVAILABLE, EXIT_USAGE};
+use icloud_session::cli::{EXIT_ERROR, EXIT_OK};
 use icloud_session::output::{
     CliError, Flags, Mode, NETWORK_HINT, SESSION_SERVICE_HINT, SIGN_IN_HINT, interactive, sign_in_message,
     terminal_safe,
@@ -75,7 +76,7 @@ fn failure(code: &str, exit: u8, message: impl Into<String>) -> CliError {
 
 /// Every usage error points at the help.
 fn usage_error(message: impl Into<String>) -> CliError {
-    failure("usage", EXIT_USAGE, message).hint("run `icloud-notes --help`")
+    failure("usage", EXIT_ERROR, message).hint("run `icloud-notes --help`")
 }
 
 fn error(message: impl Into<String>) -> CliError {
@@ -365,25 +366,14 @@ fn print_error_text(f: &CliError) {
     say(&terminal_safe(&text));
 }
 
-/// The failure: in a machine mode `{"ok":false,"error":{"code","message",
-/// "hint"?}}` on stdout (`ok` first; nothing on stderr), in text mode
-/// `error:`/`hint:` lines on stderr. Returns its exit code.
+/// The failure, on stderr: in a machine mode `{"ok":false,"error":{"code",
+/// "message","hint"?}}` on one line (`ok` first), as every iCloud tool
+/// writes it, so a caller finds it as the last line after any status lines;
+/// in text mode `error:`/`hint:` lines. Stdout stays empty, for results
+/// only. Returns the exit code, 1.
 fn report(f: &CliError, mode: Mode) -> u8 {
-    if mode.is_machine() {
-        let quoted = |text: &str| layout::text(&json!(text), 0);
-        let mut document = format!(
-            "{{\n    \"ok\": false,\n    \"error\": {{\n        \"code\": {},\n        \"message\": {}",
-            quoted(&f.code),
-            quoted(&f.message)
-        );
-        if let Some(hint) = &f.hint {
-            document += &format!(",\n        \"hint\": {}", quoted(hint));
-        }
-        out(&(document + "\n    }\n}\n"));
-    } else {
-        print_error_text(f);
-    }
-    f.exit
+    say(&f.render(mode));
+    EXIT_ERROR
 }
 
 /// A result that carries a sync's failure: the result, then in text mode
@@ -510,13 +500,13 @@ fn resolve_note(b: &mut Backend, arg: &str) -> Result<Note, CliError> {
     }
     match matches.as_slice() {
         [only] => Ok((*only).clone()),
-        [] => Err(failure("not_found", EXIT_NOT_FOUND, format!("no note \"{arg}\""))
+        [] => Err(failure("not_found", EXIT_ERROR, format!("no note \"{arg}\""))
             .hint("`icloud-notes list` shows every note's path; a title must match exactly.")),
         several => {
             let paths: Vec<String> = several.iter().map(|n| n.path()).collect();
             Err(failure(
                 "ambiguous",
-                EXIT_USAGE,
+                EXIT_ERROR,
                 format!("\"{arg}\" names {} notes: {}", several.len(), paths.join(", ")),
             )
             .hint("Name the note by its path."))
@@ -530,11 +520,7 @@ fn open_note(b: &mut Backend, n: &Note) -> Result<(), CliError> {
     b.refresh();
     b.open_note(&n.file);
     if b.current_note() != n.file {
-        return Err(failure(
-            "not_found",
-            EXIT_NOT_FOUND,
-            format!("could not open {}", n.path()),
-        ));
+        return Err(failure("not_found", EXIT_ERROR, format!("could not open {}", n.path())));
     }
     Ok(())
 }
@@ -552,7 +538,7 @@ fn resolve_folder(b: &Backend, arg: &str) -> Result<String, CliError> {
     let found = b.folders().iter().find(|f| *f == folder);
     let found = found.or_else(|| b.folders().iter().find(|f| eq_ignoring_case(f, folder)));
     found.cloned().ok_or_else(|| {
-        failure("not_found", EXIT_NOT_FOUND, format!("no folder \"{arg}\""))
+        failure("not_found", EXIT_ERROR, format!("no folder \"{arg}\""))
             .hint("`icloud-notes folders` lists them; `icloud-notes new-folder` makes one.")
     })
 }
@@ -615,14 +601,14 @@ fn take_lock(b: &mut Backend, a: &Args) -> Result<(), CliError> {
 fn session_unknown() -> CliError {
     failure(
         "session_service",
-        EXIT_UNAVAILABLE,
+        EXIT_ERROR,
         "icloud-session is not available, so the sign-in is unknown",
     )
     .hint(SESSION_SERVICE_HINT)
 }
 
 fn signed_out() -> CliError {
-    failure("sign_in_required", EXIT_SIGN_IN, sign_in_message(None)).hint(SIGN_IN_HINT)
+    failure("sign_in_required", EXIT_ERROR, sign_in_message(None)).hint(SIGN_IN_HINT)
 }
 
 /// What icloud-session says, for commands that talk to iCloud.
@@ -642,7 +628,7 @@ fn need_sync_tool(b: &Backend) -> Result<PathBuf, CliError> {
     b.engine().map(Path::to_path_buf).ok_or_else(|| {
         failure(
             "sync_tool_missing",
-            EXIT_UNAVAILABLE,
+            EXIT_ERROR,
             "the sync engine (icloud-notes-sync) is missing.",
         )
         .hint("Reinstall icloud-notes: sudo pacman -S icloud-notes")
@@ -658,25 +644,23 @@ fn left_failure(vault: &Vault) -> Result<(), CliError> {
     let root = vault.root();
     Err(failure(
         "left_icloud",
-        EXIT_SIGN_IN,
+        EXIT_ERROR,
         format!("Notes left iCloud on this computer; Omacloud syncs {root} now"),
     )
     .hint(format!("change the files in {root}")))
 }
 
 /// The vault's notes can be read and changed: cloned, or left iCloud for
-/// Omacloud (plain files then). `not_cloned` is this tool's own code (exit
-/// 3) for a vault with nothing cloned into it, found before the engine runs.
+/// Omacloud (plain files then). `not_cloned` is this tool's own code for a
+/// vault with nothing cloned into it, found before the engine runs.
 fn need_cloned(vault: &Vault) -> Result<(), CliError> {
     if vault.cloned() || vault.left_icloud() {
         return Ok(());
     }
-    Err(failure(
-        "not_cloned",
-        EXIT_SIGN_IN,
-        format!("no notes cloned at {}", vault.root()),
+    Err(
+        failure("not_cloned", EXIT_ERROR, format!("no notes cloned at {}", vault.root()))
+            .hint("Run `icloud-notes clone` (signed in to icloud-session) first."),
     )
-    .hint("Run `icloud-notes clone` (signed in to icloud-session) first."))
 }
 
 #[derive(Default)]
@@ -701,6 +685,40 @@ fn kind_of(what: &str, delete_missing: bool) -> Kind {
     }
 }
 
+/// How much an engine failure's `code` says, for picking the one a sync
+/// reports when both halves failed. Every failure exits 1, so the code is
+/// all there is to rank: one only a person fixes (a sign-in, a vault not set
+/// up for this account) comes first, since nothing else works until then;
+/// then iCloud or a service out of reach, then a thing not found, then a
+/// request the engine refused, and the generic errors last. The order is
+/// the one the engine's numbered exit codes gave before they were folded
+/// into 1, so a sync reports the failure it always did.
+fn weight(code: &str) -> u8 {
+    match code {
+        "sign_in_required"
+        | "session_rejected"
+        | "not_cloned_directory"
+        | "unbound_account"
+        | "account_mismatch"
+        | "requested_account_mismatch"
+        | "notes_unavailable"
+        | "left_icloud"
+        | "omacloud_missing"
+        | "omacloud_not_set_up"
+        | "omacloud_folder_off" => 4,
+        "offline"
+        | "network"
+        | "session_service"
+        | "keyring_unavailable"
+        | "bad_response"
+        | "cloudkit_request_failed"
+        | "cloudkit_zone_fetch_failed" => 3,
+        "untracked_file" | "unknown_version_snapshot" | "not_found" => 2,
+        "usage" | "ambiguous_tracked_file" | "already_cloned_directory" | "too_many_deletions" => 1,
+        _ => 0,
+    }
+}
+
 /// Runs `what` through the backend with its lock held, as the window runs
 /// it. A sync still reports two runs, one per half. For "background", a
 /// sync when one is due: when none is, the outcome is empty (no json, no
@@ -721,22 +739,13 @@ fn run_sync(b: &mut Backend, what: &str, delete_missing: bool) -> SyncOutcome {
     let mut last: HashMap<&str, bool> = HashMap::new();
     // The failure that decided the outcome: of the latest engine run (an
     // answer from icloud-session may retry, and the retry's failure is the
-    // one that counts), its worse half by the engine's own rule (exit 3
-    // beats everything, then the higher code), so the exit matches the
-    // engine's; on a tie the later half. {code, message, hint?} and exit.
+    // one that counts), its worse half by `weight` of its code (one that
+    // needs a person beats everything, then a specific reason beats the
+    // generic error); on a tie the later half. {code, message, hint?}.
     let mut engine_error: Map<String, Value> = Map::new();
-    let mut engine_exit = i32::from(EXIT_ERROR);
     // The last run refused for the sign-in: sign_in_required or
     // session_rejected, as the engine said it.
     let mut sign_in_error: Map<String, Value> = Map::new();
-    let sign_in = i32::from(EXIT_SIGN_IN);
-    let worse = |a: i32, b: i32| {
-        if b == sign_in {
-            a == sign_in
-        } else {
-            a == sign_in || a >= b
-        }
-    };
     let said =
         |error: &Map<String, Value>, key: &str| error.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
     for engine_run in b.run(kind_of(what, delete_missing)) {
@@ -751,14 +760,8 @@ fn run_sync(b: &mut Backend, what: &str, delete_missing: bool) -> SyncOutcome {
             if code == "sign_in_required" || code == "session_rejected" {
                 sign_in_error = run.error.clone();
             }
-            let exit = if run.exit_code > 0 {
-                run.exit_code
-            } else {
-                i32::from(EXIT_ERROR)
-            };
-            if engine_error.is_empty() || worse(exit, engine_exit) {
+            if engine_error.is_empty() || weight(&code) >= weight(&said(&engine_error, "code")) {
                 engine_error = run.error;
-                engine_exit = exit;
             }
         }
     }
@@ -782,25 +785,24 @@ fn run_sync(b: &mut Backend, what: &str, delete_missing: bool) -> SyncOutcome {
     // was told by the session library), else in this tool's words
     // (sign_in_required: the backend told icloud-session); iCloud out of
     // reach in this tool's words; any other engine error as the engine said
-    // it, code, message, hint and exit (account_mismatch,
+    // it, code, message and hint (account_mismatch,
     // not_cloned_directory, cloudkit_request_failed, ...); sync_failed only
     // for a run that failed without saying why (a crash, no engine output).
     let engine_code = said(&engine_error, "code");
     result.failure = if b.auth_expired() && said(&sign_in_error, "code") == "session_rejected" {
         Some(hinted(
-            failure("session_rejected", EXIT_SIGN_IN, said(&sign_in_error, "message")),
+            failure("session_rejected", EXIT_ERROR, said(&sign_in_error, "message")),
             &said(&sign_in_error, "hint"),
         ))
     } else if b.auth_expired() {
         let refused = sign_in_message(Some("iCloud refused the sign-in; icloud-session was told"));
-        Some(failure("sign_in_required", EXIT_SIGN_IN, refused).hint(SIGN_IN_HINT))
+        Some(failure("sign_in_required", EXIT_ERROR, refused).hint(SIGN_IN_HINT))
     } else if !ok && (engine_code == "offline" || engine_code == "network") {
         let unreachable = format!("iCloud could not be reached ({})", said(&engine_error, "message"));
-        Some(failure(&engine_code, EXIT_UNAVAILABLE, unreachable).hint(NETWORK_HINT))
+        Some(failure(&engine_code, EXIT_ERROR, unreachable).hint(NETWORK_HINT))
     } else if !ok && !engine_error.is_empty() {
-        let exit = u8::try_from(engine_exit).unwrap_or(EXIT_ERROR);
         Some(hinted(
-            failure(&engine_code, exit, said(&engine_error, "message")),
+            failure(&engine_code, EXIT_ERROR, said(&engine_error, "message")),
             &said(&engine_error, "hint"),
         ))
     } else if !ok {
@@ -891,7 +893,7 @@ fn read_body(a: &Args) -> Result<Option<String>, CliError> {
 }
 
 /// Asks unless --yes, only in text mode with stdin and stdout a terminal;
-/// anywhere else it refuses (exit 2).
+/// anywhere else it refuses (`usage`).
 fn confirm(a: &Args, question: &str) -> Result<(), CliError> {
     if a.has("--yes") {
         return Ok(());
@@ -899,7 +901,7 @@ fn confirm(a: &Args, question: &str) -> Result<(), CliError> {
     if !interactive(a.mode) {
         return Err(failure(
             "usage",
-            EXIT_USAGE,
+            EXIT_ERROR,
             format!(
                 "{} asks before it acts, and cannot ask here (no terminal, or a machine output mode)",
                 a.command
@@ -918,7 +920,7 @@ fn confirm(a: &Args, question: &str) -> Result<(), CliError> {
 fn confirm_write(a: &Args, question: &str, message: String, hint: String) -> Result<(), CliError> {
     confirm(a, question).map_err(|f| {
         if f.code == "usage" {
-            failure("usage", EXIT_USAGE, message).hint(hint)
+            failure("usage", EXIT_ERROR, message).hint(hint)
         } else {
             f
         }
@@ -941,8 +943,8 @@ fn with_error(json: Option<Map<String, Value>>, f: &CliError) -> Value {
 fn refused(r: Refusal) -> CliError {
     match r.code {
         "usage" => usage_error(r.message),
-        "not_found" => hinted(failure(r.code, EXIT_NOT_FOUND, r.message), &r.hint),
-        "exists" => hinted(failure(r.code, EXIT_USAGE, r.message), &r.hint),
+        "not_found" => hinted(failure(r.code, EXIT_ERROR, r.message), &r.hint),
+        "exists" => hinted(failure(r.code, EXIT_ERROR, r.message), &r.hint),
         code => hinted(failure(code, EXIT_ERROR, r.message), &r.hint),
     }
 }
@@ -1084,10 +1086,11 @@ fn status(b: &mut Backend) -> Done {
     };
     let mut done = Done::new(data, lines.join("\n"), summary);
     done.count = Some(count);
-    // Signed out is reported, and exits 3 (the result printed all the same);
-    // a vault that left iCloud needs no sign-in.
+    // Signed out is reported, and exits 1 (the result printed all the same):
+    // a script's `icloud-notes status &&` goes on only when the notes sync.
+    // A vault that left iCloud needs no sign-in.
     done.exit = if !left && known && !b.signed_in() {
-        EXIT_SIGN_IN
+        EXIT_ERROR
     } else {
         EXIT_OK
     };
@@ -1252,7 +1255,7 @@ fn new_note(b: &mut Backend, a: &Args) -> Result<Done, CliError> {
         let place = if folder.is_empty() { "the vault root" } else { &folder };
         return Err(failure(
             "exists",
-            EXIT_USAGE,
+            EXIT_ERROR,
             format!("a note named \"{file}\" is already in {place}"),
         )
         .hint("Edit it with `icloud-notes write`, or pick another title."));
@@ -1480,7 +1483,7 @@ fn detach(b: &mut Backend, a: &Args) -> Result<Done, CliError> {
     if !names.contains(name) || body == old || b.removed_attachments(&body) != [name.as_str()] {
         return Err(failure(
             "not_found",
-            EXIT_NOT_FOUND,
+            EXIT_ERROR,
             format!("{path} has no attachment named \"{name}\""),
         )
         .hint(if names.is_empty() {
@@ -1549,7 +1552,7 @@ fn resolve(b: &mut Backend, a: &Args) -> Result<Done, CliError> {
     if picked.len() != blocks {
         return Err(failure(
             "choices_mismatch",
-            EXIT_USAGE,
+            EXIT_ERROR,
             format!(
                 "{path} has {blocks} conflict blocks, and {} choices were given",
                 picked.len()
@@ -1608,7 +1611,7 @@ fn new_folder(b: &mut Backend, a: &Args) -> Result<Done, CliError> {
     if b.folders().contains(&folder) {
         return Err(failure(
             "exists",
-            EXIT_USAGE,
+            EXIT_ERROR,
             format!("folder \"{folder}\" already exists"),
         ));
     }
@@ -1661,7 +1664,7 @@ fn sync_command(b: &mut Backend, a: &Args, what: &str) -> Result<u8, CliError> {
         if b.vault().cloned() {
             return Err(failure(
                 "already_cloned",
-                EXIT_USAGE,
+                EXIT_ERROR,
                 format!("{} is already cloned", b.vault().root()),
             )
             .hint("Run `icloud-notes pull` to fetch what changed."));

@@ -73,11 +73,11 @@ fn status_counts_the_whole_days_the_sign_in_has_left() {
 }
 
 #[test]
-fn status_signed_out_prints_its_data_and_exits_3() {
+fn status_signed_out_prints_its_data_and_exits_1() {
     let Some(w) = World::seeded() else { return };
     w.session.set_signed_in(false);
     let status = w.run(["status"]);
-    assert_eq!((status.code, status.err.as_str()), (3, ""));
+    assert_eq!((status.code, status.err.as_str()), (1, ""));
     let data = status.data();
     assert_eq!(
         (
@@ -90,7 +90,7 @@ fn status_signed_out_prints_its_data_and_exits_3() {
     );
     assert_eq!(status.summary(), "7 notes, signed out");
     let text = w.text(["status"]);
-    assert_eq!(text.code, 3);
+    assert_eq!(text.code, 1);
     assert!(
         text.out.contains("\nSigned in:   no (icloud-session sign-in)\n"),
         "{text:#?}"
@@ -362,7 +362,7 @@ fn list_takes_a_folder_with_what_is_below_it() {
     }
     assert_eq!(w.run(["list"]).summary(), "8 notes");
     assert_eq!(w.json(["list", "--folder", "Work/Child"]).summary(), "1 note");
-    let (message, hint) = w.json(["list", "--folder", "Nope"]).fails(4, "not_found");
+    let (message, hint) = w.json(["list", "--folder", "Nope"]).fails("not_found");
     assert_eq!(message, "no folder \"Nope\"");
     assert_eq!(
         hint,
@@ -630,9 +630,9 @@ fn a_note_is_named_by_path_id_or_a_title_only_it_has() {
     assert_eq!(w.run(["--ids-only", "read", "shown TITLE"]).out, "Work/File name.md\n");
     assert_eq!(w.run(["--ids-only", "read", "file NAME"]).out, "Work/File name.md\n");
     // A path is exact: its case matters, and only the title may differ in it.
-    w.json(["read", "notes/alpha.md"]).fails(4, "not_found");
-    w.json(["read", "ID-A"]).fails(4, "not_found");
-    let (message, hint) = w.json(["read", "same title"]).fails(2, "ambiguous");
+    w.json(["read", "notes/alpha.md"]).fails("not_found");
+    w.json(["read", "ID-A"]).fails("not_found");
+    let (message, hint) = w.json(["read", "same title"]).fails("ambiguous");
     assert_eq!(message, "\"same title\" names 2 notes: Notes/Twin.md, Twin.md");
     assert_eq!(hint, "Name the note by its path.");
     // A path, with or without .md, is looked for before any title.
@@ -641,9 +641,9 @@ fn a_note_is_named_by_path_id_or_a_title_only_it_has() {
     assert_eq!(w.run(["--ids-only", "read", "Notes/Twin"]).out, "Notes/Twin.md\n");
     // Two notes carrying one id: the id names neither.
     w.write("Work/Copy.md", "---\napple-note-id: id-a\n---\n# Copy\n");
-    let (message, _) = w.json(["read", "id-a"]).fails(2, "ambiguous");
+    let (message, _) = w.json(["read", "id-a"]).fails("ambiguous");
     assert!(message.starts_with("\"id-a\" names 2 notes: "), "{message}");
-    let (message, _) = w.json(["read", "  no such  "]).fails(4, "not_found");
+    let (message, _) = w.json(["read", "  no such  "]).fails("not_found");
     assert_eq!(message, "no note \"  no such  \"");
 }
 
@@ -686,14 +686,14 @@ fn search_finds_text_and_titles_whatever_their_case() {
 fn search_wants_two_characters() {
     let Some(w) = World::seeded() else { return };
     for query in ["e", " e ", ""] {
-        let (message, _) = w.json(["search", query]).fails(2, "usage");
+        let (message, _) = w.json(["search", query]).fails("usage");
         assert_eq!(message, "search wants at least 2 characters", "{query:?}");
     }
     assert_eq!(w.run(["search", "eg", "--count"]).out, "1\n");
     // Counted as the app counts text: one emoji is two units, one accented letter one.
     w.write("Notes/Emoji.md", "# Emoji\nturtle 🐢 here\né\n");
     assert_eq!(w.run(["search", "🐢", "--ids-only"]).out, "Notes/Emoji.md\n");
-    w.json(["search", "é"]).fails(2, "usage");
+    w.json(["search", "é"]).fails("usage");
 }
 
 #[test]
@@ -858,7 +858,7 @@ fn a_filename_vault_takes_titles_from_the_file_names() {
         w.json(["read", "shopping LIST"]).summary(),
         "Shopping list (Shopping list.md)"
     );
-    w.json(["read", "Not the title"]).fails(4, "not_found");
+    w.json(["read", "Not the title"]).fails("not_found");
     assert_eq!(w.json(["search", "shopping"]).ok()[0]["title"], "Shopping list");
 }
 
@@ -874,7 +874,7 @@ fn reading_needs_a_cloned_vault() {
         vec!["new", "T"],
         vec!["new-folder", "F"],
     ] {
-        let said = w.json(&args).fails(3, "not_cloned");
+        let said = w.json(&args).fails("not_cloned");
         assert_eq!(
             (said.0, said.1.as_str()),
             (format!("no notes cloned at {}", w.vault.display()), hint),
@@ -883,9 +883,9 @@ fn reading_needs_a_cloned_vault() {
     }
     // A directory with notes in it but no engine state is not cloned either.
     w.write("Notes/Loose.md", "# Loose\n");
-    w.json(["list"]).fails(3, "not_cloned");
+    w.json(["list"]).fails("not_cloned");
     w.text(["list"])
-        .fails_in_text(3, &format!("no notes cloned at {}", w.vault.display()), hint);
+        .fails_in_text(&format!("no notes cloned at {}", w.vault.display()), hint);
     // The state of the engine's older layout counts.
     w.write(
         ".icloud-md/state.json",

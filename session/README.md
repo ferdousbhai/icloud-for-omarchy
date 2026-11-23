@@ -174,18 +174,21 @@ safe to share between threads.
 Two modules the suite's command lines share (the `clap` feature adds
 parsing):
 
-- `cli`: the exit codes (`EXIT_OK` 0, `EXIT_ERROR` 1, `EXIT_USAGE` 2,
-  `EXIT_SIGN_IN` 3, `EXIT_NOT_FOUND` 4, `EXIT_UNAVAILABLE` 5), `confirm`
+- `cli`: the exit codes, Omarchy's 0 on success and 1 on any failure
+  (`EXIT_OK`, `EXIT_ERROR`; the kind of failure is the JSON `code`; the
+  old `EXIT_USAGE`, `EXIT_SIGN_IN`, `EXIT_NOT_FOUND`, `EXIT_UNAVAILABLE`
+  are deprecated and 1, and `exit_status` turns any old number into 1), `confirm`
   (a `[y/N]` question), and the deprecated `report`/`parse` for tools not
   yet on `output` (one-line JSON error on stderr with `--json`).
 - `output`: the product output contract. `OutputFlags` (`--json`,
   `--styled`, `--quiet`, `--ids-only`, `--count`; combinable, resolved
   ids-only > count > quiet > json > styled > terminal ? text : JSON),
   `parse` (a usage error becomes `{"ok":false,"error":{"code":"usage",…,
-  "hint":"run `<bin> --help`"}}`, exit 2), `Response` (data, summary,
-  text, ids, count, meta, a non-zero exit for partial failures; `print`
-  returns the exit code), `CliError` (code, message, hint, exit; machine
-  modes print it on stdout, text mode as `error:`/`hint:` on stderr), and
+  "hint":"run `<bin> --help`"}}` on stderr, exit 1), `Response` (data, summary,
+  text, ids, count, meta, exit 1 for partial failures; `print`
+  returns the exit code), `CliError` (code, message, hint, exit 1; always
+  on stderr: machine modes print the error object on one line, text mode
+  `error:`/`hint:` lines, so stdout only ever holds a result), and
   `interactive(mode)` (prompt only in text mode with stdin and stdout a
   terminal). The envelope and the error object always start with `ok`
   (`--quiet` prints the bare `data`). `Mode` is `#[non_exhaustive]`.

@@ -465,7 +465,7 @@ fn a_push_that_would_delete_most_of_the_vault_is_refused_until_told_to() {
         matches!(error, Error::TooManyDeletions { deletions: 5, total: 6 }),
         "{error:?}"
     );
-    assert_eq!((error.code().as_str(), error.exit_code()), ("too_many_deletions", 2));
+    assert_eq!((error.code().as_str(), error.exit_code()), ("too_many_deletions", 1));
     assert!(error.hint().unwrap().contains("push --yes"));
     assert!(server.operations().is_empty(), "nothing was sent");
     assert_eq!(state(&vault).notes.len(), 6, "every note is still tracked");
@@ -498,7 +498,7 @@ fn a_push_that_would_delete_most_of_the_vault_is_refused_until_told_to() {
     );
     assert!(matches!(outcome.push, Err(Error::TooManyDeletions { .. })));
     assert!(matches!(outcome.pull, Some(Ok(_))));
-    assert_eq!(outcome.exit_code(), 2);
+    assert_eq!(outcome.exit_code(), 1);
     assert!(server.operations().is_empty());
 
     let allowed = PushOptions {

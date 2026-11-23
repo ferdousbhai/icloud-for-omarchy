@@ -45,6 +45,22 @@ pub fn envelope(stdout: impl AsRef<[u8]>) -> Value {
     serde_json::from_slice(stdout).unwrap_or_else(|e| panic!("not JSON ({e}): {}", String::from_utf8_lossy(stdout)))
 }
 
+/// The error object a failed command wrote, checked against the contract:
+/// it exited 1 (every failure does), printed nothing on stdout (which holds
+/// only results), and its error `{"ok":false,"error":{"code",…}}` is the
+/// last line of stderr. Returns that object.
+pub fn failure(out: &Output) -> Value {
+    assert_eq!(code(out), 1, "a failure exits 1: {}", stderr(out));
+    assert!(out.stdout.is_empty(), "a failure prints no result: {}", stdout(out));
+    icloud_session::output::error_line(&out.stderr)
+        .unwrap_or_else(|| panic!("no error object on stderr: {}", stderr(out)))
+}
+
+/// [`failure`]'s `error.code`.
+pub fn failure_code(out: &Output) -> String {
+    failure(out)["error"]["code"].as_str().unwrap_or_default().to_owned()
+}
+
 /// Writes an executable script.
 pub fn write_script(path: &Path, text: &str) {
     use std::os::unix::fs::PermissionsExt;

@@ -19,10 +19,15 @@ is the short version for an agent.
 | `icloud-drive <command>` | icloud-drive | the sync of the folder `~/iCloud Drive`: status, a sync now, on and off (no window) |
 
 `icloud-notes`, `icloud-photos`, `icloud-findmy` and `icloud-reminders`
-open their window without arguments and run their CLI without GUI
-initialization when given a command. Photos, Find My and Reminders use
-GTK-free CLI binaries and separate native windows (`icloud-photos-app`,
-`icloud-findmy-app`, `icloud-reminders-app`). Contacts is
+open their window with `open` (what their desktop entries run) or without
+arguments, and run their CLI without GUI initialization when given a
+command; `--help` and `--version` need no display. Each name is the app's
+one name: its command, package, desktop entry, icon and window (Wayland app
+id, Hyprland's `class`). The CLIs link no GTK; the windows are separate
+binaries the package installs off `PATH`, as
+`/usr/lib/<name>/<name>-app` (`/usr/bin/<name>-app` is kept as a link to
+it). `icloud-photos open <id>` still opens one photo in the default app
+(`--medium` without an id is a `usage` error). Contacts is
 [Cloud Contacts](https://github.com/ferdousbhai/cloud-contacts) now
 (`cloud-contacts`, iCloud and Google together; it replaces `icloud-contacts`).
 
@@ -93,7 +98,7 @@ timer's sync). All of it is new, in the app binary: see
 | Sync Now (Ctrl+R) | `icloud-photos sync [--full]` | existed |
 | Upload… (Ctrl+U), Stop After This File | `icloud-photos upload FILE... [--album ID] [--no-sync]` (album, no-sync: command line only) | existed |
 | Preferences: library folder, download originals on demand / all | `icloud-photos config [--library-dir DIR] [--download on-demand\|all]`; `download --all` | existed |
-| Sign-in banner | `icloud-photos status` (exits 3 signed out), `icloud-photos sign-in` | existed |
+| Sign-in banner | `icloud-photos status` (exits 1 signed out), `icloud-photos sign-in` | existed |
 | About | `icloud-photos --version` | existed |
 | Cache trimming (automatic) | `icloud-photos prune-cache` | existed |
 | (no window action) | `icloud-photos leave`: every original into the library folder, which Omacloud syncs, and iCloud is left; the window then only shows where the photos are, with Open Folder | added |
@@ -110,8 +115,8 @@ timer's sync). All of it is new, in the app binary: see
 | History trail on the map | `icloud-findmy history NAME\|ID [--since 24h]` | existed |
 | Play Sound | `icloud-findmy play-sound NAME\|ID --yes` | existed |
 | Lost Mode… (phone, message) | `icloud-findmy lost-mode NAME\|ID --phone P --message M --yes` | existed |
-| Sign-in banner | exit 3, then `icloud-session sign-in` | existed |
-| Find My password banner (Enter Password) | exit 3 (code `find_my_auth_required`), then `icloud-session authorize-find-my` (or `set-password` once) | existed |
+| Sign-in banner | `sign_in_required`, then `icloud-session sign-in` | existed |
+| Find My password banner (Enter Password) | `find_my_auth_required`, then `icloud-session authorize-find-my` (or `set-password` once) | existed |
 | Old positions dropped after 30 days | `icloud-findmy prune-history` | existed |
 
 ### Reminders (`reminders/src/bin/app`)
@@ -130,7 +135,7 @@ once.
 | Edit dialog: Delete | remove the line |
 | Sync (Ctrl+R; every 60 s while shown) | `icloud-reminders sync [--full]` (also sends the files' edits now; otherwise the timer does within a minute) |
 | Notifications (the timer, window open or not) | `icloud-reminders background` (the timer runs it with `--styled`, which prints nothing when nothing fell due) |
-| Sign-in banner | exit 3 (`sign_in_required`), then `icloud-session sign-in` |
+| Sign-in banner | `sign_in_required`, then `icloud-session sign-in` |
 | New List / rename a list / Delete List | make a file `NAME.md` / rename the list's file / remove it (see [icloud-reminders](#icloud-reminders) for the guards) |
 | Groups, sections, sharing, alerts, priority, flags | not in the files: the app or an Apple device |
 | (no window action) | `icloud-reminders leave`: the folder goes to Omacloud and iCloud is left; the window then only shows where the files are, with Open Folder |
@@ -152,7 +157,7 @@ and written there. The command covers what a tray icon would.
 
 | In the window / daemon | Command | |
 |---|---|---|
-| State, expiry | `icloud-session status` (exits 3 signed out) | existed |
+| State, expiry | `icloud-session status` (exits 1 signed out) | existed |
 | Sign in (Apple's page) | `icloud-session sign-in [--no-wait]` | `--no-wait` added |
 | Find My's password page | `icloud-session authorize-find-my [--no-wait]` | `--no-wait` added |
 | Remember the password for Find My | `icloud-session set-password` (a no-echo prompt, or stdin: `bw get password "Apple ID" \| icloud-session set-password`, `op read "op://…/password" \| icloud-session set-password`) | existed |
@@ -242,46 +247,44 @@ All seven tools (`icloud-session`, `icloud-notes`, `icloud-notes-sync`,
   `icloud-session skill` (no action) prints the skill's Markdown as it is in
   every mode.
 
-**`ok:true` with a non-zero exit.** The envelope's `ok` says the command
-produced its result; the exit code says whether everything succeeded. A
-batch that partly failed, or a sync that ran but failed, prints its data
-and exits non-zero:
+**`ok:true` with exit 1.** The envelope's `ok` says the command produced
+its result; the exit code says whether everything succeeded. A batch that
+partly failed, or a sync that ran but failed, prints its data on stdout
+and exits 1:
 
-- `icloud-photos download`/`delete`/`restore`/`upload`: exit 1 when some
-  items failed, or 3 when the sign-in lapsed part-way through a `delete`,
-  a `restore` or an `upload`; each failed item carries its own `error`.
+- `icloud-photos download`/`delete`/`restore`/`upload`: when some items
+  failed, or the sign-in lapsed part-way through a `delete`, a `restore` or
+  an `upload`; each failed item carries its own `error`.
 - `icloud-notes sync`/`pull`/`push`/`clone`: their data gains `ok:false`
-  and `error:{code, message, hint?}` and the process exits with that
-  failure's code (offline: 5). A change's `--push` puts the sync's result,
-  with its `error`, in `data.sync`, and exits with the sync's code.
+  and `error:{code, message, hint?}` (offline: `offline`) and the process
+  exits 1. A change's `--push` puts the sync's result, with its `error`, in
+  `data.sync`, and exits 1 when the sync failed. When both halves of a sync fail,
+  `error` is the one that matters most: one a person must act on (a
+  sign-in, a vault not set up, `left_icloud`), then one of a service
+  unavailable, then not found, then usage, then any other.
 - `icloud-notes-sync sync`: a failed half is `{ok:false, exit_code, error}`
-  inside `data`; the exit is the worse half's.
+  inside `data` (`exit_code` is 0 or 1); the run exits 1 when either half
+  failed.
 - `status` in `icloud-session`, `icloud-photos`, `icloud-notes` and
-  `icloud-drive` prints the status and exits 3 when signed out.
+  `icloud-drive` prints the status and exits 1 when signed out.
 
 ### Errors
 
-A command that could not produce its result prints only an error:
+A command that could not produce its result exits 1, prints nothing on
+stdout (which only ever holds a result), and puts its error on **stderr**:
 
 - machine modes (`--json`, piped, `--quiet`, `--ids-only`, `--count`): one
-  JSON document on **stdout**, stderr empty:
+  JSON document on one line, the last line of stderr (status and progress
+  lines may come before it):
 
   ```json
-  {
-    "ok": false,
-    "error": {
-      "code": "sign_in_required",
-      "message": "sign in to iCloud required",
-      "hint": "run `icloud-session sign-in` (a person signs in in the window)"
-    }
-  }
+  {"ok":false,"error":{"code":"sign_in_required","message":"sign in to iCloud required","hint":"run `icloud-session sign-in` (a person signs in in the window)"}}
   ```
 
-- text mode: `error: <message>` and `hint: <hint>` on **stderr**, stdout
-  empty.
+- text mode: `error: <message>` and `hint: <hint>` lines.
 
-`code` is stable and machine-readable: branch on it together with the exit
-code. `message` says what happened and `hint` (optional) how to fix it; both
+`code` is stable and machine-readable: the exit code says only that the
+command failed, `code` which failure it was, so branch on it. `message` says what happened and `hint` (optional) how to fix it; both
 are for people. Remediation commands (`run icloud-session sign-in`) are in
 `hint`, never in `message`. A usage error carries the hint ``run `TOOL
 --help` ``.
@@ -295,7 +298,7 @@ are for people. Remediation commands (`run icloud-session sign-in`) are in
   terminal.** Destructive commands (`icloud-notes delete`, `delete-folder`,
   `restore`, and a `write` that empties a note, which the next push deletes;
   `icloud-photos delete`; `icloud-findmy play-sound`,
-  `lost-mode`) ask there; anywhere else they refuse with `usage` (exit 2)
+  `lost-mode`) ask there; anywhere else they refuse with `usage`
   unless `--yes` is given. (`icloud-session set-password` reads the password
   from a terminal without echo, or from stdin.)
 - **Mock and scratch modes** for tests: `ICLOUD_SESSION_MOCK=1` with
@@ -318,97 +321,103 @@ are for people. Remediation commands (`run icloud-session sign-in`) are in
 
 ### Exit codes
 
-The shared table. The JSON `code` tells failures with the same exit apart.
+Omarchy's convention: every command exits **0** on success and **1** on any
+failure. The JSON `code` (on stderr, see [Errors](#errors)) says which
+failure it was; these are its kinds:
 
-| Exit | Meaning | What to do |
+| Kind | Codes | What to do |
 |---|---|---|
-| 0 | ok. `push --dry-run`, `diff` and the engine's `status` report their changes in the result and exit 0 | |
-| 1 | other failure (a partly failed batch, a refused edit, a busy vault, an HTTP 4xx, …) | read `error.code` (or the items' `error`) |
-| 2 | invalid usage or request: bad arguments, an ambiguous name, something that already exists, a destructive command without `--yes` and nobody to ask | fix the call |
-| 3 | not signed in, credentials rejected, or not set up: `sign_in_required`, `session_rejected` → `icloud-session sign-in`; `find_my_auth_required` → `icloud-session authorize-find-my`; `password_rejected`; `*_unavailable` (the service is off for this Apple ID); `not_cloned` | a person acts; see `error.code` and `hint` |
-| 4 | not found | check the name or id |
-| 5 | a service or a required tool unavailable: no network (`offline`, `network`), icloud-sessiond unreachable (`session_service`), a locked keyring, iCloud failing (HTTP 5xx, `bad_response`), the sync engine or icloud-session missing | retry later, or fix what `hint` names |
+| usage | invalid usage or request: `usage` (bad arguments, a destructive command without `--yes` and nobody to ask), `ambiguous`, `exists`, … | fix the call |
+| a person acts | not signed in, credentials rejected, or not set up: `sign_in_required`, `session_rejected` → `icloud-session sign-in`; `find_my_auth_required` → `icloud-session authorize-find-my`; `password_rejected`; `*_unavailable` (the service is off for this Apple ID); `not_cloned`; `left_icloud` | a person acts; see `error.code` and `hint` |
+| not found | `not_found`, `untracked_file`, `folder_missing`, … | check the name or id |
+| unavailable | a service or a required tool unavailable: no network (`offline`, `network`), icloud-sessiond unreachable (`session_service`), a locked keyring (`keyring_unavailable`), iCloud failing (`http` for a 5xx, `bad_response`), the sync engine missing (`sync_tool_missing`) | retry later, or fix what `hint` names |
+| other | anything else (a refused edit, a busy vault, an HTTP 4xx, …) | read `error.code` (or the items' `error`) |
+
+`push --dry-run`, `diff` and the engine's `status` report their changes in
+the result and exit 0. Releases up to 0.13.0 gave these kinds exit codes of
+their own (2 usage, 3 a person acts, 4 not found, 5 unavailable); a script
+that tested those numbers tests `error.code` now.
 
 ### Error codes
 
-Every code each tool can emit, by exit.
+Every code each tool can emit, by kind. Every one of them exits 1.
 
 **icloud-session**
 
-| Exit | Codes |
+| Kind | Codes |
 |---|---|
-| 1 | `error` (icloud-sessiond answered with a failure), `io`, `http` (a 4xx), `skill_unmanaged` (a path `skill install` did not write is in the way) |
-| 2 | `usage` |
-| 3 | `sign_in_required`, `sign_in_not_completed` (the window closed and you are still signed out; when the sign-in could not be kept, such as a keyring that refused it, the message says why and `sign_out_reason` keeps it), `find_my_auth_required`, `find_my_auth_not_completed`, `password_rejected` (Apple refused the password given to `set-password`), `session_rejected` (Apple keeps answering 401/421 although icloud-sessiond still holds the session: sign in again); also `status` while signed out (the status is printed) |
-| 5 | `session_service` (icloud-sessiond unreachable), `keyring_unavailable` (signed in, but the keyring holding the session is locked or missing: unlock it), `network`, `offline` (no network: a name that does not resolve, a refused or timed-out connect), `bad_response` (Apple answered with something unreadable), `http` (a 5xx) |
+| other | `error` (icloud-sessiond answered with a failure), `io`, `http` (a 4xx), `skill_unmanaged` (a path `skill install` did not write is in the way) |
+| usage | `usage` |
+| a person acts | `sign_in_required`, `sign_in_not_completed` (the window closed and you are still signed out; when the sign-in could not be kept, such as a keyring that refused it, the message says why and `sign_out_reason` keeps it), `find_my_auth_required`, `find_my_auth_not_completed`, `password_rejected` (Apple refused the password given to `set-password`), `session_rejected` (Apple keeps answering 401/421 although icloud-sessiond still holds the session: sign in again); also `status` while signed out (the status is printed) |
+| unavailable | `session_service` (icloud-sessiond unreachable), `keyring_unavailable` (signed in, but the keyring holding the session is locked or missing: unlock it), `network`, `offline` (no network: a name that does not resolve, a refused or timed-out connect), `bad_response` (Apple answered with something unreadable), `http` (a 5xx) |
 
 **icloud-notes**
 
-| Exit | Codes |
+| Kind | Codes |
 |---|---|
-| 1 | `read_only`, `error` (also an `attach` FILE that cannot be read, is not a regular file, is empty or is larger than 100 MB), `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed without an error from the engine: see the log; when the engine reports an error, that code and its exit are passed through, e.g. `account_mismatch` 3, `cloudkit_request_failed` 5), `push_rejected` (the push ran, but iCloud refused a change or something it depends on failed: the message names the first, the log the rest), `cancelled`, `error` |
-| 2 | `usage` (also `delete`, `delete-folder`, `restore`, `detach`, or a `write` that would leave the note empty or drop the link of one of its attachments, without `--yes` when nobody can be asked; a note or folder name that sync skips: one starting with a dot, or a folder named `attachments`), `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch`, and the engine's `too_many_deletions` passed through as it is (a `sync`, `push` or a change's `--push` found most of the vault's note files gone, more than 3 of them: nothing was pushed, a `sync`'s pull still ran; `icloud-notes push --dry-run` lists them, and `icloud-notes push --yes` or `sync --yes` moves them to Recently Deleted) |
-| 3 | `sign_in_required`, `session_rejected` (Apple refused the session icloud-sessiond holds: sign in again), `not_cloned` (run `icloud-notes clone`), `left_icloud` (the vault left iCloud on this computer: `sync`, `pull`, `push`, `clone`, `history`, `diff`, `restore` and a change's `--push` refuse; the files are Omacloud's), the engine's `leave` codes (`omacloud_missing`, `omacloud_not_set_up`, `omacloud_folder_off`), and the engine's exit-3 codes a sync, pull, push or clone passes through (`account_mismatch`, `not_cloned_directory`, `unbound_account`, …); also `status` while signed out (the status is printed; with icloud-session unreachable the sign-in is unknown, `sign_in_known:false`, and `status` exits 0) |
-| 4 | `not_found` (no such note or folder, no such FILE for `attach`, or no attachment of the note named FILE for `detach`) |
-| 5 | `offline`, `network` (iCloud out of reach: retry later), `session_service` (icloud-sessiond unreachable), `sync_tool_missing` (the engine is missing), and the engine's exit-5 codes a sync, pull, push or clone passes through (`bad_response`, `cloudkit_request_failed` for a 5xx, `keyring_unavailable`, …) |
+| other | `read_only`, `error` (also an `attach` FILE that cannot be read, is not a regular file, is empty or is larger than 100 MB), `guardrail` (the text would add conflict markers or another note's id; `--force` overrides), `not_a_list_item`, `no_conflicts`, `conflicts_unreadable`, `no_synced_copy`, `vault_busy` (the Notes window, or another sync, holds the vault), `vault_lock`, `sync_failed` (a sync, pull, push or clone failed without an error from the engine: see the log; when the engine reports an error, that code is passed through, e.g. `account_mismatch`, `cloudkit_request_failed`), `push_rejected` (the push ran, but iCloud refused a change or something it depends on failed: the message names the first, the log the rest), `cancelled`, `error` |
+| usage | `usage` (also `delete`, `delete-folder`, `restore`, `detach`, or a `write` that would leave the note empty or drop the link of one of its attachments, without `--yes` when nobody can be asked; a note or folder name that sync skips: one starting with a dot, or a folder named `attachments`), `ambiguous` (a title several notes have: use the path), `exists`, `already_cloned`, `choices_mismatch`, and the engine's `too_many_deletions` passed through as it is (a `sync`, `push` or a change's `--push` found most of the vault's note files gone, more than 3 of them: nothing was pushed, a `sync`'s pull still ran; `icloud-notes push --dry-run` lists them, and `icloud-notes push --yes` or `sync --yes` moves them to Recently Deleted) |
+| a person acts | `sign_in_required`, `session_rejected` (Apple refused the session icloud-sessiond holds: sign in again), `not_cloned` (run `icloud-notes clone`), `left_icloud` (the vault left iCloud on this computer: `sync`, `pull`, `push`, `clone`, `history`, `diff`, `restore` and a change's `--push` refuse; the files are Omacloud's), the engine's `leave` codes (`omacloud_missing`, `omacloud_not_set_up`, `omacloud_folder_off`), and the engine's codes of this kind a sync, pull, push or clone passes through (`account_mismatch`, `not_cloned_directory`, `unbound_account`, …); also `status` while signed out (the status is printed; with icloud-session unreachable the sign-in is unknown, `sign_in_known:false`, and `status` exits 0) |
+| not found | `not_found` (no such note or folder, no such FILE for `attach`, or no attachment of the note named FILE for `detach`) |
+| unavailable | `offline`, `network` (iCloud out of reach: retry later), `session_service` (icloud-sessiond unreachable), `sync_tool_missing` (the engine is missing), and the engine's codes of this kind a sync, pull, push or clone passes through (`bad_response`, `cloudkit_request_failed` for a 5xx, `keyring_unavailable`, …) |
 
 `push --dry-run`, `history`, `diff` and `restore` are the engine itself, so
-they exit with the engine's codes, below.
+they fail with the engine's codes, below.
 
 **icloud-notes-sync** (`code` is the error's class in snake case)
 
-| Exit | Codes |
+| Kind | Codes |
 |---|---|
-| 1 | `internal` (a bug or an unexpected answer), `io` (a file or disk failure), `error` (icloud-sessiond answered with a failure), `vault_busy`, `vault_lock`, `vault_needs_update` (a read-only command on a layout 2 vault: a sync updates it), `vault_from_newer_tool`, `unsupported_vault_layout`, `corrupt_state_file`, `version_content_unavailable`, `cloudkit_request_failed` for an HTTP 4xx (iCloud refused the request) |
-| 2 | `usage`, `ambiguous_tracked_file`, `already_cloned_directory`, `too_many_deletions` (a `push` or `sync` found more than 3 tracked notes without a file, or with an empty one, and they are most of your own notes tracked (notes others share with you are never deleted from here and do not count): note files gone by accident look like this, so nothing was pushed; `push --dry-run` lists them, and `push --yes` or `sync --yes` moves them to Recently Deleted. In a `sync` it is the push half's error, and the pull still runs) |
-| 3 | `sign_in_required`, `session_rejected` (both: sign in again), `not_cloned_directory`, `unbound_account`, `account_mismatch`, `requested_account_mismatch`, `notes_unavailable` (Notes is not on for this Apple ID), `left_icloud` (the vault left iCloud on this computer), and `leave`'s `omacloud_missing` (install Omacloud: the hint has the command), `omacloud_not_set_up` (`omacloud init`), `omacloud_folder_off` (Omacloud doesn't sync the vault's folder of home: `omacloud folders add ~/Documents`) |
-| 4 | `untracked_file`, `unknown_version_snapshot`, `cloudkit_zone_fetch_failed` for a zone that no longer exists (`ZONE_NOT_FOUND`) |
-| 5 | `offline` (no network at all), `network` (a connection that failed), `session_service`, `keyring_unavailable`, `bad_response`, `cloudkit_request_failed` (an HTTP 5xx or a transport failure), `cloudkit_zone_fetch_failed` |
+| other | `internal` (a bug or an unexpected answer), `io` (a file or disk failure), `error` (icloud-sessiond answered with a failure), `vault_busy`, `vault_lock`, `vault_needs_update` (a read-only command on a layout 2 vault: a sync updates it), `vault_from_newer_tool`, `unsupported_vault_layout`, `corrupt_state_file`, `version_content_unavailable`, `cloudkit_request_failed` for an HTTP 4xx (iCloud refused the request) |
+| usage | `usage`, `ambiguous_tracked_file`, `already_cloned_directory`, `too_many_deletions` (a `push` or `sync` found more than 3 tracked notes without a file, or with an empty one, and they are most of your own notes tracked (notes others share with you are never deleted from here and do not count): note files gone by accident look like this, so nothing was pushed; `push --dry-run` lists them, and `push --yes` or `sync --yes` moves them to Recently Deleted. In a `sync` it is the push half's error, and the pull still runs) |
+| a person acts | `sign_in_required`, `session_rejected` (both: sign in again), `not_cloned_directory`, `unbound_account`, `account_mismatch`, `requested_account_mismatch`, `notes_unavailable` (Notes is not on for this Apple ID), `left_icloud` (the vault left iCloud on this computer), and `leave`'s `omacloud_missing` (install Omacloud: the hint has the command), `omacloud_not_set_up` (`omacloud init`), `omacloud_folder_off` (Omacloud doesn't sync the vault's folder of home: `omacloud folders add ~/Documents`) |
+| not found | `untracked_file`, `unknown_version_snapshot`, `cloudkit_zone_fetch_failed` for a zone that no longer exists (`ZONE_NOT_FOUND`) |
+| unavailable | `offline` (no network at all), `network` (a connection that failed), `session_service`, `keyring_unavailable`, `bad_response`, `cloudkit_request_failed` (an HTTP 5xx or a transport failure), `cloudkit_zone_fetch_failed` |
 
 **icloud-photos**
 
-| Exit | Codes |
+| Kind | Codes |
 |---|---|
-| 1 | `cancelled`, `io`, `error` (also a signed download URL Apple refused even after a fresh lookup: not the session), `http` (a 4xx); a batch with failed items (the data lists them); `download_incomplete` (`leave`: some originals did not download, so nothing was left; run it again to resume), `omacloud`/`omacloud_<code>` (`leave`: Omacloud failed, with its own code) |
-| 2 | `usage` (also `delete` or `leave` without `--yes` when nobody can be asked) |
-| 3 | `sign_in_required`, `photos_unavailable` (iCloud Photos is not on for this Apple ID), `session_rejected`; also `status` while signed out (the status is printed; not once Photos left iCloud); `left_icloud` (any command that would reach iCloud once Photos left it on this computer: everything but `status`, `albums`, `list`, `info`, `prune-cache`, `config`, `leave`); `leave`'s `omacloud_missing` (install Omacloud), `omacloud_not_set_up` (`omacloud init`), `omacloud_folder_off` (Omacloud does not sync the library folder here: `omacloud folders add ~/Pictures`) |
-| 4 | `not_found` (no such item or album in the catalog: `sync` first) |
-| 5 | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
+| other | `cancelled`, `io`, `error` (also a signed download URL Apple refused even after a fresh lookup: not the session), `http` (a 4xx); a batch with failed items (the data lists them); `download_incomplete` (`leave`: some originals did not download, so nothing was left; run it again to resume), `omacloud`/`omacloud_<code>` (`leave`: Omacloud failed, with its own code) |
+| usage | `usage` (also `delete` or `leave` without `--yes` when nobody can be asked) |
+| a person acts | `sign_in_required`, `photos_unavailable` (iCloud Photos is not on for this Apple ID), `session_rejected`; also `status` while signed out (the status is printed; not once Photos left iCloud); `left_icloud` (any command that would reach iCloud once Photos left it on this computer: everything but `status`, `albums`, `list`, `info`, `prune-cache`, `config`, `leave`); `leave`'s `omacloud_missing` (install Omacloud), `omacloud_not_set_up` (`omacloud init`), `omacloud_folder_off` (Omacloud does not sync the library folder here: `omacloud folders add ~/Pictures`) |
+| not found | `not_found` (no such item or album in the catalog: `sync` first) |
+| unavailable | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
 **icloud-findmy**
 
-| Exit | Codes |
+| Kind | Codes |
 |---|---|
-| 1 | `unsupported`, `no_fix` (no fresh fix in time), `cancelled`, `io`, `error`, `http` (a 4xx) |
-| 2 | `usage` (also `play-sound`/`lost-mode` without `--yes` when nobody can be asked), `ambiguous` (the hint lists the matches: use the ID) |
-| 3 | `sign_in_required`, `find_my_auth_required` (`icloud-session authorize-find-my`, or `set-password` once), `find_my_unavailable` (Find My is not on for this Apple ID), `session_rejected` |
-| 4 | `not_found` (no device matches; the hint lists them) |
-| 5 | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
+| other | `unsupported`, `no_fix` (no fresh fix in time), `cancelled`, `io`, `error`, `http` (a 4xx) |
+| usage | `usage` (also `play-sound`/`lost-mode` without `--yes` when nobody can be asked), `ambiguous` (the hint lists the matches: use the ID) |
+| a person acts | `sign_in_required`, `find_my_auth_required` (`icloud-session authorize-find-my`, or `set-password` once), `find_my_unavailable` (Find My is not on for this Apple ID), `session_rejected` |
+| not found | `not_found` (no device matches; the hint lists them) |
+| unavailable | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
 **icloud-reminders**
 
-| Exit | Codes |
+| Kind | Codes |
 |---|---|
-| 1 | `io`, `error` (also a record or zone CloudKit refused), `http` (a 4xx), `folder_unsettled` (`leave` found the folder not in step with iCloud: nothing was left), `omacloud`/`omacloud_<code>` (`leave`: Omacloud failed, with its own code); also `sync` with its data when the folder step reported a problem (`folder.restored` or `folder.warnings` not empty) |
-| 2 | `usage` (also `leave` without `--yes` where nobody can be asked) |
-| 3 | `sign_in_required`, `session_rejected`; `left_icloud` (`sync` once the reminders left iCloud on this computer); `leave`'s `omacloud_missing` (install Omacloud), `omacloud_not_set_up` (`omacloud init`), `omacloud_folder_off` (Omacloud does not sync `~/Documents` here: `omacloud folders add ~/Documents`) |
-| 4 | `not_found` |
-| 5 | `offline` (no network), `network` (a connection that failed), `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
+| other | `io`, `error` (also a record or zone CloudKit refused), `http` (a 4xx), `folder_unsettled` (`leave` found the folder not in step with iCloud: nothing was left), `omacloud`/`omacloud_<code>` (`leave`: Omacloud failed, with its own code); also `sync` with its data when the folder step reported a problem (`folder.restored` or `folder.warnings` not empty) |
+| usage | `usage` (also `leave` without `--yes` where nobody can be asked) |
+| a person acts | `sign_in_required`, `session_rejected`; `left_icloud` (`sync` once the reminders left iCloud on this computer); `leave`'s `omacloud_missing` (install Omacloud), `omacloud_not_set_up` (`omacloud init`), `omacloud_folder_off` (Omacloud does not sync `~/Documents` here: `omacloud folders add ~/Documents`) |
+| not found | `not_found` |
+| unavailable | `offline` (no network), `network` (a connection that failed), `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
 `background` exits 0 when its sync fails and says so in `sync_error`: a
 timer that fails every minute while signed out would only fill the journal.
-`sync` that cannot sync fails with the code (3 or 5) and leaves the files as
+`sync` that cannot sync fails (`sign_in_required`, `offline`, …) and leaves the files as
 they are: their edits are sent by the next sync that works.
 
 **icloud-drive**
 
-| Exit | Codes |
+| Kind | Codes |
 |---|---|
-| 1 | `busy` (the service stayed mid-sync for two minutes), `io`, `error`, `http` (a 4xx); a `sync` that left items for later (with data); `sync_incomplete` (`leave`: the last sync left items for later, so nothing was left); `omacloud` (`leave`: omacloud gave no answer) |
-| 2 | `usage`, `too_many_deletions` (look with `sync --dry-run`, confirm with `sync --yes`), `other_account` (the folder was synced with another Apple ID), `other_folder` (`--dir` names a folder other than the one the sync state belongs to; give it its own with `--state-dir`), `other_top` (`--top` names a folder of iCloud Drive other than the one the sync state belongs to; give it its own `--dir` and `--state-dir`), `start`/`stop`/`leave` with `--dir` (`usage`: the background sync keeps `~/iCloud Drive` only), `exists` (`leave --to` a folder that is not empty); `leave` without `--yes` where nobody can be asked |
-| 3 | `sign_in_required`, `session_rejected`, `drive_unavailable` (iCloud Drive is not on for this Apple ID); `status` while signed out (with data); `left_icloud` (`sync`, `start` or `leave` once iCloud Drive left iCloud on this computer); `omacloud_missing`, `omacloud_not_set_up`, `omacloud_folder_off` (`leave`: Omacloud is not installed, not set up, or does not sync the folder; the hint is the command that fixes it, and nothing changed) |
-| 4 | `folder_missing` (the local folder is gone, so nothing is synced; `leave --to` into a folder that is not there) |
-| 5 | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
+| other | `busy` (the service stayed mid-sync for two minutes), `io`, `error`, `http` (a 4xx); a `sync` that left items for later (with data); `sync_incomplete` (`leave`: the last sync left items for later, so nothing was left); `omacloud` (`leave`: omacloud gave no answer) |
+| usage | `usage`, `too_many_deletions` (look with `sync --dry-run`, confirm with `sync --yes`), `other_account` (the folder was synced with another Apple ID), `other_folder` (`--dir` names a folder other than the one the sync state belongs to; give it its own with `--state-dir`), `other_top` (`--top` names a folder of iCloud Drive other than the one the sync state belongs to; give it its own `--dir` and `--state-dir`), `start`/`stop`/`leave` with `--dir` (`usage`: the background sync keeps `~/iCloud Drive` only), `exists` (`leave --to` a folder that is not empty); `leave` without `--yes` where nobody can be asked |
+| a person acts | `sign_in_required`, `session_rejected`, `drive_unavailable` (iCloud Drive is not on for this Apple ID); `status` while signed out (with data); `left_icloud` (`sync`, `start` or `leave` once iCloud Drive left iCloud on this computer); `omacloud_missing`, `omacloud_not_set_up`, `omacloud_folder_off` (`leave`: Omacloud is not installed, not set up, or does not sync the folder; the hint is the command that fixes it, and nothing changed) |
+| not found | `folder_missing` (the local folder is gone, so nothing is synced; `leave --to` into a folder that is not there) |
+| unavailable | `offline`, `network`, `session_service`, `keyring_unavailable`, `bad_response`, `http` (a 5xx) |
 
 In mock mode (`ICLOUD_SESSION_MOCK=1`) there is no daemon to confirm a
 session, so a 401/421 is `sign_in_required`, not `session_rejected`.
@@ -428,7 +437,7 @@ session from it and none signs in by itself.
   `--no-wait` it returns at once: poll `icloud-session --quiet status` until
   `signing_in` is false.
 - `authorize-find-my` needs a signed-in account: signed out it opens no
-  window and exits 3 with `sign_in_required`.
+  window and fails with `sign_in_required`.
 - `expires_at` says when the sign-in lapses.
 - `leave` is every app's `leave` at once (optional, as each app's is):
   Notes, Reminders, iCloud Drive and Photos, or those named, skipping what isn't
@@ -436,8 +445,8 @@ session from it and none signs in by itself.
   folder before anything changes (failing with the apps' `omacloud_*` codes,
   every app named in the message), asks once (type `leave`; elsewhere
   `--yes`, only when the person asked), then runs each app's
-  `leave --yes`; the first that fails stops the rest, and the command exits
-  with its code. `not_found` (exit 4) when the apps named have nothing to leave.
+  `leave --yes`; the first that fails stops the rest, its code in
+  `failed`, and the command exits 1. `not_found` when the apps named have nothing to leave.
   `--dry-run` says each app's state and changes nothing (the Omacloud app's
   Move from iCloud dialog reads it).
 
@@ -456,7 +465,7 @@ Work/Plan.md
 
 - **The lock.** Commands that change the vault or sync take the vault's
   lock first, as the window and the background sync do. While the window is
-  open it holds that lock, so they fail at once with `vault_busy` (exit 1):
+  open it holds that lock, so they fail at once with `vault_busy`:
   make the change in the window, or quit it. A background sync holding it is
   waited for (30 s, or `--wait SECS`). Reading (`status`, `folders`, `list`,
   `read`, `search`, and `history`, `diff`, `push --dry-run`) never needs it.
@@ -473,7 +482,7 @@ Work/Plan.md
   its progress lines.
 - `sync --yes` and `push --yes` are the only way a push deletes most of the
   vault: without it, more than 3 tracked notes without a file, when they
-  are most of the notes, fail the push with `too_many_deletions` (exit 2)
+  are most of the notes, fail the push with `too_many_deletions`
   before anything is sent. A change's `--push`, the background timer and
   the window's own syncs never pass it; the window shows a banner with
   **Delete them…**, whose confirmation defaults to keeping them.
@@ -512,9 +521,9 @@ Work/Plan.md
 - `leave [--yes]` (optional; the window never offers it): the vault leaves
   iCloud for Omacloud on this computer. Omacloud must be installed, set up
   and syncing `~/Documents` (else `omacloud_missing`, `omacloud_not_set_up`
-  or `omacloud_folder_off`, exit 3, each hint the command that fixes it;
-  nothing changes). Then one last sync (a failure is `sync_failed` with its
-  exit, and nothing changes), the engine's state moves to
+  or `omacloud_folder_off`, each hint the command that fixes it;
+  nothing changes). Then one last sync (a failure is `sync_failed`, or the
+  engine's own code, and nothing changes), the engine's state moves to
   `~/.local/share/icloud-notes/left-icloud-state/`, the vault's `.nosync`
   marker (which keeps Omacloud off it while iCloud has it) goes, and
   `omacloud sync` runs. iCloud keeps its copy as it was. The notes stay
@@ -564,14 +573,14 @@ $ icloud-photos --quiet download AQx... --out ~/Downloads/holiday
   iCloud has deleted already (a delete that was cut off, run again) is done,
   `deleted: true, already: true`, "already deleted" in text mode, exit 0.
   When iCloud cannot confirm that (no clear answer to asking about the
-  item), the item fails as "already deleted" (exit 1).
+  item), the item fails as "already deleted" (exit 1, with the data).
 - `restore` undoes `delete`: `[{id, restored, already, error?}]`. An item
   restored here already (a restore cut off part-way, run again) is done,
   `already: true`, "already restored" in text mode; the others are
-  restored. An id that was never deleted is an error (exit 1).
+  restored. An id that was never deleted fails the command (`error`).
 - `delete` and `restore`: when the sign-in lapses part-way through, the
   report of what was done is still printed (each item not done carries the
-  error) and the exit code is 3; with nothing done it is the plain
+  error) and the exit code is 1; with nothing done it is the plain
   `sign_in_required` error.
 - `wallpaper` on a video is a usage error.
 - `prune-cache` drops cached previews of deleted items and trims the
@@ -580,7 +589,8 @@ $ icloud-photos --quiet download AQx... --out ~/Downloads/holiday
   deleted id as it finishes, failures on stderr.
 - `--data-dir DIR` keeps the catalog, cache, preferences and library all
   under `DIR` (`DIR/data`, `DIR/cache`, `DIR/config`, `DIR/library`).
-- Every exit-5 error has a hint.
+- Every "unavailable" error (`offline`, `network`, `session_service`,
+  `keyring_unavailable`, `bad_response`, an `http` 5xx) has a hint.
 
 #### Leaving iCloud
 
@@ -791,7 +801,7 @@ $ icloud-reminders --quiet leave --yes
    warning: Omacloud's daemon takes the folder in anyway; `omacloud_synced`
    says which). Run again, it only does this last step (`already: true`).
 
-Afterwards `sync` fails with `left_icloud` (exit 3), and `background`, still
+Afterwards `sync` fails with `left_icloud`, and `background`, still
 run by the timer every minute, sends no request: it writes a relative due
 date (`📅 tomorrow 9:00`, `+2h`) as the date it means, and notifies about a
 reminder when its due time comes if it saw it waiting before (one written
@@ -842,17 +852,17 @@ apple-note-id, or a title exactly one note has (ignoring case).
 | `read` | `{path, folder, file, title, id, modified, modified_ms, flags, read_only, body, text?, attachments:[{name, path, image}], conflicts:[{local:[line], remote:[line], before:[line], after:[line]}], conflicts_unreadable, has_synced_copy}` |
 | `search` | `[{path, folder, file, title, snippet}]` |
 | `new` | `{action:"new", path, folder, file, title, sync?}` |
-| `write` | `{action:"write", path, changed, sync?}` (text that no longer holds the link of one of the note's attachments removes that attachment at the next push, on every device: `usage`, exit 2, without `--yes`; `--force` does not stand in for it) |
+| `write` | `{action:"write", path, changed, sync?}` (text that no longer holds the link of one of the note's attachments removes that attachment at the next push, on every device: `usage` without `--yes`; `--force` does not stand in for it) |
 | `rename`, `move` | `{action, path, from, title?, sync?}` |
 | `delete` | `{action:"delete", path, sync?}` |
 | `toggle` | `{action:"toggle", path, line, text, sync?}` |
 | `attach` | `{action:"attach", path, file, link, sync?}` (`file`: the copy, a vault path under the note folder's `attachments/`, renamed `name 2.ext` when the name was taken; `link`: the line added at the end of the note, `![name](attachments/name)` for a PNG, JPEG, HEIC, TIFF, GIF or WebP and `[name](attachments/name)` for anything else. The next push uploads the file; `status` and `push --dry-run` show the note as `update` with `remark: "adds the attachment NAME"`. FILE is a regular, non-empty file of at most 100 MB) |
-| `detach` | `{action:"detach", path, file, sync?}` (FILE is the attachment's file name, `name` in `read`'s `attachments`; `file`: its vault path under the note folder's `attachments/`. The link is taken out of the note's text, with its line when nothing else is on it; the next push removes the attachment in iCloud, on every device, and deletes the file here. `status` and `push --dry-run` show the note as `update` with `remark: "removes the attachment NAME"`. Needs `--yes` when nobody can be asked: `usage`, exit 2. No attachment of that name: `not_found`, exit 4. A read-only note: `read_only`. A file added by `attach` and never pushed is only unlinked: its copy stays in `attachments/`) |
+| `detach` | `{action:"detach", path, file, sync?}` (FILE is the attachment's file name, `name` in `read`'s `attachments`; `file`: its vault path under the note folder's `attachments/`. The link is taken out of the note's text, with its line when nothing else is on it; the next push removes the attachment in iCloud, on every device, and deletes the file here. `status` and `push --dry-run` show the note as `update` with `remark: "removes the attachment NAME"`. Needs `--yes` when nobody can be asked: `usage`. No attachment of that name: `not_found`. A read-only note: `read_only`. A file added by `attach` and never pushed is only unlinked: its copy stays in `attachments/`) |
 | `resolve` | `{action:"resolve", path, choices, sync?}` |
 | `recover` | `{action:"recover", path, how, backup, message, sync?}` |
 | `export-pdf` | `{action:"export-pdf", path, pdf}` |
 | `new-folder`, `rename-folder`, `delete-folder` | `{action, folder, from?, sync?}` |
-| `sync`, `pull`, `push`, `clone` | `{ok, runs:[{command, ok, exit_code, result}], log, error?}`; `result` is icloud-notes-sync's data for that run, or `{error:{code, message, hint?}}` when it failed; `error` (with `ok:false`) says why the whole command failed, and the exit code is that failure's. `sync` is one engine run (`icloud-notes-sync sync`) reported as two runs, `push` then `pull` (no `pull` after a refused sign-in) |
+| `sync`, `pull`, `push`, `clone` | `{ok, runs:[{command, ok, exit_code, result}], log, error?}`; `result` is icloud-notes-sync's data for that run, or `{error:{code, message, hint?}}` when it failed; `error` (with `ok:false`) says why the whole command failed, and the exit code is 1. `sync` is one engine run (`icloud-notes-sync sync`) reported as two runs, `push` then `pull` (no `pull` after a refused sign-in) |
 | `sync` under a change's `--push` | the same object as `sync?`, or `{ok:false, error}` when the sync could not start (signed out, icloud-session missing, …) |
 | `push --dry-run`, `history [--records]`, `diff`, `restore` | icloud-notes-sync's own output (below) |
 
@@ -876,20 +886,20 @@ ISO 8601.
 | `sync` | `{push, pull, vault_info}` (below) |
 | `vault-info` | `{vault, cloned, stateDir, stateFile, titleMode, defaultFolderDir, notes, lockPath, left}` (`left`: the vault left iCloud here; `titleMode` is then the one it had) |
 | `leave [--yes]` | `{folder, left_at, kept_state, omacloud_synced, already}` (see icloud-notes above); `background` then answers `{synced:false, step:"left"}` |
-| `background [--every SECS]` | `{synced, step}`, plus `sync`'s `{push, pull, vault_info}` when it synced. What the Notes app runs every minute (its window while open, its timer while closed): `step` is `due` (the last sync is `--every` old, default 900, or there was none) or `changes` (local changes to push made since the last sync started), and then it syncs as `sync` does, never with `--yes`; or `settling` (a change younger than 10 s), `idle`, `signed_out` or `session_unavailable` (a due sync with nobody to sync as), and nothing else happens. A change a sync left behind waits for the next due sync or a new edit. Deciding needs no network and no lock and writes nothing; every sync (`sync` too) records its start and outcome in `background.json` beside the state. Exit 0 when it did not sync, else `sync`'s; text mode prints nothing then |
+| `background [--every SECS]` | `{synced, step}`, plus `sync`'s `{push, pull, vault_info}` when it synced. What the Notes app runs every minute (its window while open, its timer while closed): `step` is `due` (the last sync is `--every` old, default 900, or there was none) or `changes` (local changes to push made since the last sync started), and then it syncs as `sync` does, never with `--yes`; or `settling` (a change younger than 10 s), `idle`, `signed_out` or `session_unavailable` (a due sync with nobody to sync as), and nothing else happens. A change a sync left behind waits for the next due sync or a new edit. Deciding needs no network and no lock and writes nothing; every sync (`sync` too) records its start and outcome in `background.json` beside the state. Exit 0 when it did not sync, else `sync`'s (0, or 1 when a half failed); text mode prints nothing then |
 
 See `/usr/lib/icloud-notes/icloud-notes-sync COMMAND --help`. `sync` (push,
 then pull, in one run: what the app runs) prints `{push, pull, vault_info}`
 even when a half failed: each half is `{ok, exit_code, result, lines}`
 (`result` the command's own data, `lines` its human report) or `{ok,
-exit_code, error}`; `pull` is null when it did not run (the push found the
+exit_code, error}` (`exit_code` 0 or 1); `pull` is null when it did not run (the push found the
 sign-in gone or refused, or iCloud out of reach), and `vault_info` is what
 `vault-info` would print after it. A push half that ran but had a change
 refused is `{ok:false, exit_code:1, result, lines, error}` with the error
 `push_rejected`: its result and its error both; so is one whose push, run
 again after the pull to send a move it had refused, failed (the error is
-that second run's, e.g. `cloudkit_request_failed` with its exit). It exits 3 if either half
-exited 3, else with the worse half's code. `stateDir` is the engine's state directory,
+that second run's, e.g. `cloudkit_request_failed`). It exits 1 if either half
+failed, 0 otherwise; each failed half's `error.code` says why. `stateDir` is the engine's state directory,
 `.icloud-notes` (or a layout 3 vault's `.icloud-md`, until a command that
 takes the lock moves it; see notes-sync/docs/DESIGN.md §1). In a machine
 mode progress goes to stderr as `icloud-notes:progress:...` lines.
@@ -952,7 +962,7 @@ Its error codes are in the table under [Error codes](#error-codes).
 **Sync notes and read one**
 
 ```bash
-icloud-notes --quiet sync                      # exit 3: ask the user to sign in; 5: offline, retry later
+icloud-notes --quiet sync                      # exit 1: .error.code sign_in_required: ask the user to sign in; offline: retry later
 icloud-notes --ids-only search "dentist"       # the paths of matching notes
 icloud-notes --quiet read "Notes/Dentist.md" | jq -r .body
 ```
@@ -962,7 +972,7 @@ icloud-notes --quiet read "Notes/Dentist.md" | jq -r .body
 ```bash
 icloud-notes --quiet new "Meeting 30 Sep" --folder Work --body "- agenda" --push
 # exit 1, error.code "vault_busy": Notes is open; ask the user to quit it or add it there
-# exit 3 with data: written locally, not synced (.sync.error); after the user signs in: icloud-notes sync
+# exit 1 with data: written locally, not synced (.sync.error.code sign_in_required); after the user signs in: icloud-notes sync
 ```
 
 **Append to a checklist and tick an item**
@@ -1006,7 +1016,7 @@ icloud-photos --ids-only list --album "$ID" | xargs -r icloud-photos --quiet dow
 **Locate a device and play a sound**
 
 ```bash
-icloud-findmy --quiet locate "iPhone" --wait 30     # exit 3 find_my_auth_required: ask for icloud-session authorize-find-my
+icloud-findmy --quiet locate "iPhone" --wait 30     # exit 1, find_my_auth_required: ask for icloud-session authorize-find-my
 icloud-findmy --quiet play-sound "iPhone" --yes
 ```
 

@@ -15,6 +15,7 @@ set -Eeuo pipefail
 #   invalid    the same with a due date that cannot be read
 #   toast      a new reminder refused for its due date
 #   back       Ctrl+N and then Escape (in a narrow window: the sidebar again)
+#   shortcuts  F1: the overlay of every shortcut
 #   banner     signed out: the cached reminders under the sign-in banner
 #   empty      signed out with nothing cached: the banner over an empty list
 #   left       after `icloud-reminders leave`: where the reminders are now
@@ -48,7 +49,7 @@ done
 for theme in "${themes[@]}"; do
   [[ -z $theme || -f $theme/colors.toml ]] || { echo "preview: $theme has no colors.toml" >&2; exit 1; }
 done
-read -r -a scenes <<< "${ICLOUD_REMINDERS_PREVIEW_SCENES:-lists new completed edit invalid toast back banner empty left save complete}"
+read -r -a scenes <<< "${ICLOUD_REMINDERS_PREVIEW_SCENES:-lists new completed edit invalid toast back shortcuts banner empty left save complete}"
 # Ctrl+N puts the keyboard in the line that adds a reminder. From there the header's Show Completed is one stop back,
 # and the first reminder two on, past the due date. Its dialog opens with the keyboard in the title, one stop before
 # the due date. A reminder's box is the stop after the reminder.
@@ -60,6 +61,7 @@ declare -A keys=(
   [invalid]="ctrl+n Tab Tab Return Tab text:someday"
   [toast]="ctrl+n text:Tea Tab text:someday Return"
   [back]="ctrl+n Escape"
+  [shortcuts]="F1"
   [banner]=""
   [empty]=""
   [left]=""

@@ -1,6 +1,8 @@
 //! `icloud-session-signin`: Apple's own sign-in page in a GTK4 + WebKitGTK 6
 //! window. When the page has signed in, prints one JSON object to stdout
-//! and exits 0; closing the window exits 1. icloud-sessiond runs it for
+//! and exits 0; closing the window, or any other failure, exits 1, and a
+//! failure prints nothing on stdout (Omarchy's 0-or-1 convention, as the
+//! command lines keep it). icloud-sessiond runs it for
 //! `SignIn()` (no flags), `AuthorizeFindMy()` (`--find`) and the stored
 //! password's Find My sign-in (`--find --autofill`); run it by hand to try
 //! a sign-in. It stores nothing: its WebKit profile is in memory only.
@@ -16,9 +18,9 @@
 //! and hands the next window, so a browser trusted once skips 2FA.
 //!
 //! The client params are the default build numbers and a clientId this
-//! window generates. Once the jar holds an X-APPLE-WEBAUTH-TOKEN (on a
-//! timer and after each page load), the window makes its own `/validate`
-//! call from the page, with those params and the page's cookies, and
+//! window generates. Once the jar holds an X-APPLE-WEBAUTH-TOKEN (looked for
+//! as the jar changes, after each page load, and on a timer), the window
+//! makes its own `/validate` call from the page, with those params and the page's cookies, and
 //! counts it signed in when it answers 2xx with `dsInfo` and no pending
 //! `hsaChallengeRequired` (icloud-md's `isFullySignedInBody`); a token
 //! `/validate` refused is not tried again until it changes (a check that
@@ -31,7 +33,9 @@
 //! - `--autofill` reads the Apple ID and the password, one per line, from
 //!   stdin, fills them in on Apple's page unseen, and shows the window
 //!   only if it has not finished within 40 s (a 2FA code, say). Apple
-//!   saying the password is wrong exits 3.
+//!   saying the password is wrong exits 1 with the error object
+//!   `{"ok":false,"error":{"code":"password_rejected",…}}` as the last line
+//!   of stderr, which is how the daemon tells it from a window closed.
 //! - `--cookies` reads a JSON list of cookies (as printed, of icloud.com
 //!   and apple.com only) from the first line of stdin, before the Apple ID,
 //!   and puts them in the jar before the page loads.
@@ -49,7 +53,9 @@ use std::time::Duration;
 
 use icloud_sessiond::apple::hsa_challenge_pending;
 use icloud_sessiond::cookies::{Cookie, TOKEN, is_apple_domain, is_icloud_domain, is_trust_cookie};
+use icloud_sessiond::daemon::PASSWORD_REJECTED;
 use icloud_sessiond::files::{DEFAULT_CLIENT_BUILD_NUMBER, DEFAULT_CLIENT_MASTERING_NUMBER};
+use omui::tr;
 use serde_json::{Value, json};
 use webkit6::prelude::*;
 use webkit6::{gio, glib, gtk, soup};
@@ -351,7 +357,10 @@ fn read_input(
 
 struct Capture {
     done: Cell<bool>,
-    exit: Cell<u8>,
+    /// Signed in: the capture is printed and the window exits 0.
+    signed_in: Cell<bool>,
+    /// Apple said the autofilled password is wrong.
+    rejected: Cell<bool>,
     main_loop: glib::MainLoop,
     cookies: webkit6::CookieManager,
     client_id: String,
@@ -394,7 +403,7 @@ impl Capture {
                             out["dsid"] = Value::String(dsid.clone());
                         }
                         println!("{out}");
-                        me2.exit.set(0);
+                        me2.signed_in.set(true);
                     }
                     Err(e) => eprintln!("icloud-session-signin: reading cookies: {e}"),
                 }
@@ -484,8 +493,16 @@ impl Capture {
     }
 }
 
-/// The window's Wayland app_id and desktop entry name.
-const APP_ID: &str = "io.github.ferdousbhai.ICloudSession";
+/// Whether the timer's check runs: not while the window is shown where nobody can see it. A window not shown yet
+/// is `--autofill` at work, which has no one to wait for.
+fn timer_checks(visible: bool, suspended: bool) -> bool {
+    !(visible && suspended)
+}
+
+/// The window's Wayland app id, and the name of its desktop entry, which gives docks and bars its name and icon:
+/// Omarchy's one short name, the command's (`icloud-session`). The daemon's D-Bus name stays
+/// `io.github.ferdousbhai.ICloudSession`, since every app addresses it; this window is no D-Bus service.
+const NAME: &str = "icloud-session";
 
 fn main() -> ExitCode {
     let (mut find, mut autofill, mut with_cookies) = (false, false, false);
@@ -504,7 +521,7 @@ fn main() -> ExitCode {
                      --cookies reads a JSON list of cookies for the jar from the first line of stdin\n\
                      --autofill then reads the Apple ID and the password, one per line"
                 );
-                return ExitCode::from(64);
+                return ExitCode::FAILURE;
             }
         }
     }
@@ -514,17 +531,29 @@ fn main() -> ExitCode {
         Ok(input) => input,
         Err(e) => {
             eprintln!("icloud-session-signin: {e}");
-            return ExitCode::from(64);
+            return ExitCode::FAILURE;
         }
     };
-    // No GtkApplication here, so the Wayland app_id is the program name: make
-    // it ours, matching the desktop entry, not "GTK Application".
-    glib::set_prgname(Some(APP_ID));
-    glib::set_application_name("Sign in to iCloud");
+    // GTK_THEME would load that theme over the one omui pins (`omui::application` drops it the same way).
+    // SAFETY: no other thread has been started yet, so none can be reading the environment.
+    unsafe { std::env::remove_var("GTK_THEME") };
+    // No GtkApplication here, so GTK gives the window the program's name as its Wayland app id: make it ours,
+    // matching the desktop entry, not "GTK Application". (`omui::name_window` would set the same name again; the
+    // apps need it because GTK names a window of an application by its dotted id, and `omui::application` does it.)
+    glib::set_prgname(Some(NAME));
+    omui::i18n::register_all(&[("en", include_str!("../i18n/en.json"))]);
+    glib::set_application_name(&tr("Sign in to iCloud"));
     if let Err(e) = gtk::init() {
         eprintln!("icloud-session-signin: cannot open a window: {e}");
         return ExitCode::FAILURE;
     }
+    // The window's chrome (its title bar, and the menus and choosers WebKit draws with GTK) in Omarchy's current
+    // theme and language, followed live, as the apps that ask for this window are. Apple's page keeps its own
+    // colours, and its own language, which is Apple's to choose.
+    if let Some(display) = gtk::gdk::Display::default() {
+        omui::Theme::install(&display, "");
+    }
+    let _translator = omui::Translator::install();
 
     // In memory only: the jar holds the whole web session, which belongs
     // in the keyring (the daemon's), never in a file. What should outlive
@@ -543,7 +572,8 @@ fn main() -> ExitCode {
     content.register_script_message_handler(TRACE_HANDLER, None);
     let capture = Rc::new(Capture {
         done: Cell::new(false),
-        exit: Cell::new(1),
+        signed_in: Cell::new(false),
+        rejected: Cell::new(false),
         main_loop: glib::MainLoop::new(None, false),
         cookies,
         client_id: uuid::Uuid::new_v4().to_string(),
@@ -553,15 +583,15 @@ fn main() -> ExitCode {
         last_find: Cell::new(None),
         dsid: RefCell::new(None),
     });
-    // Apple saying the password is wrong ends the window with exit code 3,
-    // so the daemon stops trying it.
+    // Apple saying the password is wrong ends the window with the error
+    // `password_rejected`, so the daemon stops trying it.
     {
         let capture = capture.clone();
         content.connect_script_message_received(Some(TRACE_HANDLER), move |_, value| {
             let text = value.to_str();
             eprintln!("icloud-session-signin: {text}");
             if text.as_str() == "autofill: password rejected" && !capture.done.replace(true) {
-                capture.exit.set(3);
+                capture.rejected.set(true);
                 capture.main_loop.quit();
             }
         });
@@ -614,14 +644,11 @@ fn main() -> ExitCode {
         }
     }
 
-    // Signed in yet? Checked on a timer and after each page load.
+    // Signed in yet? Checked as the jar changes (the token arriving is such a change) and after each page load.
     {
         let capture = capture.clone();
         let view = view.clone();
-        glib::timeout_add_local(POLL, move || {
-            capture.check(&view);
-            glib::ControlFlow::Continue
-        });
+        capture.cookies.clone().connect_changed(move |_| capture.check(&view));
     }
     // Keep the window on Apple: a link elsewhere the user clicked opens in
     // their browser, anything else off Apple is not loaded.
@@ -683,11 +710,26 @@ fn main() -> ExitCode {
     });
 
     let window = gtk::Window::builder()
-        .title("Sign in to iCloud")
         .default_width(1000)
         .default_height(800)
         .child(&view)
         .build();
+    omui::i18n::bind(&window, |window| window.set_title(Some(&tr("Sign in to iCloud"))));
+    // The title bar of the apps' windows: omui's, without window buttons.
+    window.set_titlebar(Some(&omui::header(None)));
+    // Apple's page has the keyboard all the time, so only keys with Ctrl are the window's: Ctrl+W and Ctrl+Q close
+    // it as its close button would (the sign-in is abandoned, as the daemon is told), and F1 or Ctrl+? list them.
+    omui::quit_keys(&window);
+    omui::ShortcutOverlay::new(|| {
+        vec![omui::ShortcutSection::new(
+            &tr("Sign-in window"),
+            &[
+                ("Ctrl+W / Ctrl+Q", &tr("Close without signing in")),
+                ("F1", &tr("Show or hide the shortcuts")),
+            ],
+        )]
+    })
+    .install(&window, true);
     {
         let capture = capture.clone();
         window.connect_close_request(move |_| {
@@ -710,6 +752,19 @@ fn main() -> ExitCode {
             view.load_uri(if find { FIND } else { HOME });
         });
     }
+    // And on a timer, for what no event tells: a check Apple did not answer is made again, and Find My (`--find`)
+    // answers once the password is in, which need not change a cookie. The timer rests while the window is shown
+    // but nobody can see it (minimised, on another workspace), and the first tick back checks. A window not shown
+    // yet (`--autofill`) signs in by itself, so its timer runs.
+    {
+        let (capture, view, window) = (capture.clone(), view.clone(), window.clone());
+        glib::timeout_add_local(POLL, move || {
+            if timer_checks(window.is_visible(), window.is_suspended()) {
+                capture.check(&view);
+            }
+            glib::ControlFlow::Continue
+        });
+    }
     if autofill {
         // Filled in unseen; shown only if Apple wants more than the password
         // (a 2FA code, a new-terms page) and it hasn't finished by then.
@@ -726,12 +781,64 @@ fn main() -> ExitCode {
     }
     capture.main_loop.run();
     window.destroy();
-    ExitCode::from(capture.exit.get())
+    if capture.signed_in.get() {
+        return ExitCode::SUCCESS;
+    }
+    if capture.rejected.get() {
+        eprintln!("{}", password_rejected());
+    }
+    ExitCode::FAILURE
+}
+
+/// The error the daemon looks for on the last line of stderr (`autofill_find_my`): Apple refused the password.
+fn password_rejected() -> String {
+    icloud_session::output::CliError::new(
+        PASSWORD_REJECTED,
+        icloud_session::cli::EXIT_ERROR,
+        "Apple said the Apple ID password is wrong",
+    )
+    .render(icloud_session::output::Mode::Json)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_catalogs_match_the_sources() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        omui::i18n::CatalogCheck::new(root.join("src"), root.join("src/i18n")).assert_ok();
+    }
+
+    /// The desktop entry is named by the window's app id, so that a dock shows its name and icon, and the window
+    /// is known by it.
+    #[test]
+    fn the_desktop_entry_is_the_window_s_name() {
+        let entry = include_str!("../../data/icloud-session.desktop");
+        for line in [
+            "Exec=icloud-session sign-in",
+            "StartupWMClass=icloud-session",
+            "NoDisplay=true",
+        ] {
+            assert!(entry.lines().any(|l| l == line), "{line} is missing");
+        }
+        assert_eq!(NAME, "icloud-session");
+    }
+
+    #[test]
+    fn the_timer_rests_only_while_a_shown_window_is_out_of_sight() {
+        assert!(timer_checks(true, false), "on screen");
+        assert!(!timer_checks(true, true), "minimised or on another workspace");
+        assert!(timer_checks(false, false), "--autofill, before the window is shown");
+        assert!(timer_checks(false, true));
+    }
+
+    #[test]
+    fn a_rejected_password_is_the_error_the_daemon_looks_for() {
+        let line = password_rejected();
+        let error = icloud_session::output::error_line(format!("trace\n{line}\n").as_bytes()).unwrap();
+        assert_eq!(error["error"]["code"], PASSWORD_REJECTED);
+    }
 
     #[test]
     fn only_apple_stays_in_the_window() {

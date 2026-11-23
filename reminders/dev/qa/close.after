@@ -1,0 +1,7 @@
+# After close.jsonl: the write the window started was answered after its window had closed, and the app, still
+# running, wrote what it brought back into the cache before it ended.
+set -euo pipefail
+grep -q '^answered a slow write$' "$QA_FAKE_LOG" || { echo "close.after: the slow write was never answered" >&2; exit 1; }
+cache=$QA_ROOT/data/icloud-reminders/cache.json
+[[ -f $cache ]] || { echo "close.after: no cache at $cache" >&2; exit 1; }
+grep -q '"Slow tea"' "$cache" || { echo "close.after: the cache does not hold the new reminder" >&2; exit 1; }

@@ -5,10 +5,12 @@
 //! precedence: ids-only > count > quiet > json > styled > (terminal ? text :
 //! envelope), as in cloud-mail.
 //!
-//! Envelope: `{"ok":true,"data":…,"summary":"…","meta":{…}}`; on failure
-//! `{"ok":false,"error":{"code","message","hint"?}}` on stdout (text mode:
-//! `error:`/`hint:` lines on stderr). `ok` is always the first key. The
-//! process exit code carries the number ([`crate::cli`]'s `EXIT_*`).
+//! Envelope: `{"ok":true,"data":…,"summary":"…","meta":{…}}` on stdout; on
+//! failure `{"ok":false,"error":{"code","message","hint"?}}` on one line of
+//! stderr (text mode: `error:`/`hint:` lines on stderr), so stdout holds
+//! nothing but a result. `ok` is always the first key. The process exits 0
+//! on success and 1 on any failure (Omarchy's convention); the error's
+//! `code` is what tells one failure from another.
 //!
 //! A tool's runner is, in short:
 //!
@@ -16,8 +18,8 @@
 //! let args = match output::parse::<Args>() { Ok(a) => a, Err(code) => return code };
 //! let mode = args.out.mode();
 //! match run_command(args.command) {
-//!     Ok(resp) => resp.print(mode),          // returns the exit code (0 unless `.exit(n)`)
-//!     Err(e) => e.report(mode),              // a `CliError`; returns its exit code
+//!     Ok(resp) => resp.print(mode),          // returns the exit code (0, or 1 after `.exit(n)`)
+//!     Err(e) => e.report(mode),              // a `CliError`; returns 1
 //! }
 //! ```
 //!
@@ -55,7 +57,7 @@ impl Mode {
 /// Whether a command may ask the user something: only in text mode with both
 /// stdin and stdout a terminal (cloud-mail's `Ctx::interactive`). Everywhere
 /// else a command that would ask must refuse instead (e.g. a destructive
-/// command without `--yes`: exit 2).
+/// command without `--yes`: `usage`, exit 1).
 pub fn interactive(mode: Mode) -> bool {
     mode == Mode::Human && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
@@ -188,12 +190,12 @@ pub fn usage_hint(bin: &str) -> String {
 }
 
 /// Parses the process arguments. `--help`/`--version` print and give
-/// `Err(EXIT_OK)`; a usage error gives `Err(EXIT_USAGE)` after the contract
-/// error object with a ``run `<bin> --help` `` hint (machine modes) or
-/// `clap`'s own message (a terminal).
+/// `Err(EXIT_OK)`; a usage error gives `Err(EXIT_ERROR)` after the contract
+/// error object (code `usage`) with a ``run `<bin> --help` `` hint (machine
+/// modes) or `clap`'s own message (a terminal), both on stderr.
 #[cfg(feature = "clap")]
 pub fn parse<P: clap::Parser>() -> Result<P, u8> {
-    use crate::cli::{EXIT_OK, EXIT_USAGE};
+    use crate::cli::{EXIT_ERROR, EXIT_OK};
     P::try_parse().map_err(|e| {
         if !e.use_stderr() {
             let _ = e.print();
@@ -202,10 +204,10 @@ pub fn parse<P: clap::Parser>() -> Result<P, u8> {
         let mode = argv_mode();
         if !mode.is_machine() {
             let _ = e.print();
-            return EXIT_USAGE;
+            return EXIT_ERROR;
         }
         let bin = P::command().get_name().to_string();
-        CliError::new("usage", EXIT_USAGE, usage_message(&e))
+        CliError::new("usage", EXIT_ERROR, usage_message(&e))
             .hint(usage_hint(&bin))
             .report(mode)
     })
@@ -276,11 +278,13 @@ impl Response {
         self
     }
 
-    /// A non-zero exit code alongside the data, for a batch command that
-    /// reports every item but failed some (each item carrying its own
-    /// `error`). [`Response::print`] returns it; the runner must exit with it.
+    /// Exit 1 alongside the data, for a batch command that reports every
+    /// item but failed some (each item carrying its own `error`), when `code`
+    /// is not 0. Any non-zero `code` means 1 (see [`crate::cli::exit_status`]):
+    /// the process exits 0 or 1. [`Response::print`] returns it; the runner
+    /// must exit with it.
     pub fn exit(mut self, code: u8) -> Self {
-        self.exit = code;
+        self.exit = crate::cli::exit_status(code);
         self
     }
 
@@ -344,7 +348,7 @@ impl Response {
     }
 
     /// Writes the result to stdout in `mode` and returns the exit code (0
-    /// unless set with [`Response::exit`]).
+    /// unless set to 1 with [`Response::exit`]).
     pub fn print(&self, mode: Mode) -> u8 {
         let (text, note) = self.render(mode);
         if let Some(note) = note {
@@ -380,10 +384,12 @@ impl<'a> ErrorEnvelope<'a> {
     }
 }
 
-/// A failure, rendered according to the [`Mode`]: the contract error object on
-/// stdout for a machine, `error:`/`hint:` on stderr for a person. Put the
-/// remediation (``run `icloud-session sign-in` ``) in the hint, not the
-/// message.
+/// A failure, rendered according to the [`Mode`], always on stderr: the
+/// contract error object on one line for a machine, `error:`/`hint:` lines
+/// for a person. Put the remediation (``run `icloud-session sign-in` ``) in
+/// the hint, not the message. Its process exits 1, whatever the kind: `code`
+/// is the stable name of the kind (`usage`, `not_found`, `sign_in_required`,
+/// …) a caller branches on.
 #[derive(Debug, Clone)]
 pub struct CliError {
     pub code: String,
@@ -393,12 +399,15 @@ pub struct CliError {
 }
 
 impl CliError {
+    /// `exit` is 1 ([`crate::cli::EXIT_ERROR`]); any number given is taken as
+    /// 1, so a caller still passing the old 2 to 5 exits 1 too.
     pub fn new(code: &str, exit: u8, message: impl Into<String>) -> Self {
+        let _ = exit;
         Self {
             code: code.into(),
             message: message.into(),
             hint: None,
-            exit,
+            exit: crate::cli::EXIT_ERROR,
         }
     }
 
@@ -420,16 +429,35 @@ impl CliError {
         terminal_safe(&msg)
     }
 
-    /// Prints the error (machine: stdout; human: stderr) and returns the exit
-    /// code.
+    /// Prints the error on stderr and returns the exit code, 1.
     pub fn report(&self, mode: Mode) -> u8 {
-        if mode.is_machine() {
-            write_line(&pretty(&self.envelope()));
-        } else {
-            eprintln!("{}", self.text());
-        }
-        self.exit
+        eprintln!("{}", self.render(mode));
+        crate::cli::EXIT_ERROR
     }
+
+    /// What [`CliError::report`] writes to stderr in `mode`: the error object
+    /// on one line for a machine (so it can be told from the status lines and
+    /// warnings before it: it is the last line), the text lines for a person.
+    pub fn render(&self, mode: Mode) -> String {
+        if mode.is_machine() {
+            compact(&self.envelope())
+        } else {
+            self.text()
+        }
+    }
+}
+
+/// The error object `{"ok":false,"error":{…}}` a command line that failed
+/// wrote on stderr in a machine mode, for a program that ran it: the last
+/// line of `stderr` that is one, since the status lines and warnings come
+/// before it. `None` when there is none (a crash, a tool that wrote only
+/// text).
+pub fn error_line(stderr: &[u8]) -> Option<Value> {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .rev()
+        .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+        .find(|v| v.get("ok") == Some(&Value::Bool(false)))
 }
 
 // ------------------------------------------------------------ shared wording
@@ -464,12 +492,12 @@ pub fn sign_in_message(reason: Option<&str>) -> String {
     }
 }
 
-/// `sign_in_required`, exit 3, with why when the daemon says (one D-Bus
+/// `sign_in_required`, with why when the daemon says (one D-Bus
 /// round trip) and [`SIGN_IN_HINT`].
 pub fn sign_in_required() -> CliError {
     CliError::new(
         "sign_in_required",
-        crate::cli::EXIT_SIGN_IN,
+        crate::cli::EXIT_ERROR,
         crate::sign_in_required_message(),
     )
     .hint(SIGN_IN_HINT)
@@ -478,61 +506,61 @@ pub fn sign_in_required() -> CliError {
 /// An HTTP failure with `status`, the shared way: a 401/421 (from one of
 /// the session's own hosts, where the session library only returns it when
 /// it persists although icloud-sessiond still holds the session) is
-/// `session_rejected`, exit 3, with [`SIGN_IN_HINT`]; a 5xx is `http`, exit
-/// 5, with [`SERVICE_TROUBLE_HINT`]; any other status `http`, exit 1.
+/// `session_rejected`, with [`SIGN_IN_HINT`]; a 5xx is `http` with
+/// [`SERVICE_TROUBLE_HINT`]; any other status `http` without a hint. Each
+/// exits 1.
 /// `message` describes the failure. A content host's 401 (a signed URL
 /// refused) comes back as a plain [`Error::Http`](crate::Error::Http) too,
 /// and says nothing about the session: the tool classifies it before it
 /// gets here, as notes-sync and Photos do.
 pub fn http_failure(status: u16, message: impl Into<String>) -> CliError {
-    use crate::cli::{EXIT_ERROR, EXIT_SIGN_IN, EXIT_UNAVAILABLE};
+    use crate::cli::EXIT_ERROR;
     let message = message.into();
     match status {
         401 | 421 => CliError::new(
             "session_rejected",
-            EXIT_SIGN_IN,
+            EXIT_ERROR,
             format!("Apple refused the iCloud session although icloud-sessiond still holds it ({message})"),
         )
         .hint(SIGN_IN_HINT),
-        500..=599 => CliError::new("http", EXIT_UNAVAILABLE, message).hint(SERVICE_TROUBLE_HINT),
+        500..=599 => CliError::new("http", EXIT_ERROR, message).hint(SERVICE_TROUBLE_HINT),
         _ => CliError::new("http", EXIT_ERROR, message),
     }
 }
 
 /// An [`icloud_session::Error`](crate::Error) as the contract's error, the
-/// same in every tool:
+/// same in every tool (each exits 1; the code is what differs):
 ///
-/// | variant | code | exit |
-/// |---|---|---|
-/// | `SignInRequired` | `sign_in_required` (message with the reason, see [`sign_in_required`]) | 3 |
-/// | `FindMyAuthRequired` | `find_my_auth_required` | 3 |
-/// | `Http` | see [`http_failure`] (a session host's status only) | 3 / 5 / 1 |
-/// | `Offline`, `Network` | `offline`, `network` | 5 |
-/// | `Service` | `session_service` | 5 |
-/// | `KeyringUnavailable` | `keyring_unavailable` | 5 |
-/// | `BadResponse` | `bad_response` | 5 |
-/// | `Io` | `io` | 1 |
-/// | `Daemon` and anything else | `error` | 1 |
+/// | variant | code |
+/// |---|---|
+/// | `SignInRequired` | `sign_in_required` (message with the reason, see [`sign_in_required`]) |
+/// | `FindMyAuthRequired` | `find_my_auth_required` |
+/// | `Http` | see [`http_failure`] (a session host's status only) |
+/// | `Offline`, `Network` | `offline`, `network` |
+/// | `Service` | `session_service` |
+/// | `KeyringUnavailable` | `keyring_unavailable` |
+/// | `BadResponse` | `bad_response` |
+/// | `Io` | `io` |
+/// | `Daemon` and anything else | `error` |
 ///
-/// Every exit-5 error carries a hint. A tool overrides what it knows better
+/// Every failure of a service (the network, icloud-sessiond, the keyring,
+/// iCloud itself) carries a hint. A tool overrides what it knows better
 /// (icloud-session's `password_rejected`, say) before calling this.
 pub fn session_failure(e: &crate::Error) -> CliError {
     use crate::Error;
-    use crate::cli::{EXIT_ERROR, EXIT_FIND_MY_AUTH, EXIT_UNAVAILABLE};
+    use crate::cli::EXIT_ERROR;
     let message = e.to_string();
     match e {
         Error::SignInRequired => sign_in_required(),
         Error::FindMyAuthRequired => {
-            CliError::new("find_my_auth_required", EXIT_FIND_MY_AUTH, message).hint(FIND_MY_AUTH_HINT)
+            CliError::new("find_my_auth_required", EXIT_ERROR, message).hint(FIND_MY_AUTH_HINT)
         }
         Error::Http { status, .. } => http_failure(*status, message),
-        Error::Offline(_) => CliError::new("offline", EXIT_UNAVAILABLE, message).hint(NETWORK_HINT),
-        Error::Network(_) => CliError::new("network", EXIT_UNAVAILABLE, message).hint(NETWORK_HINT),
-        Error::Service(_) => CliError::new("session_service", EXIT_UNAVAILABLE, message).hint(SESSION_SERVICE_HINT),
-        Error::KeyringUnavailable(_) => {
-            CliError::new("keyring_unavailable", EXIT_UNAVAILABLE, message).hint(KEYRING_HINT)
-        }
-        Error::BadResponse(_) => CliError::new("bad_response", EXIT_UNAVAILABLE, message).hint(SERVICE_TROUBLE_HINT),
+        Error::Offline(_) => CliError::new("offline", EXIT_ERROR, message).hint(NETWORK_HINT),
+        Error::Network(_) => CliError::new("network", EXIT_ERROR, message).hint(NETWORK_HINT),
+        Error::Service(_) => CliError::new("session_service", EXIT_ERROR, message).hint(SESSION_SERVICE_HINT),
+        Error::KeyringUnavailable(_) => CliError::new("keyring_unavailable", EXIT_ERROR, message).hint(KEYRING_HINT),
+        Error::BadResponse(_) => CliError::new("bad_response", EXIT_ERROR, message).hint(SERVICE_TROUBLE_HINT),
         Error::Io(_) => CliError::new("io", EXIT_ERROR, message),
         _ => CliError::new("error", EXIT_ERROR, message),
     }
@@ -658,6 +686,38 @@ mod tests {
     }
 
     #[test]
+    fn a_failure_exits_1_with_its_kind_in_the_code_on_one_line_of_stderr() {
+        // The old numbers a caller may still pass are all 1 now.
+        for old in [1, 2, 3, 4, 5, 64] {
+            assert_eq!(CliError::new("not_found", old, "no such device").exit, 1, "{old}");
+        }
+        let e = CliError::new("not_found", 4, "no such device").hint("list the devices");
+        for mode in [Mode::Json, Mode::Quiet, Mode::Ids, Mode::Count] {
+            let line = e.render(mode);
+            assert!(!line.contains('\n'), "{mode:?}: {line}");
+            let v: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(
+                (v["ok"].as_bool(), v["error"]["code"].as_str()),
+                (Some(false), Some("not_found"))
+            );
+        }
+        assert_eq!(e.render(Mode::Human), "error: no such device\nhint: list the devices");
+    }
+
+    #[test]
+    fn a_caller_finds_the_error_after_the_status_lines() {
+        let e = CliError::new("offline", 1, "no network").hint(NETWORK_HINT);
+        let stderr = format!(
+            "Fetching changes from iCloud...\n{{\"not\":\"it\"}}\n{}\n",
+            e.render(Mode::Json)
+        );
+        let v = error_line(stderr.as_bytes()).unwrap();
+        assert_eq!(v["error"]["code"], "offline");
+        assert_eq!(error_line(b"error: no network\nhint: try again\n"), None);
+        assert_eq!(error_line(b""), None);
+    }
+
+    #[test]
     fn count_override_then_ids_then_array_length() {
         assert_eq!(Response::new(json!({ "a": 1 }), "").ids(vec!["x".into()]).number(), 1);
         assert_eq!(Response::new(json!([1, 2, 3]), "").number(), 3);
@@ -696,8 +756,10 @@ mod tests {
         let r = Response::new(json!([{ "id": "a", "error": "x" }]), "1 failed").exit(1);
         assert_eq!(r.exit, 1);
         assert!(r.render(Mode::Json).0.contains("\"ok\": true"));
+        // An old number is 1: a process exits 0 or 1.
         let s = Response::silent().exit(3);
-        assert_eq!((s.render(Mode::Json).0.as_str(), s.exit), ("", 3));
+        assert_eq!((s.render(Mode::Json).0.as_str(), s.exit), ("", 1));
+        assert_eq!(Response::silent().exit(0).exit, 0);
     }
 
     #[test]
@@ -741,34 +803,30 @@ mod tests {
             body: String::new(),
         };
         let cases = [
-            (http(401), "session_rejected", 3, Some(SIGN_IN_HINT)),
-            (http(421), "session_rejected", 3, Some(SIGN_IN_HINT)),
-            (http(503), "http", 5, Some(SERVICE_TROUBLE_HINT)),
-            (http(404), "http", 1, None),
+            (http(401), "session_rejected", Some(SIGN_IN_HINT)),
+            (http(421), "session_rejected", Some(SIGN_IN_HINT)),
+            (http(503), "http", Some(SERVICE_TROUBLE_HINT)),
+            (http(404), "http", None),
             (
                 Error::FindMyAuthRequired,
                 "find_my_auth_required",
-                3,
                 Some(FIND_MY_AUTH_HINT),
             ),
-            (Error::Offline("x".into()), "offline", 5, Some(NETWORK_HINT)),
-            (Error::Network("x".into()), "network", 5, Some(NETWORK_HINT)),
+            (Error::Offline("x".into()), "offline", Some(NETWORK_HINT)),
+            (Error::Network("x".into()), "network", Some(NETWORK_HINT)),
             (
                 Error::Service("x".into()),
                 "session_service",
-                5,
                 Some(SESSION_SERVICE_HINT),
             ),
             (
                 Error::KeyringUnavailable("x".into()),
                 "keyring_unavailable",
-                5,
                 Some(KEYRING_HINT),
             ),
             (
                 Error::BadResponse("x".into()),
                 "bad_response",
-                5,
                 Some(SERVICE_TROUBLE_HINT),
             ),
             (
@@ -777,19 +835,12 @@ mod tests {
                     message: "y".into(),
                 },
                 "error",
-                1,
                 None,
             ),
         ];
-        for (e, code, exit, hint) in cases {
+        for (e, code, hint) in cases {
             let f = session_failure(&e);
-            assert_eq!(
-                (f.code.as_str(), f.exit, f.hint.as_deref()),
-                (code, exit, hint),
-                "{e:?}"
-            );
-            // Every exit-5 error tells what to do.
-            assert!(f.exit != 5 || f.hint.is_some(), "{e:?}");
+            assert_eq!((f.code.as_str(), f.exit, f.hint.as_deref()), (code, 1, hint), "{e:?}");
         }
         assert!(http_failure(421, "HTTP 421").message.contains("HTTP 421"));
         assert_eq!(sign_in_message(None), "sign in to iCloud required");

@@ -63,11 +63,11 @@ fn sync_failing_with(error: fn() -> Error) -> (u8, bool, usize) {
 
 #[test]
 fn a_sign_in_required_on_push_skips_the_pull() {
-    assert_eq!(sync_failing_with(|| Error::SignInRequired), (3, false, 1));
+    assert_eq!(sync_failing_with(|| Error::SignInRequired), (1, false, 1));
     // iCloud refusing the session the daemon still holds: the pull would too.
     assert_eq!(
         sync_failing_with(|| Error::CloudKit(CkError::SessionRejected { status: 421 })),
-        (3, false, 1)
+        (1, false, 1)
     );
 }
 
@@ -75,17 +75,17 @@ fn a_sign_in_required_on_push_skips_the_pull() {
 fn no_network_on_push_skips_the_pull() {
     assert_eq!(
         sync_failing_with(|| Error::CloudKit(CkError::Offline("no route".into()))),
-        (5, false, 1)
+        (1, false, 1)
     );
     assert_eq!(
         sync_failing_with(|| Error::CloudKit(CkError::Network("reset".into()))),
-        (5, false, 1)
+        (1, false, 1)
     );
     let offline = Error::from(CkError::Offline("no route".into()));
-    assert_eq!((offline.code().as_str(), offline.exit_code()), ("offline", 5));
+    assert_eq!((offline.code().as_str(), offline.exit_code()), ("offline", 1));
     assert!(offline.is_network() && offline.hint().is_some());
     let network = Error::from(CkError::Network("reset".into()));
-    assert_eq!((network.code().as_str(), network.exit_code()), ("network", 5));
+    assert_eq!((network.code().as_str(), network.exit_code()), ("network", 1));
 }
 
 /// Any other failure pulls anyway, as two separate runs did; a failed
@@ -93,16 +93,17 @@ fn no_network_on_push_skips_the_pull() {
 #[test]
 fn another_push_failure_still_pulls() {
     assert_eq!(sync_failing_with(|| Error::Internal("boom".into())), (1, true, 2));
-    assert_eq!(sync_failing_with(|| Error::NotesUnavailable), (3, true, 2));
+    assert_eq!(sync_failing_with(|| Error::NotesUnavailable), (1, true, 2));
     assert_eq!(
         sync_failing_with(|| Error::CloudKit(CkError::SessionService("no bus".into()))),
-        (5, true, 2)
+        (1, true, 2)
     );
 }
 
-/// The run's exit code: 3 if either half exited 3, else the higher half's.
+/// The run exits 1 when either half failed, whatever the failure: which one
+/// it was is each half's error code, which a caller ranks itself.
 #[test]
-fn the_exit_code_is_3_above_all_then_the_higher_half() {
+fn the_exit_code_is_1_when_either_half_failed() {
     let outcome = |push: Error, pull: Option<Error>| {
         SyncOutcome {
             push: Err(push),
@@ -121,20 +122,10 @@ fn the_exit_code_is_3_above_all_then_the_higher_half() {
         expected: "a@example.com".into(),
         actual: "b@example.com".into(),
     };
-    assert_eq!(outcome(offline(), Some(mismatch())), 3);
-    assert_eq!(outcome(mismatch(), Some(offline())), 3);
-    assert_eq!(outcome(Error::Internal("x".into()), Some(untracked())), 4);
-    assert_eq!(outcome(untracked(), Some(offline())), 5);
-    assert_eq!(
-        outcome(
-            Error::AlreadyClonedDirectory {
-                target_dir: "/v".into()
-            },
-            Some(Error::Internal("x".into()))
-        ),
-        2
-    );
-    assert_eq!(outcome(offline(), None), 5);
+    assert_eq!(outcome(offline(), Some(mismatch())), 1);
+    assert_eq!(outcome(mismatch(), Some(offline())), 1);
+    assert_eq!(outcome(Error::Internal("x".into()), Some(untracked())), 1);
+    assert_eq!(outcome(offline(), None), 1);
 }
 
 #[test]

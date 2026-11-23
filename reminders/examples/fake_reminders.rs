@@ -15,6 +15,9 @@
 //! list shared with other people carries a `share` ([`State::share`]).
 //! Every request is recorded: `GET /fake/requests` lists them. `/fake/sign-out`
 //! signs the account out, until the app's Sign In (`/mock/reauthenticate`).
+//! A write of a reminder whose title starts with `Slow` is applied at once
+//! and answered [`SLOW_WRITE`] later, saying so on stderr: for a QA script
+//! to close the window while a write is on its way (dev/qa/close.jsonl).
 
 use std::collections::BTreeMap;
 use std::net::TcpListener;
@@ -35,6 +38,22 @@ struct Zone {
     /// By recordName; `seq` orders changes (the sync token is a seq).
     records: BTreeMap<String, Stored>,
     seq: u64,
+}
+
+/// How late a write of a `Slow …` reminder is answered: long enough for a
+/// QA script to close the window under it, and well within the five seconds
+/// omui's QA gives an app that should end by itself.
+pub const SLOW_WRITE: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Whether `sent`, a records/modify, writes a reminder titled `Slow …`.
+fn is_slow(sent: &Value) -> bool {
+    let ops = sent["operations"].as_array().cloned().unwrap_or_default();
+    ops.iter().any(|op| {
+        op.pointer("/record/fields/TitleDocument/value")
+            .and_then(Value::as_str)
+            .and_then(|b64| icloud_reminders::topotext::decode(b64).ok())
+            .is_some_and(|title| title.starts_with("Slow"))
+    })
 }
 
 /// One server's state.
@@ -348,6 +367,10 @@ impl State {
             "records/modify" => {
                 let number = self.requests().iter().filter(|r| r["op"] == "records/modify").count();
                 let reply = self.modify(sent);
+                if is_slow(sent) {
+                    std::thread::sleep(SLOW_WRITE);
+                    eprintln!("answered a slow write");
+                }
                 while *self.hold_modify.lock().unwrap() == Some(number) {
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }

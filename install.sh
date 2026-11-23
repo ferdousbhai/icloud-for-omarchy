@@ -194,8 +194,9 @@ main() {
   (( ${#wanted[@]} )) || wanted=("${DEFAULT_PACKAGES[@]}")
   for pkg in "${wanted[@]}"; do
     if [[ " ${PACKAGES[*]} " != *" $pkg "* ]]; then
+      # Exit 1, as every failure of Omarchy's command lines does.
       echo "Unknown package '$pkg'. Choose from: ${PACKAGES[*]}" >&2
-      exit 64
+      exit 1
     fi
   done
 

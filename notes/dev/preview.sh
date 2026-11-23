@@ -30,7 +30,7 @@ set -Eeuo pipefail
 #   TMPDIR                       where the scratch HOME and vault go (default /tmp)
 if (( $# < 1 )); then
   echo "usage: $0 <out-dir> [theme-dir ...]" >&2
-  exit 2
+  exit 1
 fi
 out=$(realpath -m -- "$1")
 shift
@@ -55,7 +55,7 @@ parent_runtime=${XDG_RUNTIME_DIR:?preview: XDG_RUNTIME_DIR is required}
 parent_display=${WAYLAND_DISPLAY:?preview: run this from a Wayland desktop}
 parent_socket=$parent_runtime/$parent_display
 size=${ICLOUD_NOTES_PREVIEW_SIZE:-1100x700}
-[[ $size =~ ^[0-9]+x[0-9]+$ ]] || { echo "preview: ICLOUD_NOTES_PREVIEW_SIZE is <width>x<height>" >&2; exit 2; }
+[[ $size =~ ^[0-9]+x[0-9]+$ ]] || { echo "preview: ICLOUD_NOTES_PREVIEW_SIZE is <width>x<height>" >&2; exit 1; }
 
 # `action:<name>[=<string>]` activates the window's action <name> over the scratch session bus, as its menu or a
 # row would; `text:` types (an underscore is a space); the rest are keys, with modifiers named before them (ctrl+f).
@@ -75,7 +75,7 @@ declare -A keys=(
   [arrows]="Down Right Down"
 )
 for scene in "${scenes[@]}"; do
-  [[ -v keys[$scene] ]] || { echo "preview: no scene named $scene" >&2; exit 2; }
+  [[ -v keys[$scene] ]] || { echo "preview: no scene named $scene" >&2; exit 1; }
 done
 
 root=""
